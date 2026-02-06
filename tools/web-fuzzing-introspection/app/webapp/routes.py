@@ -30,9 +30,6 @@ import marshmallow
 from . import models, data_storage, page_texts
 from .helper import function_helper
 
-# Use these during testing.
-#from app.site import test_data
-
 blueprint = Blueprint('site', __name__, template_folder='templates')
 
 api_blueprint = Blueprint('api',
@@ -62,7 +59,7 @@ NO_KEY_MSG = '<Error><Code>NoSuchKey</Code><Message>The specified key does not e
 # Add functions in here to make the oracles focus on a specific API.
 ALLOWED_ORACLE_RETURNS: List[str] = []
 
-# Max length of testcase sorce code to return from API.
+# Max length of testcase source code to return from API.
 MAX_TEST_SIZE = 6000
 
 # Max matches to show when searching for functions in functions view.
@@ -146,9 +143,8 @@ class ProjectFunctionsQuerySchema(marshmallow.Schema):
 
 
 def get_introspector_report_url_base(project_name, datestr):
-    base_url = 'https://storage.googleapis.com/oss-fuzz-introspector/{0}/inspector-report/{1}/'
-    project_url = base_url.format(project_name, datestr.replace("-", ""))
-    return project_url
+    datestr_clean = datestr.replace("-", "")
+    return f'https://storage.googleapis.com/oss-fuzz-introspector/{project_name}/inspector-report/{datestr_clean}/'
 
 
 def get_introspector_report_url_source_base(project_name, datestr):
@@ -162,14 +158,12 @@ def get_introspector_url(project_name, datestr):
 
 
 def get_coverage_report_url(project_name, datestr, language):
-    if language == 'java' or language == 'python' or language == 'go':
+    if language in ('java', 'python', 'go'):
         file_report = "index.html"
     else:
         file_report = "report.html"
-    base_url = 'https://storage.googleapis.com/oss-fuzz-coverage/{0}/reports/{1}/linux/{2}'
-    project_url = base_url.format(project_name, datestr.replace("-", ""),
-                                  file_report)
-    return project_url
+    datestr_clean = datestr.replace("-", "")
+    return f'https://storage.googleapis.com/oss-fuzz-coverage/{project_name}/reports/{datestr_clean}/linux/{file_report}'
 
 
 def all_functions_in_db():
@@ -182,9 +176,8 @@ def all_functions_in_db():
 def extract_introspector_raw_source_code(project_name, date_str,
                                          target_file) -> str:
     """Returns the contents of a source code file."""
-    # Remove leading slash to avoid errors
-    while target_file.startswith('/'):
-        target_file = target_file[1:]
+    # Remove leading slashes to avoid errors
+    target_file = target_file.lstrip('/')
 
     if is_local:
         src_location = os.path.join(local_oss_fuzz, 'build', 'out',
@@ -213,9 +206,8 @@ def extract_introspector_raw_source_code(project_name, date_str,
 
 def _light_extract_introspector_raw_source_code(project_name, date_str,
                                                 target_file):
-    # Remove leading slash to avoid errors
-    while target_file.startswith('/'):
-        target_file = target_file[1:]
+    # Remove leading slashes to avoid errors
+    target_file = target_file.lstrip('/')
 
     if is_local:
         src_location = os.path.join(local_oss_fuzz, 'build', 'out',
@@ -267,12 +259,12 @@ def extract_lines_from_source_code(
     if not raw_source and light_raw_source:
         raw_source = light_raw_source
 
-    if '<Error><Code>NoSuchKey</Code><Message>The specified key does not exist.' in raw_source:
+    if NO_KEY_MSG in raw_source:
         raw_source = light_raw_source
 
     # Return None if source is not found.
     if not raw_source:
-        logger.info("Did not found source")
+        logger.info("Did not find source")
         return None
 
     return_source = ""
@@ -305,7 +297,7 @@ def extract_lines_from_source_code(
     if sanity_check_function_end:
         found_end_braces = False
 
-        if len(function_lines) > 0:
+        if function_lines:
             if '}' in function_lines[-1]:
                 found_end_braces = True
         if not found_end_braces and len(function_lines) > 1:
@@ -455,8 +447,8 @@ def get_project_with_name(project_name) -> Optional[models.Project]:
     return None
 
 
-def get_fuction_with_name(function_name,
-                          project_name) -> Optional[models.Function]:
+def get_function_with_name(function_name,
+                           project_name) -> Optional[models.Function]:
     """Gets the function with the given function name from a given project"""
 
     all_functions = data_storage.get_functions_by_project(project_name)
@@ -491,7 +483,7 @@ def index():
     """Renders index page"""
     db_summary = get_frontpage_summary_stats()
     db_timestamps = data_storage.DB_TIMESTAMPS
-    logger.info("Length of timestamps: %d" % (len(db_timestamps)))
+    logger.info("Length of timestamps: %d", len(db_timestamps))
     # Maximum projects
     max_proj = 0
     max_fuzzer_count = 0
@@ -534,8 +526,8 @@ def index():
 @blueprint.route('/function-profile', methods=['GET'])
 def function_profile():
     """Renders a given function."""
-    func_profile = get_fuction_with_name(request.args.get('function', 'none'),
-                                         request.args.get('project', 'none'))
+    func_profile = get_function_with_name(request.args.get('function', 'none'),
+                                          request.args.get('project', 'none'))
 
     related_functions = get_all_related_functions(func_profile)
     return render_template('function-profile.html',
@@ -606,10 +598,8 @@ def project_profile():
         # Display a maximum of 10 functions of interest. Down the line, this
         # should be more carefully constructed, perhaps based on a variety of
         # heuristics.
-        functions_of_interest = list()
-        functions_of_interest_all = get_functions_of_interest(project.name)
-        for i in range(min(10, len(functions_of_interest_all))):
-            func_of_interest = functions_of_interest_all[i]
+        functions_of_interest = []
+        for func_of_interest in get_functions_of_interest(project.name)[:10]:
             functions_of_interest.append({
                 'function_name':
                 func_of_interest.name,
@@ -684,7 +674,7 @@ def project_profile():
                     if ps.project_repository:
                         project_repo = ps.project_repository
 
-            if datestr and len(real_stats) > 0:
+            if datestr and real_stats:
                 latest_coverage_report = get_coverage_report_url(
                     build_status.project_name, datestr, build_status.language)
             else:
@@ -709,7 +699,7 @@ def project_profile():
                 page_main_url=page_texts.get_page_main_url(),
                 page_base_title=page_texts.get_page_base_title(),
                 base_cov_url=page_texts.get_default_coverage_base())
-    logger.info("Nothing to do. We shuold probably have a 404")
+    logger.info("Nothing to do. We should probably have a 404")
     return redirect("/")
 
 
@@ -759,7 +749,7 @@ def function_search():
 def projects_overview():
     # Get statistics of the project
     project_statistics = data_storage.PROJECT_TIMESTAMPS
-    latest_coverage_profiles = dict()
+    latest_coverage_profiles = {}
     for ps in project_statistics:
         latest_coverage_profiles[ps.project_name] = ps
 
@@ -775,17 +765,17 @@ def projects_overview():
 
 
 def oracle_3(all_functions, all_projects):
-    """Filters fucntions that:
+    """Filters functions that:
     - "have far reach but low coverage and are likely easy to trigger"
 
     More technically, functions with:
-        - a low code coevrage percent in the function itself;
+        - a low code coverage percent in the function itself;
         - a high accummulated cyclomatic complexity;
         - less than a certain number of arguments (3 or below);
         - at least one argument.
     """
     functions_of_interest = []
-    projects_added = dict()
+    projects_added = {}
 
     for function in all_functions:
         if (function.runtime_code_coverage < 20.0
@@ -794,13 +784,9 @@ def oracle_3(all_functions, all_projects):
                 and len(function.function_argument_names) > 0):
 
             # Skip non c/c++
-            to_continue = False
-            for proj in all_projects:
-                if proj.name == function.project and proj.language in {
-                        'c', 'c++'
-                }:
-                    to_continue = True
-            if not to_continue:
+            if not any(proj.name == function.project
+                       and proj.language in {'c', 'c++'}
+                       for proj in all_projects):
                 continue
 
             # If there is only a single argument then we want it to be
@@ -818,9 +804,8 @@ def oracle_3(all_functions, all_projects):
             if len(current_list) < 5:
                 current_list.append(function)
             else:
-                for idx in range(len(current_list)):
-                    if current_list[
-                            idx].accummulated_cyclomatic_complexity < function.accummulated_cyclomatic_complexity:
+                for idx, existing in enumerate(current_list):
+                    if existing.accummulated_cyclomatic_complexity < function.accummulated_cyclomatic_complexity:
                         current_list[idx] = function
                         break
 
@@ -835,29 +820,29 @@ def oracle_1(all_functions,
              no_static_functions=False,
              only_referenced_functions=False):
     tmp_list = []
-    project_count = dict()
+    project_count = {}
 
     if only_referenced_functions and len(all_projects) == 1:
         xref_dict = get_cross_reference_dict_from_project(all_projects[0].name)
     else:
         xref_dict = {}
 
+    interesting_fuzz_keywords = {
+        'deserialize',
+        'parse',
+        'parse_xml',
+        'read_file',
+        'read_json',
+        'read_xml',
+        'request',
+        'parse_header',
+        'parse_request',
+        'compress',
+        'file_read',
+        'read_message',
+        'load_image',
+    }
     for function in all_functions:
-        interesting_fuzz_keywords = {
-            'deserialize',
-            'parse',
-            'parse_xml',
-            'read_file',
-            'read_json',
-            'read_xml',
-            'request',
-            'parse_header',
-            'parse_request',
-            'compress',
-            'file_read',
-            'read_message',
-            'load_image',
-        }
         if only_referenced_functions and function.name not in xref_dict:
             continue
 
@@ -878,14 +863,9 @@ def oracle_1(all_functions,
                 and project_count.get(function.project, 0) < max_project_count
                 and function.accummulated_cyclomatic_complexity > 30):
 
-            to_continue = False
-
-            for proj in all_projects:
-                if proj.name == function.project and proj.language in {
-                        'c', 'c++'
-                }:
-                    to_continue = True
-            if not to_continue:
+            if not any(proj.name == function.project
+                       and proj.language in {'c', 'c++'}
+                       for proj in all_projects):
                 continue
 
             if no_static_functions:
@@ -942,7 +922,7 @@ def is_static(target_function) -> bool:
     src_file = target_function.function_filename
 
     # Check if we have accompanying debug info
-    debug_source_dict = target_function.debug_data.get('source', None)
+    debug_source_dict = target_function.debug_data.get('source')
     if debug_source_dict:
         source_line = int(debug_source_dict.get('source_line', -1))
         if source_line != -1:
@@ -967,32 +947,15 @@ def is_static(target_function) -> bool:
         if '{' in line:
             break
         pre_body += line + '\n'
-    if 'static' in pre_body:
-        return True
-    return False
-
-
-def remove_functions_with_header_declarations(function_list):
-    """For a list of functions sorts out functions without possible header
-    declarations.
-    """
-    new_functions = []
-    for function in function_list:
-        possible_header_files = function.debug_data.get(
-            'possible-header-files', [])
-        if not possible_header_files:
-            continue
-        new_functions.append(function)
-    return new_functions
+    return 'static' in pre_body
 
 
 def oracle_2(all_functions,
              all_projects,
              no_static_functions=False,
-             only_referenced_functions=False,
-             only_functions_declared_in_header_files=False):
+             only_referenced_functions=False):
     tmp_list = []
-    project_count = dict()
+    project_count = {}
     funcs_max_to_display = 4000
 
     if len(all_projects) == 1:
@@ -1013,10 +976,6 @@ def oracle_2(all_functions,
         functions_to_analyse = functions_with_xref
     else:
         functions_to_analyse = all_functions
-
-    if only_functions_declared_in_header_files:
-        functions_to_analyse = remove_functions_with_header_declarations(
-            functions_to_analyse)
 
     logger.info('Matching fuzz arguments in functions.')
     for function in functions_to_analyse:
@@ -1073,7 +1032,7 @@ def target_oracle():
                     continue
                 total_funcs.add(func)
                 functions_to_display.append((func, heuristic_name))
-    func_to_lang = dict()
+    func_to_lang = {}
     for func, _ in functions_to_display:
         language = 'c'
         for proj in all_projects:
@@ -1097,7 +1056,7 @@ def target_oracle():
 def indexing_overview():
     build_status = data_storage.get_build_status()
 
-    languages_summarised = dict()
+    languages_summarised = {}
     for bs in build_status:
         if bs.language not in languages_summarised:
             languages_summarised[bs.language] = {
@@ -1107,12 +1066,12 @@ def indexing_overview():
                 'introspector_build': 0
             }
         languages_summarised[bs.language]['all'] += 1
+        languages_summarised[
+            bs.language]['fuzz_build'] += 1 if bs.fuzz_build_status else 0
+        languages_summarised[
+            bs.language]['cov_build'] += 1 if bs.coverage_build_status else 0
         languages_summarised[bs.language][
-            'fuzz_build'] += 1 if bs.fuzz_build_status is True else 0
-        languages_summarised[bs.language][
-            'cov_build'] += 1 if bs.coverage_build_status is True else 0
-        languages_summarised[bs.language][
-            'introspector_build'] += 1 if bs.introspector_build_status is True else 0
+            'introspector_build'] += 1 if bs.introspector_build_status else 0
 
     logger.info(json.dumps(languages_summarised))
 
@@ -1155,17 +1114,10 @@ def api_optimal_targets(args):
     ## Example 1:
     - `project`: `tinyxml2`
     """
-    project_name = args.get('project', None)
+    project_name = args.get('project')
     if project_name is None:
         return {'result': 'error', 'msg': 'Please provide project name'}
 
-    only_functions_declared_in_header_files_arg = request.args.get(
-        'only-with-header-file-declaration', 'false').lower()
-    if only_functions_declared_in_header_files_arg == 'true':
-        only_functions_declared_in_header_files = True
-    else:
-        only_functions_declared_in_header_files = False
-    only_functions_declared_in_header_files = False
     target_project = get_project_with_name(project_name)
     if target_project is None:
         return {'result': 'error', 'msg': 'Project not in the database'}
@@ -1184,12 +1136,6 @@ def api_optimal_targets(args):
             substituted_function = None
             for model_func in project_functions:
                 if model_func.name == function['name'].replace(' ', ''):
-                    if only_functions_declared_in_header_files:
-                        possible_header_files = model_func.debug_data.get(
-                            'possible-header-files', [])
-                        if not possible_header_files:
-                            continue
-
                     substituted_function = {
                         'function_name': model_func.name,
                         'function_filename': model_func.function_filename,
@@ -1248,7 +1194,7 @@ def harness_source_and_executable(args):
     ## Example 1:
     - `project`: `leveldb`
     """
-    project_name = args.get('project', None)
+    project_name = args.get('project')
     if project_name is None:
         return {'result': 'error', 'msg': 'Please provide project name'}
 
@@ -1263,9 +1209,8 @@ def _get_harness_source_and_executable(project_name):
 
     light_pairs_to_ret = _light_harness_source_and_executable(target_project)
 
-    all_file_json = os.path.join(
-        os.path.dirname(__file__),
-        f"../static/assets/db/db-projects/{project_name}/all_files.json")
+    all_file_json = os.path.join(data_storage.DB_DIR,
+                                 f"db-projects/{project_name}/all_files.json")
 
     if not os.path.isfile(all_file_json):
         if light_pairs_to_ret:
@@ -1303,7 +1248,7 @@ def _get_harness_source_and_executable(project_name):
 
     # Ensure the files are present in the source code
     with open(all_file_json, 'r') as f:
-        all_files_list = json.loads(f.read())
+        all_files_list = json.load(f)
 
     for harness_dict in source_harness_pairs:
         found_harnesses = []
@@ -1359,7 +1304,7 @@ def api_annotated_cfg(args):
 def get_introspector_report_url_typedef(project_name,
                                         datestr,
                                         second_run=False):
-    """Get's URL for typedef extaction"""
+    """Gets URL for typedef extraction"""
     base = get_introspector_report_url_base(project_name, datestr)
     if second_run:
         base += "second-frontend-run/"
@@ -1680,15 +1625,14 @@ def api_get_project_language_from_source_files(args):
     if not project_name:
         return {'result': 'error', 'msg': 'Please provide a project name'}
 
-    all_file_json = os.path.join(
-        os.path.dirname(__file__),
-        f"../static/assets/db/db-projects/{project_name}/all_files.json")
+    all_file_json = os.path.join(data_storage.DB_DIR,
+                                 f"db-projects/{project_name}/all_files.json")
     if not os.path.isfile(all_file_json):
         return {'result': 'error', 'msg': 'Did not find file check json'}
 
-    # Ensure the files are present in the soruce code
+    # Ensure the files are present in the source code
     with open(all_file_json, 'r') as f:
-        all_files_list = json.loads(f.read())
+        all_files_list = json.load(f)
 
     languages = {'c': 0, 'c++': 0, 'python': 0, 'java': 0, 'go': 0, 'rust': 0}
     extensions = {
@@ -1755,9 +1699,8 @@ def api_project_all_project_source_files(args):
 
             # Read the introspector artifact
             try:
-                src_path_str = str(
+                src_path_list = json.loads(
                     requests.get(introspector_summary_url, timeout=10).text)
-                src_path_list = json.loads(src_path_str)
             except (requests.RequestException, ConnectionError,
                     json.JSONDecodeError, ValueError):
                 # Ignore the error and assume no source path is found
@@ -1791,7 +1734,7 @@ def api_project_all_functions(args):
 @api_blueprint.arguments(ProjectSchema, location='query')
 def api_project_all_jvm_constructors(args):
     """Returns a json representation of all the constructors in a given project"""
-    project_name = args.get('project', None)
+    project_name = args.get('project')
     if project_name is None:
         return {'result': 'error', 'msg': 'Please provide a project name'}
 
@@ -1813,14 +1756,14 @@ def api_project_all_public_candidates(args):
         ## Example 1
         - `project`: `tinyxml2`
     """
-    project_name = args.get('project', None)
+    project_name = args.get('project')
     if project_name is None:
         return {'result': 'error', 'msg': 'Please provide a project name'}
 
     target_list = data_storage.get_functions_by_project(
         project_name) + data_storage.get_constructors_by_project(project_name)
 
-    # Get the list of function / constructor candidiates to return
+    # Get the list of function / constructor candidates to return
     list_to_return = function_helper.filter_sort_functions(target_list, True)
 
     return {'result': 'success', 'functions': list_to_return}
@@ -1836,7 +1779,7 @@ def api_project_all_public_classes(args):
         ## Example 1
         - `project`: `tinyxml2`
     """
-    project_name = args.get('project', None)
+    project_name = args.get('project')
     if project_name is None:
         return {'result': 'error', 'msg': 'Please provide a project name'}
 
@@ -1874,11 +1817,11 @@ def api_project_source_code(args):
     if not filepath:
         return {'result': 'error', 'msg': 'No filepath provided'}
 
-    begin_line = args.get('begin_line', None)
+    begin_line = args.get('begin_line')
     if begin_line is None:
         return {'result': 'error', 'msg': 'No begin line provided'}
 
-    end_line = args.get('end_line', None)
+    end_line = args.get('end_line')
     if end_line is None:
         return {'result': 'error', 'msg': 'No end line provided'}
 
@@ -1930,10 +1873,10 @@ def get_latest_introspector_date(project_name: str) -> str:
 @api_blueprint.arguments(ProjectTestCodeQuerySchema, location='query')
 def api_project_test_code(args):
     """Extracts source code of a test"""
-    project_name = args.get('project', None)
+    project_name = args.get('project')
     if project_name is None:
         return {'result': 'error', 'msg': 'Please provide a project name'}
-    filepath = args.get('filepath', None)
+    filepath = args.get('filepath')
     if filepath is None:
         return {'result': 'error', 'msg': 'No filepath provided'}
 
@@ -1990,7 +1933,7 @@ def api_project_test_code(args):
     if latest_closing > 0:
         content_to_return = "\n".join(split_lines[:latest_closing + 1])
 
-    logger.info("Latest closing: %d" % (latest_closing))
+    logger.info("Latest closing: %d", latest_closing)
     return {'result': 'success', 'source_code': content_to_return}
 
 
@@ -2015,20 +1958,20 @@ def api_type_info(args):
     - `project` : `htslib`
     - `type_name`: `sam_hrec_type_s`
     """
-    project_name = args.get('project', None)
+    project_name = args.get('project')
     if project_name is None:
         return {'result': 'error', 'msg': 'Please provide a project name'}
-    type_name = args.get('type_name', None)
+    type_name = args.get('type_name')
     if type_name is None:
         return {'result': 'error', 'msg': 'No function name provided'}
 
     debug_info = data_storage.get_project_debug_report(project_name)
-    return_elem = list()
+    return_elem = []
     if debug_info is not None:
         for elem_type in debug_info.all_types:
             if elem_type.get('name') == type_name:
                 return_elem.append(elem_type)
-    if len(return_elem) > 0:
+    if return_elem:
         return {'result': 'success', 'type_data': return_elem}
 
     return {'result': 'error', 'msg': 'Could not find type'}
@@ -2045,11 +1988,11 @@ def function_debug_types(args):
     - `function_signature`: `void sam_hrecs_remove_ref_altnames(sam_hrecs_t *, int, const char *)`
     
     """
-    project_name = args.get('project', None)
+    project_name = args.get('project')
     if project_name is None:
         return {'result': 'error', 'msg': 'Please provide a project name'}
 
-    function_signature = args.get('function_signature', None)
+    function_signature = args.get('function_signature')
     if function_signature is None:
         return {'result': 'error', 'msg': 'No function signature provided'}
 
@@ -2149,7 +2092,7 @@ def api_function_source_code(args):
     src_file = target_function.function_filename
 
     # Check if we have accompanying debug info
-    debug_source_dict = target_function.debug_data.get('source', None)
+    debug_source_dict = target_function.debug_data.get('source')
     if debug_source_dict:
         source_line = int(debug_source_dict.get('source_line', -1))
         if source_line != -1:
@@ -2185,7 +2128,7 @@ def api_function_with_matching_type(args):
         - `project`: `htslib`
         - `return_type`: `sam_hrecs_t *`
     """
-    project_name = args.get('project', None)
+    project_name = args.get('project')
     if project_name is None:
         return {'result': 'error', 'msg': 'Please provide a project name'}
 
@@ -2193,7 +2136,7 @@ def api_function_with_matching_type(args):
     if project is None:
         return {'result': 'error', 'msg': 'Could not find project'}
 
-    return_type = args.get('return_type', None)
+    return_type = args.get('return_type')
     if return_type is None:
         return {
             'result': 'error',
@@ -2217,10 +2160,10 @@ def api_function_with_matching_type(args):
 @api_blueprint.arguments(ProjectFunctionSignatureQuerySchema, location='query')
 def api_jvm_method_properties(args):
     """Returns some properties for the jvm method"""
-    project_name = args.get('project', None)
+    project_name = args.get('project')
     if project_name is None:
         return {'result': 'error', 'msg': 'Please provide a project name'}
-    function_signature = args.get('function_signature', None)
+    function_signature = args.get('function_signature')
     if function_signature is None:
         return {'result': 'error', 'msg': 'No function signature provided'}
 
@@ -2278,7 +2221,7 @@ def api_oracle_2(args):
     ## Example 1:
     - `project`: `htslib`
     """
-    err_msgs = list()
+    err_msgs = []
     logger.info('easy-params-far-reach 1')
     project_name = args.get('project', '')
     if not project_name:
@@ -2287,29 +2230,12 @@ def api_oracle_2(args):
             'extended_msgs': ['Please provide project name']
         }
 
-    no_static_funcs_arg = request.args.get('exclude-static-functions',
-                                           'false').lower()
-    if no_static_funcs_arg == 'true':
-        no_static_functions = True
-    else:
-        no_static_functions = False
+    no_static_functions = request.args.get('exclude-static-functions',
+                                           'false').lower() == 'true'
 
-    only_functions_declared_in_header_files_arg = request.args.get(
-        'only-with-header-file-declaration', 'false').lower()
-    if only_functions_declared_in_header_files_arg == 'true':
-        only_functions_declared_in_header_files = True
-    else:
-        only_functions_declared_in_header_files = False
-
-    only_functions_declared_in_header_files = False
-
-    # Only refernced args
-    only_referenced_functions_arg = request.args.get(
-        'only-referenced-functions', 'false').lower()
-    if only_referenced_functions_arg == 'true':
-        only_referenced_functions = True
-    else:
-        only_referenced_functions = False
+    # Only referenced args
+    only_referenced_functions = request.args.get('only-referenced-functions',
+                                                 'false').lower() == 'true'
 
     target_project = get_project_with_name(project_name)
     if target_project is None:
@@ -2322,15 +2248,13 @@ def api_oracle_2(args):
         all_functions,
         all_projects,
         no_static_functions=no_static_functions,
-        only_referenced_functions=only_referenced_functions,
-        only_functions_declared_in_header_files=
-        only_functions_declared_in_header_files)
+        only_referenced_functions=only_referenced_functions)
 
     functions_to_return = function_helper.convert_functions_to_list_of_dict(
         raw_interesting_functions)
 
     if ALLOWED_ORACLE_RETURNS:
-        functions_to_return = sort_funtions_to_return(functions_to_return)
+        functions_to_return = sort_functions_to_return(functions_to_return)
 
     logger.info('easy-params-far-reach 2')
     result_status = 'success'
@@ -2358,7 +2282,7 @@ def api_oracle_1(args):
     """
     returner = ProjectFunctionSourceDataSchema()
 
-    project_name = args.get('project', None)
+    project_name = args.get('project')
     if project_name is None:
         return returner.dump({
             'result': 'error',
@@ -2366,20 +2290,12 @@ def api_oracle_1(args):
             'functions': []
         })
 
-    no_static_funcs_arg = request.args.get('exclude-static-functions',
-                                           'false').lower()
-    if no_static_funcs_arg == 'true':
-        no_static_functions = True
-    else:
-        no_static_functions = False
+    no_static_functions = request.args.get('exclude-static-functions',
+                                           'false').lower() == 'true'
 
-    # Only refernced args
-    only_referenced_functions_arg = request.args.get(
-        'only-referenced-functions', 'false').lower()
-    if only_referenced_functions_arg == 'true':
-        only_referenced_functions = True
-    else:
-        only_referenced_functions = False
+    # Only referenced args
+    only_referenced_functions = request.args.get('only-referenced-functions',
+                                                 'false').lower() == 'true'
 
     target_project = get_project_with_name(project_name)
     if not target_project:
@@ -2401,7 +2317,7 @@ def api_oracle_1(args):
         raw_functions)
 
     if ALLOWED_ORACLE_RETURNS:
-        functions_to_return = sort_funtions_to_return(functions_to_return)
+        functions_to_return = sort_functions_to_return(functions_to_return)
 
     return returner.dump({
         'result': 'success',
@@ -2419,7 +2335,7 @@ def project_repository(args):
     ## Example 1:
     - `project`: `htslib`
     """
-    project_name = args.get('project', None)
+    project_name = args.get('project')
     if project_name is None:
         return {
             'result': 'error',
@@ -2444,7 +2360,7 @@ def far_reach_but_low_coverage(args):
     ## Example 1:
     - `project`: `htslib`
     """
-    err_msgs = list()
+    err_msgs = []
     project_name = args.get('project', '')
     if not project_name:
         return {
@@ -2452,28 +2368,13 @@ def far_reach_but_low_coverage(args):
             'extended_msgs': ['Please provide project name']
         }
 
-    no_static_funcs_arg = request.args.get('exclude-static-functions',
-                                           'false').lower()
-    if no_static_funcs_arg == 'true':
-        no_static_functions = True
-    else:
-        no_static_functions = False
+    no_static_functions = request.args.get('exclude-static-functions',
+                                           'false').lower() == 'true'
 
     # Check for only using functions with cross references
-    only_referenced_functions_arg = request.args.get(
-        'only-referenced-functions', 'false').lower()
-    if only_referenced_functions_arg == 'true':
-        only_referenced_functions = True
-    else:
-        only_referenced_functions = False
+    only_referenced_functions = request.args.get('only-referenced-functions',
+                                                 'false').lower() == 'true'
 
-    only_functions_declared_in_header_files_arg = request.args.get(
-        'only-with-header-file-declaration', 'false').lower()
-    if only_functions_declared_in_header_files_arg == 'true':
-        only_functions_declared_in_header_files = True
-    else:
-        only_functions_declared_in_header_files = False
-    only_functions_declared_in_header_files = False
     target_project = get_project_with_name(project_name)
     if target_project is None:
         # Is the project a ghost project: a project that no longer
@@ -2491,16 +2392,16 @@ def far_reach_but_low_coverage(args):
         err_msgs.append('Missing a recent introspector build.')
 
         # Check that builds are failing
-        if bs.introspector_build_status is False:
+        if not bs.introspector_build_status:
             err_msgs.append(
                 'No successful builds historically recently: introspector.')
-        if bs.coverage_build_status is False:
+        if not bs.coverage_build_status:
             err_msgs.append('No successful builds: coverage.')
-        if bs.fuzz_build_status is False:
+        if not bs.fuzz_build_status:
             err_msgs.append('Build status failing: fuzzing.')
-        if bs.introspector_build_status is False and bs.coverage_build_status is False and bs.fuzz_build_status is False:
+        if not bs.introspector_build_status and not bs.coverage_build_status and not bs.fuzz_build_status:
             err_msgs.append('All builds failing.')
-        elif bs.introspector_build_status is False and bs.coverage_build_status is False:
+        elif not bs.introspector_build_status and not bs.coverage_build_status:
             err_msgs.append(
                 'No data as no history of coverage or introspector builds.')
 
@@ -2520,21 +2421,16 @@ def far_reach_but_low_coverage(args):
     sorted_functions_of_interest = get_functions_of_interest(project_name)
 
     max_functions_to_show = 30
-    functions_to_return = list()
+    functions_to_return = []
     logger.info('Functions of interest: %d', len(sorted_functions_of_interest))
     for function in sorted_functions_of_interest:
         if only_referenced_functions and function.name not in xref_dict:
             continue
         functions_to_return.append(function)
-    # Disable the below for a moment
-    if only_functions_declared_in_header_files and False:
-        functions_to_return = remove_functions_with_header_declarations(
-            functions_to_return)
 
     new_functions_to_return = []
     logger.info("Iterating")
-    for i in range(len(functions_to_return)):
-        function = functions_to_return[i]
+    for function in functions_to_return:
         if len(new_functions_to_return) >= max_functions_to_show:
             break
         if no_static_functions:
@@ -2557,19 +2453,19 @@ def far_reach_but_low_coverage(args):
             return {'result': 'error', 'extended_msgs': err_msgs}
 
         # Check that builds are failing
-        if bs.introspector_build_status is False:
+        if not bs.introspector_build_status:
             err_msgs.append('No successful build: introspector.')
-        if bs.coverage_build_status is False:
+        if not bs.coverage_build_status:
             err_msgs.append('Build status failing: coverage.')
-        if bs.fuzz_build_status is False:
+        if not bs.fuzz_build_status:
             err_msgs.append('Build status failing: fuzzing.')
-        if bs.introspector_build_status is False and bs.coverage_build_status is False and bs.fuzz_build_status is False:
+        if not bs.introspector_build_status and not bs.coverage_build_status and not bs.fuzz_build_status:
             err_msgs.append('All builds failing.')
     else:
         result_status = 'success'
 
     if ALLOWED_ORACLE_RETURNS:
-        functions_to_return = sort_funtions_to_return(functions_to_return)
+        functions_to_return = sort_functions_to_return(functions_to_return)
 
     return {
         'result': result_status,
@@ -2578,7 +2474,7 @@ def far_reach_but_low_coverage(args):
     }
 
 
-def sort_funtions_to_return(functions_to_return):
+def sort_functions_to_return(functions_to_return):
     adjusted_functions = []
     for func in functions_to_return:
         if func['function_name'] not in ALLOWED_ORACLE_RETURNS:
@@ -2591,7 +2487,7 @@ def get_full_recursive_types(debug_type_dictionary, resulting_types,
                              target_type):
     """Recursively iterates atomic type elements to construct a friendly
     string representing the type."""
-    logger.info("Target type: %s" % (str(target_type)))
+    logger.info("Target type: %s", target_type)
     if int(target_type) == 0:
         return ['void']
 
@@ -2600,14 +2496,14 @@ def get_full_recursive_types(debug_type_dictionary, resulting_types,
     to_visit = set()
     to_visit.add(type_to_query)
 
-    while len(to_visit) > 0:
+    while to_visit:
         type_to_query = to_visit.pop()
 
         if type_to_query in addresses_visited:
             continue
         addresses_visited.add(type_to_query)
 
-        target_type = debug_type_dictionary.get(type_to_query, None)
+        target_type = debug_type_dictionary.get(type_to_query)
         if target_type is None:
             logger.info("Target is None")
             continue
@@ -2619,7 +2515,7 @@ def get_full_recursive_types(debug_type_dictionary, resulting_types,
         addresses_visited.add(type_to_query)
         type_to_query = str(target_type.get('base_type_addr', ''))
 
-        logger.info("Type to query: " + type_to_query)
+        logger.info("Type to query: %s", type_to_query)
         if int(type_to_query) == 0:
             continue
 
@@ -2699,9 +2595,7 @@ def should_ignore_testpath(test_path: str) -> bool:
         '/external/', '/build/', '/src/inspector/', '/source-code/',
         '/workspace/'
     }
-    if [bp for bp in banned_paths if bp in test_path]:
-        return True
-    return False
+    return any(bp in test_path for bp in banned_paths)
 
 
 @api_blueprint.route('/api/ofg-validity-check')
@@ -2743,9 +2637,8 @@ def extract_project_tests(project_name,
                           refine: bool = True,
                           try_ignore_irrelevant=True) -> List[Optional[str]]:
     """Extracts the tests in terms of file paths of a given project"""
-    tests_file = os.path.join(
-        os.path.dirname(__file__),
-        f"../static/assets/db/db-projects/{project_name}/test_files.json")
+    tests_file = os.path.join(data_storage.DB_DIR,
+                              f"db-projects/{project_name}/test_files.json")
     if not os.path.isfile(tests_file):
         return []
 
@@ -2779,8 +2672,8 @@ def _load_project_tests_xref(
     test_files: Dict[str, List[Dict[str, Any]]] = {}
 
     test_json = os.path.join(
-        os.path.dirname(__file__),
-        f"../static/assets/db/db-projects/{project_name}/test_files_xref.json")
+        data_storage.DB_DIR,
+        f"db-projects/{project_name}/test_files_xref.json")
     if not os.path.isfile(test_json):
         return test_files
 
@@ -3024,7 +2917,7 @@ def project_tests_xref(args):
             'result':
             'error',
             'extended_msgs':
-            [f'Could not find test files matching the requirements']
+            ['Could not find test files matching the requirements']
         }
 
     return {
@@ -3039,40 +2932,13 @@ def type_at_addr():
     """Temporarily deprecated."""
     # Temporary disabling this API because of size limit.
     # @arthurscchan 14/6/2024
-    return {'result': 'error', 'extended_msgs': ['Temporary disabled']}
-    project = request.args.get('project', None)
-    if project is None:
-        return {
-            'result': 'error',
-            'extended_msgs': ['Please provide project name']
-        }
-
-    addr = request.args.get('addr', None)
-    if addr is None:
-        return {
-            'result': 'error',
-            'extended_msgs': ['Please provide project name']
-        }
-
-    print("Opening type map")
-    type_map = os.path.join(
-        os.path.dirname(__file__),
-        f"../static/assets/db/db-projects/{project}/type_map.json")
-
-    with open(type_map, 'r') as f:
-        type_map_dict = json.load(f)
-
-    resulting_types = dict()
-    print("Getting types")
-    get_full_recursive_types(type_map_dict, resulting_types, addr)
-
-    return {'result': 'success', 'dwarf-map': resulting_types}
+    return {'result': 'error', 'extended_msgs': ['Temporarily disabled']}
 
 
 @api_blueprint.route('/api/function-target-oracle')
 def api_all_interesting_function_targets():
     """Returns a list of function targets based on analysis of all functions
-    in all OSS-Fuzz projects (assuming they have introspetor builds)
+    in all OSS-Fuzz projects (assuming they have introspector builds)
     using several different heuristics."""
     result_dict = {}
 
@@ -3130,7 +2996,7 @@ def get_cross_reference_dict_from_project(project_name) -> Dict[str, int]:
     # Get all functions of the target project
     project_functions = data_storage.get_functions_by_project(project_name)
 
-    func_xrefs: Dict[str, int] = dict()
+    func_xrefs: Dict[str, int] = {}
     for function in project_functions:
         callsites = function.callsites
         for cs_dst in callsites:
@@ -3188,7 +3054,7 @@ def database_language_stats():
     """Gets stats about line coverage across all languages."""
 
     project_statistics = data_storage.PROJECT_TIMESTAMPS
-    latest_coverage_profiles = dict()
+    latest_coverage_profiles = {}
     for ps in project_statistics:
         latest_coverage_profiles[ps.project_name] = ps
 
@@ -3249,7 +3115,7 @@ def sample_cross_references(args):
     is the source code itself. For each cross-reference, the full function
     source code call is returned.
 
-    Only functions with source code of length less than 70 aer included in
+    Only functions with source code of length less than 70 are included in
     the returned list.
 
     # Examples
@@ -3305,7 +3171,7 @@ def sample_cross_references(args):
         if (src_end - src_begin) > 70:
             continue
         # Check if we have accompanying debug info
-        debug_source_dict = target_function.debug_data.get('source', None)
+        debug_source_dict = target_function.debug_data.get('source')
         if debug_source_dict is not None:
             source_line = int(debug_source_dict.get('source_line', -1))
             if source_line != -1:

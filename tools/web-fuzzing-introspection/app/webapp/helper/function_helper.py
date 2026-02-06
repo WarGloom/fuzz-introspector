@@ -99,8 +99,8 @@ def _sort_functions_by_fuzz_worthiness(
         functions: List[models.Function]) -> List[models.Function]:
     """
         Sort the function list according to the following criteria in order.
-        The order is acscending unless otherwise specified.
-        For boolean sorting, False is always in front of True in acscending order.
+        The order is ascending unless otherwise specified.
+        For boolean sorting, False is always in front of True in ascending order.
         1) If the function is reached by any existing fuzzers.
         2) If the function belongs to a enum class (only for JVM project).
         3) The runtime code coverage of the function.
@@ -126,46 +126,28 @@ def _sort_functions_by_fuzz_worthiness(
 def convert_functions_to_list_of_dict(
         functions: List[models.Function]) -> List[Dict[str, Any]]:
     """Convert a function list to a list of dict"""
-    sorted_function_dict_list_by_fuzz_worthiness = []
+    result = []
     for function in functions:
-        sorted_function_dict_list_by_fuzz_worthiness.append({
-            'project':
-            function.project,
-            'function_name':
-            function.name,
-            'function_filename':
-            function.function_filename,
-            'raw_function_name':
-            function.raw_function_name,
-            'is_reached':
-            function.is_reached,
+        result.append({
+            'project': function.project,
+            'function_name': function.name,
+            'function_filename': function.function_filename,
+            'raw_function_name': function.raw_function_name,
+            'is_reached': function.is_reached,
             'accummulated_complexity':
             function.accummulated_cyclomatic_complexity,
-            'function_argument_names':
-            function.function_argument_names,
-            'function_arguments':
-            function.function_arguments,
-            'function_signature':
-            function.func_signature,
-            'reached_by_fuzzers':
-            function.reached_by_fuzzers,
-            'cov_fuzzers':
-            function.cov_fuzzers,
-            'comb_fuzzers':
-            function.comb_fuzzers,
-            'return_type':
-            function.return_type,
-            'runtime_coverage_percent':
-            function.runtime_code_coverage,
-            'source_line_begin':
-            function.source_line_begin,
-            'source_line_end':
-            function.source_line_end,
-            'debug_summary':
-            function.debug_data,
-            'is_enum_class':
-            function.is_enum_class,
-            'assert_stmts':
-            function.asserts
+            'function_argument_names': function.function_argument_names,
+            'function_arguments': function.function_arguments,
+            'function_signature': function.func_signature,
+            'reached_by_fuzzers': function.reached_by_fuzzers,
+            'cov_fuzzers': function.cov_fuzzers,
+            'comb_fuzzers': function.comb_fuzzers,
+            'return_type': function.return_type,
+            'runtime_coverage_percent': function.runtime_code_coverage,
+            'source_line_begin': function.source_line_begin,
+            'source_line_end': function.source_line_end,
+            'debug_summary': function.debug_data,
+            'is_enum_class': function.is_enum_class,
+            'assert_stmts': function.asserts
         })
-    return sorted_function_dict_list_by_fuzz_worthiness
+    return result
