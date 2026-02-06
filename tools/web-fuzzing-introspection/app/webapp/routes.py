@@ -201,11 +201,11 @@ def extract_introspector_raw_source_code(project_name, date_str,
                                                 date_str.replace("-", "")),
         target_file)
 
-    logger.info("URL1: %s" % (introspector_summary_url))
-    # Read the introspector atifact
+    logger.info("URL1: %s", introspector_summary_url)
+    # Read the introspector artifact
     try:
         raw_source = requests.get(introspector_summary_url, timeout=10).text
-    except:
+    except (requests.RequestException, ConnectionError):
         return ''
 
     return raw_source
@@ -231,7 +231,7 @@ def _light_extract_introspector_raw_source_code(project_name, date_str,
     source_url = introspector_url + 'light/source_files/' + target_file
     try:
         raw_source = requests.get(source_url, timeout=10).text
-    except:
+    except (requests.RequestException, ConnectionError):
         return None
 
     return raw_source
@@ -359,7 +359,6 @@ def api_get_target_function(args):
     - `project`: `tinyxml2`
     - `function`: `tinyxml2::XMLNode::InsertEndChild(tinyxml2::XMLNode*)`
     """
-    err_msgs = list()
     project_name = args.get('project', '')
     if not project_name:
         return {
@@ -378,7 +377,7 @@ def api_get_target_function(args):
     try:
         converted_function = function_helper.convert_functions_to_list_of_dict(
             [function_of_interest])[0]
-    except:
+    except (IndexError, KeyError, AttributeError):
         return {'result': 'error', 'msg': 'Failed to convert function.'}
 
     return {'result': 'success', 'function': converted_function}
@@ -719,8 +718,8 @@ def function_search():
     """Renders function search page"""
     info_msg = None
     query = request.args.get('q', '')
-    logger.info("query: { %s }" % (query))
-    if query == '':
+    logger.info("query: { %s }", query)
+    if not query:
         # Pick a random interesting query
         # Some queries involving fuzzing-interesting targets.
         interesting_query_roulette = [
@@ -728,32 +727,24 @@ def function_search():
             'read_xml', 'message', 'request', 'parse_header', 'parse_request',
             'header', 'decompress', 'file_read'
         ]
-        interesting_query = random.choice(interesting_query_roulette)
-        tmp_list = []
-        for function in all_functions_in_db():
-            if interesting_query in function.name:
-                tmp_list.append(function)
-        functions_to_display = tmp_list
+        query = random.choice(interesting_query_roulette)
+        info_msg = f"No query was given, picked the query \"{query}\" for this"
 
-        # Shuffle to give varying results each time
-        random.shuffle(functions_to_display)
+    functions_to_display = [
+        f for f in all_functions_in_db() if query in f.name
+    ]
 
-        total_matches = len(functions_to_display)
-        if total_matches >= 100:
-            functions_to_display = functions_to_display[:100]
-        info_msg = f"No query was given, picked the query \"{interesting_query}\" for this"
-    else:
-        tmp_list = []
-        for function in all_functions_in_db():
-            if query in function.name:
-                tmp_list.append(function)
-        functions_to_display = tmp_list
-
+    if not info_msg:
+        # User-provided query: cap results
         total_matches = len(functions_to_display)
         if total_matches >= MAX_MATCHES_TO_DISPLAY:
-            functions_to_display = functions_to_display[
-                0:MAX_MATCHES_TO_DISPLAY]
+            functions_to_display = functions_to_display[:
+                                                        MAX_MATCHES_TO_DISPLAY]
             info_msg = f"Found {total_matches} matches. Only showing the first {MAX_MATCHES_TO_DISPLAY}."
+    else:
+        # Random query: shuffle and cap at 100
+        random.shuffle(functions_to_display)
+        functions_to_display = functions_to_display[:100]
 
     return render_template('function-search.html',
                            gtag=gtag,
@@ -1117,11 +1108,11 @@ def indexing_overview():
             }
         languages_summarised[bs.language]['all'] += 1
         languages_summarised[bs.language][
-            'fuzz_build'] += 1 if bs.fuzz_build_status == True else 0
+            'fuzz_build'] += 1 if bs.fuzz_build_status is True else 0
         languages_summarised[bs.language][
-            'cov_build'] += 1 if bs.coverage_build_status == True else 0
+            'cov_build'] += 1 if bs.coverage_build_status is True else 0
         languages_summarised[bs.language][
-            'introspector_build'] += 1 if bs.introspector_build_status == True else 0
+            'introspector_build'] += 1 if bs.introspector_build_status is True else 0
 
     logger.info(json.dumps(languages_summarised))
 
@@ -1385,7 +1376,8 @@ def extract_introspector_typedef(project_name, date_str):
         typedef_list = json.loads(
             requests.get(introspector_test_url, timeout=10).text)
 
-    except:  # pylint: disable=bare-except
+    except (requests.RequestException, ConnectionError, json.JSONDecodeError,
+            ValueError):
         # Failed to locate the json in first introspector run
         # Possibly run from LTO, try locate the file in second introspector run
         introspector_test_url = get_introspector_report_url_typedef(
@@ -1393,7 +1385,8 @@ def extract_introspector_typedef(project_name, date_str):
         try:
             typedef_list = json.loads(
                 requests.get(introspector_test_url, timeout=10).text)
-        except:  # pylint: disable=bare-except
+        except (requests.RequestException, ConnectionError,
+                json.JSONDecodeError, ValueError):
             return []
 
     return typedef_list
@@ -1614,7 +1607,7 @@ def get_header_files_needed_for_function(args):
         }
     headers_to_include = target_function.debug_data.get(
         'possible-header-files', [])
-    return {'result': 'succes', 'headers-to-include': headers_to_include}
+    return {'result': 'success', 'headers-to-include': headers_to_include}
 
 
 @api_blueprint.route('/api/all-cross-references')
@@ -1703,7 +1696,7 @@ def api_get_project_language_from_source_files(args):
         '.cc': 'c++',
         '.cpp': 'c++',
         '.c++': 'c++',
-        '.cxx': 'c+',
+        '.cxx': 'c++',
         '.py': 'python',
         '.java': 'java',
         '.go': 'go',
@@ -1758,14 +1751,15 @@ def api_project_all_project_source_files(args):
             introspector_summary_url = get_introspector_report_url_source_base(
                 project_name, date_str.replace("-", "")) + '/index.json'
 
-            logger.info("URL2: %s" % (introspector_summary_url))
+            logger.info("URL2: %s", introspector_summary_url)
 
-            # Read the introspector atifact
+            # Read the introspector artifact
             try:
                 src_path_str = str(
                     requests.get(introspector_summary_url, timeout=10).text)
                 src_path_list = json.loads(src_path_str)
-            except:
+            except (requests.RequestException, ConnectionError,
+                    json.JSONDecodeError, ValueError):
                 # Ignore the error and assume no source path is found
                 pass
 
@@ -1880,12 +1874,12 @@ def api_project_source_code(args):
     if not filepath:
         return {'result': 'error', 'msg': 'No filepath provided'}
 
-    begin_line = args.get('begin_line', -1432)
-    if begin_line == -1432:
+    begin_line = args.get('begin_line', None)
+    if begin_line is None:
         return {'result': 'error', 'msg': 'No begin line provided'}
 
-    end_line = args.get('end_line', -1432)
-    if end_line == -1432:
+    end_line = args.get('end_line', None)
+    if end_line is None:
         return {'result': 'error', 'msg': 'No end line provided'}
 
     # If this is a local build do not look for project timestamps
@@ -2066,7 +2060,7 @@ def function_debug_types(args):
         return {'result': 'error', 'msg': 'Could not find function'}
 
     return {
-        'result': 'succes',
+        'result': 'success',
         'arg-types': target_function.function_debug_arguments
     }
 
@@ -2171,7 +2165,7 @@ def api_function_source_code(args):
     if source_code is None:
         return {'result': 'error', 'msg': 'No source code'}
     return {
-        'result': 'succes',
+        'result': 'success',
         'source': source_code,
         'filepath': src_file,
         'src_begin': src_begin,
@@ -2897,7 +2891,7 @@ def _ignore_irrelevant_tests(tests_file_list,
                                          project_name):
                 result_list.append(test_file)
 
-        return
+        return result_list
 
     return repo_match
 
