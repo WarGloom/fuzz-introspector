@@ -15,20 +15,19 @@
 #
 ################################################################################
 
-if [ -d "oss-fuzz" ]
-then
-  echo "OSS-Fuzz directory exists. Reusing existing one"
+if [ -d "oss-fuzz" ]; then
+	echo "OSS-Fuzz directory exists. Reusing existing one"
 else
-  echo "Cloning oss-fuzz"
-  git clone https://github.com/google/oss-fuzz
-  echo "Applying diffs"
-  cd oss-fuzz
-  git apply  --ignore-space-change --ignore-whitespace ../oss-fuzz-patches.diff
-  echo "Done"
-  cd ../
+	echo "Cloning oss-fuzz"
+	git clone https://github.com/google/oss-fuzz
+	echo "Applying diffs"
+	cd oss-fuzz
+	git apply --ignore-space-change --ignore-whitespace ../oss-fuzz-patches.diff
+	echo "Done"
+	cd ../
 
-  echo "Pulling latest base-clang OSS-Fuzz image."
-  docker pull gcr.io/oss-fuzz-base/base-clang:latest
+	echo "Pulling latest base-clang OSS-Fuzz image."
+	docker pull gcr.io/oss-fuzz-base/base-clang:latest
 fi
 
 echo "Building base-build, base-builder-python and base-runner for fuzz introspector"
@@ -41,9 +40,9 @@ rm -rf ./oss-fuzz/infra/base-images/base-builder/frontends
 cp -rf ../frontends/ ./oss-fuzz/infra/base-images/base-builder/frontends
 
 cd oss-fuzz
-docker build -t gcr.io/oss-fuzz-base/base-builder infra/base-images/base-builder
-docker build -t gcr.io/oss-fuzz-base/base-builder-python infra/base-images/base-builder-python
-docker build -t gcr.io/oss-fuzz-base/base-builder-jvm infra/base-images/base-builder-jvm
-docker build -t gcr.io/oss-fuzz-base/base-builder-rust infra/base-images/base-builder-rust
-docker build -t gcr.io/oss-fuzz-base/base-builder-go infra/base-images/base-builder-go
-docker build -t gcr.io/oss-fuzz-base/base-runner infra/base-images/base-runner
+docker build --no-cache -t gcr.io/oss-fuzz-base/base-builder infra/base-images/base-builder
+docker build --no-cache -t gcr.io/oss-fuzz-base/base-builder-python infra/base-images/base-builder-python
+docker build --no-cache -t gcr.io/oss-fuzz-base/base-builder-jvm infra/base-images/base-builder-jvm
+docker build --no-cache -t gcr.io/oss-fuzz-base/base-builder-rust infra/base-images/base-builder-rust
+docker build --no-cache -t gcr.io/oss-fuzz-base/base-builder-go infra/base-images/base-builder-go
+docker build --no-cache -t gcr.io/oss-fuzz-base/base-runner infra/base-images/base-runner
