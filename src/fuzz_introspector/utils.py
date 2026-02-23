@@ -32,6 +32,7 @@ from fuzz_introspector import constants
 logger = logging.getLogger(name=__name__)
 
 _PYTHON_HTML_STATUS_CACHE: dict[str, Any] = {}
+_PYTHON_HTML_STATUS_INDEX_CACHE: dict[str, str] = {}
 _GO_COVERAGE_OPTIONS_CACHE: dict[str, Any] = {}
 
 
@@ -376,13 +377,10 @@ def resolve_coverage_link(cov_url: str, source_file: str, lineno: int,
 
 
 def _load_python_html_status_targets() -> list[tuple[str, str]]:
-    html_summaries = get_all_files_in_tree_with_regex(".",
-                                                      ".*html_status.json$")
-    logger.debug(str(html_summaries))
-    if len(html_summaries) == 0:
+    html_idx = _load_python_html_status_index(".")
+    if html_idx is None:
         return []
 
-    html_idx = html_summaries[0]
     cache_key = _get_file_cache_key(html_idx)
     if cache_key is None:
         return []
@@ -405,6 +403,24 @@ def _load_python_html_status_targets() -> list[tuple[str, str]]:
         "possible_targets": possible_targets,
     }
     return possible_targets
+
+
+def _load_python_html_status_index(search_root: str) -> Optional[str]:
+    cached_html_idx = _PYTHON_HTML_STATUS_INDEX_CACHE.get(search_root)
+    if cached_html_idx is not None:
+        if os.path.isfile(cached_html_idx):
+            return cached_html_idx
+        del _PYTHON_HTML_STATUS_INDEX_CACHE[search_root]
+
+    html_summaries = get_all_files_in_tree_with_regex(search_root,
+                                                      ".*html_status.json$")
+    logger.debug(str(html_summaries))
+    if len(html_summaries) == 0:
+        return None
+
+    html_idx = html_summaries[0]
+    _PYTHON_HTML_STATUS_INDEX_CACHE[search_root] = html_idx
+    return html_idx
 
 
 def _load_go_coverage_options(report_path: str) -> list[tuple[str, str]]:
