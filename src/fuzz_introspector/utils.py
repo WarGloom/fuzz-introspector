@@ -47,7 +47,8 @@ def longest_common_prefix(strs: list[str]) -> str:
 
 
 def normalise_str(s1: str) -> str:
-    return s1.replace("\t", "").replace("\r", "").replace("\n", "").replace(" ", "")
+    return s1.replace("\t", "").replace("\r", "").replace("\n",
+                                                          "").replace(" ", "")
 
 
 def safe_decode(data) -> Optional[str]:
@@ -64,7 +65,8 @@ def safe_decode(data) -> Optional[str]:
     return None
 
 
-def get_all_files_in_tree_with_regex(basedir: str, regex_str: str) -> list[str]:
+def get_all_files_in_tree_with_regex(basedir: str,
+                                     regex_str: str) -> list[str]:
     """
     Returns a list of paths such that each path is to a file with
     the provided suffix. Walks the entire tree of basedir.
@@ -131,8 +133,7 @@ def data_file_read_yaml(filename: str) -> Optional[dict[Any, Any]]:
                     content["All functions"] = doc["All functions"]
                 else:
                     content["All functions"]["Elements"].extend(
-                        doc["All functions"]["Elements"]
-                    )
+                        doc["All functions"]["Elements"])
     except Exception as e:
         # YAML library does not completely wrap exceptions, so unless
         # we catch all exceptions here we might end up in a crashing state.
@@ -183,7 +184,8 @@ def remove_jvm_generics(funcname: str) -> str:
     return re.sub(pattern, "", funcname)
 
 
-def scan_executables_for_fuzz_introspector_logs(exec_dir: str) -> list[dict[str, str]]:
+def scan_executables_for_fuzz_introspector_logs(
+        exec_dir: str) -> list[dict[str, str]]:
     """Finds all executables containing fuzzerLogFile string
 
     Args:
@@ -217,9 +219,10 @@ def scan_executables_for_fuzz_introspector_logs(exec_dir: str) -> list[dict[str,
             if "fuzzerLogFile" not in found_str:
                 continue
             logger.info("Found match %s", found_str)
-            executable_to_fuzz_reports.append(
-                {"executable_path": executable_path, "fuzzer_log_file": found_str}
-            )
+            executable_to_fuzz_reports.append({
+                "executable_path": executable_path,
+                "fuzzer_log_file": found_str
+            })
             # Break when a string is found to avoid scanning the whole binary.
             break
 
@@ -227,8 +230,9 @@ def scan_executables_for_fuzz_introspector_logs(exec_dir: str) -> list[dict[str,
 
 
 def approximate_python_coverage_files_list(
-    src1: str, possible_targets: list[tuple[str, str]], resolve_inits=False
-) -> Optional[str]:
+        src1: str,
+        possible_targets: list[tuple[str, str]],
+        resolve_inits=False) -> Optional[str]:
     """Approximate python coverage file list from source."""
     # Remove prefixed .....
     src1 = src1.lstrip(".")
@@ -243,9 +247,8 @@ def approximate_python_coverage_files_list(
         possible_candidates.append(curr_str + ".py")
         possible_init_candidates.append(curr_str + "/__init__.py")
         curr_str = curr_str + "/"
-    logger.debug(
-        "[%s] -- Created init candidates: %s", src1, str(possible_init_candidates)
-    )
+    logger.debug("[%s] -- Created init candidates: %s", src1,
+                 str(possible_init_candidates))
 
     # Start from backwards to find te longest possible candidate
     for candidate in reversed(possible_candidates):
@@ -275,9 +278,8 @@ def approximate_python_coverage_files_list(
     return None
 
 
-def get_target_coverage_url(
-    coverage_url: str, target_name: str, target_lang: str
-) -> str:
+def get_target_coverage_url(coverage_url: str, target_name: str,
+                            target_lang: str) -> str:
     """
     This function changes overall coverage URL to per-target coverage URL. Like:
         https://storage.googleapis.com/oss-fuzz-coverage/<project>/reports/<report-date>/linux
@@ -287,9 +289,9 @@ def get_target_coverage_url(
     logger.info("Extracting coverage for %s -- %s", coverage_url, target_name)
     if os.environ.get("FUZZ_INTROSPECTOR"):
         if target_lang == "c-cpp":
-            return coverage_url.replace("reports", "reports-by-target").replace(
-                "/linux", f"/{target_name}/linux"
-            )
+            return coverage_url.replace("reports",
+                                        "reports-by-target").replace(
+                                            "/linux", f"/{target_name}/linux")
         if target_lang == "python":
             # TODO ADD python coverage link
             return coverage_url
@@ -300,24 +302,23 @@ def get_target_coverage_url(
     return coverage_url
 
 
-def load_func_names(
-    input_list: list[str], check_for_blocking: bool = True
-) -> list[str]:
+def load_func_names(input_list: list[str],
+                    check_for_blocking: bool = True) -> list[str]:
     """
     Takes a list of function names (typically from llvm profile)
     and makes sure the output names are demangled.
     """
     loaded = []
     for reached in input_list:
-        if check_for_blocking and constants.BLOCKLISTED_FUNCTION_NAMES.match(reached):
+        if check_for_blocking and constants.BLOCKLISTED_FUNCTION_NAMES.match(
+                reached):
             continue
         loaded.append(demangle_rust_func(demangle_cpp_func(reached)))
     return loaded
 
 
-def resolve_coverage_link(
-    cov_url: str, source_file: str, lineno: int, function_name: str, target_lang: str
-) -> str:
+def resolve_coverage_link(cov_url: str, source_file: str, lineno: int,
+                          function_name: str, target_lang: str) -> str:
     """Resolves link to HTML coverage report for different languages"""
     result = "#"
     if target_lang in ["c-cpp", "rust"]:
@@ -331,8 +332,7 @@ def resolve_coverage_link(
         possible_targets = _load_python_html_status_targets()
         if len(possible_targets) > 0:
             found_target = approximate_python_coverage_files_list(
-                function_name, possible_targets, True
-            )
+                function_name, possible_targets, True)
             if found_target is not None:
                 result = found_target + ".html" + "#t" + str(lineno)
         else:
@@ -359,9 +359,8 @@ def resolve_coverage_link(
         result = "index.html"
 
         # Read the single coverage report html for processing
-        report_path = os.path.join(
-            os.environ.get("OUT", ""), "report", "linux", "index.html"
-        )
+        report_path = os.path.join(os.environ.get("OUT", ""), "report",
+                                   "linux", "index.html")
         go_options = _load_go_coverage_options(report_path)
         for file_name, file_key in go_options:
             if file_name.endswith(source_file):
@@ -377,7 +376,8 @@ def resolve_coverage_link(
 
 
 def _load_python_html_status_targets() -> list[tuple[str, str]]:
-    html_summaries = get_all_files_in_tree_with_regex(".", ".*html_status.json$")
+    html_summaries = get_all_files_in_tree_with_regex(".",
+                                                      ".*html_status.json$")
     logger.debug(str(html_summaries))
     if len(html_summaries) == 0:
         return []
@@ -456,7 +456,8 @@ def _get_file_cache_key(file_path: str) -> Optional[tuple[int, int]]:
     return stat_result.st_mtime_ns, stat_result.st_size
 
 
-def group_path_list_by_target(path_list: list[list[Any]]) -> dict[Any, list[Any]]:
+def group_path_list_by_target(
+        path_list: list[list[Any]]) -> dict[Any, list[Any]]:
     """
     Group path list items by path target which is
     the last itme of each list.
@@ -510,7 +511,8 @@ def _find_all_source_path(extension: str) -> set[str]:
 
 def _copy_java_source_files(required_class_list: list[str], out_dir):
     """Copy the needed java source files."""
-    logger.info("Copying java source files to %s", constants.SAVED_SOURCE_FOLDER)
+    logger.info("Copying java source files to %s",
+                constants.SAVED_SOURCE_FOLDER)
 
     count = 0
     java_source_path_set = _find_all_source_path(".java")
@@ -529,13 +531,13 @@ def _copy_java_source_files(required_class_list: list[str], out_dir):
                 # Source file for the target class found. Copy it to the
                 # SAVED_SOURCE_FOLDER while preserving package directories
                 # of the target source file.
-                dst = os.path.join(
-                    out_dir, constants.SAVED_SOURCE_FOLDER, required_file
-                )
+                dst = os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER,
+                                   required_file)
                 if os.path.isfile(dst):
                     # Skip duplicate files
                     continue
-                os.makedirs(os.path.join(out_dir, os.path.dirname(dst)), exist_ok=True)
+                os.makedirs(os.path.join(out_dir, os.path.dirname(dst)),
+                            exist_ok=True)
                 shutil.copy(java_source_path, dst)
                 count += 1
                 copied_source_path_list.append(required_file)
@@ -547,22 +549,23 @@ def _copy_java_source_files(required_class_list: list[str], out_dir):
 
     # Store a list of existing source file paths for reference
     with open(
-        os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER, "index.json"), "w"
-    ) as f:
+            os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER, "index.json"),
+            "w") as f:
         f.write(json.dumps(copied_source_path_list))
 
-    logger.info(
-        "Copied %d java source files to %s", count, constants.SAVED_SOURCE_FOLDER
-    )
+    logger.info("Copied %d java source files to %s", count,
+                constants.SAVED_SOURCE_FOLDER)
 
 
 def _copy_python_source_files(out_dir):
     """Copy the needed python source files."""
-    logger.info("Copying python source files to %s", constants.SAVED_SOURCE_FOLDER)
+    logger.info("Copying python source files to %s",
+                constants.SAVED_SOURCE_FOLDER)
 
     count = 0
     python_source_path_set = _find_all_source_path(".py")
-    os.makedirs(os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER), exist_ok=True)
+    os.makedirs(os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER),
+                exist_ok=True)
 
     copied_source_path_list = []
     for python_source_path in python_source_path_set:
@@ -579,16 +582,17 @@ def _copy_python_source_files(out_dir):
 
     # Store a list of existing source file paths for reference
     with open(
-        os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER, "index.json"), "w"
-    ) as f:
+            os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER, "index.json"),
+            "w") as f:
         f.write(json.dumps(copied_source_path_list))
 
-    logger.info(
-        "Copied %d python source files to %s", count, constants.SAVED_SOURCE_FOLDER
-    )
+    logger.info("Copied %d python source files to %s", count,
+                constants.SAVED_SOURCE_FOLDER)
 
 
-def copy_source_files(required_class_list: list[str], language: str, out_dir: str = ""):
+def copy_source_files(required_class_list: list[str],
+                      language: str,
+                      out_dir: str = ""):
     """Copy the needed source files for different project.
     Currently only support Python and Java projects."""
 
@@ -597,10 +601,12 @@ def copy_source_files(required_class_list: list[str], language: str, out_dir: st
     elif language == "python":
         _copy_python_source_files(out_dir)
     else:
-        logger.debug("Language: %s not support. Skipping source file copy.", language)
+        logger.debug("Language: %s not support. Skipping source file copy.",
+                     language)
 
 
-def locate_rust_fuzz_key(funcname: str, fuzz_map: dict[str, Any]) -> Optional[str]:
+def locate_rust_fuzz_key(funcname: str, fuzz_map: dict[str,
+                                                       Any]) -> Optional[str]:
     """Helper method for locating rust fuzz key with missing crate
     information."""
 
