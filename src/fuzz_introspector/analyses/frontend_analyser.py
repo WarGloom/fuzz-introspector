@@ -23,9 +23,9 @@ from fuzz_introspector import (analysis, html_helpers, utils)
 from fuzz_introspector.datatypes import (project_profile, fuzzer_profile,
                                          function_profile)
 
-from fuzz_introspector.frontends import oss_fuzz
+from fuzz_introspector.frontends import oss_fuzz, tree_sitter_utils
 
-from tree_sitter import Language, Parser, Query
+from tree_sitter import Language, Parser
 import tree_sitter_cpp
 
 logger = logging.getLogger(name=__name__)
@@ -200,7 +200,7 @@ class FrontendAnalyser(analysis.AnalysisInterface):
         # Extract calls from each test/example file
         test_functions: dict[str, list[dict[str, object]]] = {}
         parser = Parser(tree_sitter_lang)
-        query = Query(tree_sitter_lang, QUERY)
+        query = tree_sitter_utils.get_query(tree_sitter_lang, QUERY)
         for test_file in test_files:
             func_call_list = []
             handled = []
@@ -216,15 +216,17 @@ class FrontendAnalyser(analysis.AnalysisInterface):
                 continue
 
             # Extract function calls data from test files
-            data = query.captures(node)
+            data = tree_sitter_utils.query_captures(query, node)
 
             # Extract variable declarations (normal, pointers, arrays)
             declarations = {}
             type_nodes = data.get('dt', [])
             name_nodes = data.get('dn', [])
-            kinds = {(n.start_point[0], n.start_point[1]): kind
-                     for kind in ('dp', 'da', 'dp')
-                     for n in data.get(kind, [])}
+            kinds = {
+                (n.start_point[0], n.start_point[1]): kind
+                for kind in ('dp', 'da', 'dp')
+                for n in data.get(kind, [])
+            }
 
             # Process variable declarations
             for name_node, type_node in zip(name_nodes, type_nodes):

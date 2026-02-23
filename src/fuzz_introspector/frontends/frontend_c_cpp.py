@@ -23,6 +23,7 @@ import os
 import copy
 import logging
 
+from fuzz_introspector.frontends import tree_sitter_utils
 from fuzz_introspector.frontends.datatypes import SourceCodeFile, Project
 
 logger = logging.getLogger(name=__name__)
@@ -164,9 +165,11 @@ class CppSourceCodeFile(SourceCodeFile):
             # Skip anonymous enum or forward declaration
             return
 
-        enum_item_query = self.tree_sitter_lang.query('( enumerator ) @en')
+        enum_item_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                                      '( enumerator ) @en')
         enumerator_list = []
-        for _, enumerators in enum_item_query.captures(enum_body).items():
+        for enumerators in tree_sitter_utils.query_captures(
+                enum_item_query, enum_body).values():
             for enumerator in enumerators:
                 item_dict = {}
                 enum_item_name = enumerator.child_by_field_name('name')
@@ -800,21 +803,24 @@ class FunctionDefinition():
         """Get the approximate number of basic blocks in a function"""
         self.bbcount = 1
 
-        if_query = self.tree_sitter_lang.query('( if_statement ) @fi')
-        if_res = if_query.captures(self.root)
-        for _, if_exprs in if_res.items():
+        if_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                               '( if_statement ) @fi')
+        if_res = tree_sitter_utils.query_captures(if_query, self.root)
+        for if_exprs in if_res.values():
             self.bbcount += len(if_exprs)
 
-        case_query = self.tree_sitter_lang.query('( case_statement ) @ci')
-        case_res = case_query.captures(self.root)
-        for _, case_exprs in case_res.items():
+        case_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                                 '( case_statement ) @ci')
+        case_res = tree_sitter_utils.query_captures(case_query, self.root)
+        for case_exprs in case_res.values():
             self.bbcount += len(case_exprs)
 
     def _process_assert_stmts(self):
         """Gets a list of assert statements in the function."""
-        call_query = self.tree_sitter_lang.query('( call_expression ) @ce')
-        call_res = call_query.captures(self.root)
-        for _, call_exprs in call_res.items():
+        call_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                                 '( call_expression ) @ce')
+        call_res = tree_sitter_utils.query_captures(call_query, self.root)
+        for call_exprs in call_res.values():
             for call_expr in call_exprs:
                 func_call = call_expr.child_by_field_name('function')
                 args = call_expr.child_by_field_name('arguments')

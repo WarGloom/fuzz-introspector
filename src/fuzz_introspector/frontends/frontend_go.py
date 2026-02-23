@@ -21,6 +21,7 @@ from tree_sitter import Language, Node
 
 import logging
 
+from fuzz_introspector.frontends import tree_sitter_utils
 from fuzz_introspector.frontends.datatypes import Project, SourceCodeFile
 
 logger = logging.getLogger(name=__name__)
@@ -57,34 +58,33 @@ class GoSourceCodeFile(SourceCodeFile):
     def _set_function_declaration(self):
         """Internal helper for retrieving all functions."""
         func_query_str = '( function_declaration ) @fd '
-        func_query = self.tree_sitter_lang.query(func_query_str)
-
-        function_res = func_query.captures(self.root)
-        for _, funcs in function_res.items():
-            for func in funcs:
-                self.functions.append(
-                    FunctionMethod(func, self.tree_sitter_lang, self, True))
+        func_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                                 func_query_str)
+        function_res = tree_sitter_utils.query_captures(func_query, self.root)
+        for func in function_res.get('fd', []):
+            self.functions.append(
+                FunctionMethod(func, self.tree_sitter_lang, self, True))
 
     def _set_method_declaration(self):
         """Internal helper for retrieving all methods."""
         func_query_str = '( method_declaration ) @fd '
-        func_query = self.tree_sitter_lang.query(func_query_str)
-
-        function_res = func_query.captures(self.root)
-        for _, funcs in function_res.items():
-            for func in funcs:
-                self.methods.append(
-                    FunctionMethod(func, self.tree_sitter_lang, self, False))
+        func_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                                 func_query_str)
+        function_res = tree_sitter_utils.query_captures(func_query, self.root)
+        for func in function_res.get('fd', []):
+            self.methods.append(
+                FunctionMethod(func, self.tree_sitter_lang, self, False))
 
     def _set_imports(self):
         """Internal helper for retrieving all imports."""
         import_set = set()
 
         import_query_str = '( import_declaration ) @imp'
-        import_query = self.tree_sitter_lang.query(import_query_str)
-        import_query_res = import_query.captures(self.root)
-
-        for _, imports in import_query_res.items():
+        import_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                                   import_query_str)
+        import_query_res = tree_sitter_utils.query_captures(
+            import_query, self.root)
+        for imports in import_query_res.values():
             for imp in imports:
                 for import_spec in imp.children:
                     if import_spec.type != 'import_spec_list':
@@ -470,8 +470,10 @@ class FunctionMethod():
         # Process arguments
         param_names = []
         param_types = []
-        query = self.tree_sitter_lang.query('( parameter_list ) @pl')
-        for _, exprs in query.captures(self.root).items():
+        query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                            '( parameter_list ) @pl')
+        for exprs in tree_sitter_utils.query_captures(query,
+                                                      self.root).values():
             for param_node in exprs:
                 for param in param_node.children:
                     if not param.is_named:
@@ -626,6 +628,37 @@ class FunctionMethod():
 
         return target_name
 
+    def _get_error_selector_prefix(self, call_expr: Node) -> Optional[str]:
+        parent = call_expr.parent
+        if not parent:
+            return None
+
+        statement = parent.parent
+        if not statement:
+            return None
+
+        child_count = len(statement.children)
+        for idx in range(child_count):
+            child = statement.children[idx]
+            if child.start_byte == parent.start_byte and child.end_byte == parent.end_byte:
+                if idx == 0:
+                    return None
+                for prev_idx in range(idx - 1, -1, -1):
+                    prev_child = statement.children[prev_idx]
+                    if prev_child.type != 'ERROR' or not prev_child.text:
+                        continue
+
+                    prefix = prev_child.text.decode(encoding='utf-8',
+                                                    errors='ignore').strip()
+                    if prefix.endswith('.'):
+                        prefix = prefix[:-1]
+                    if prefix in self.parent_source.imports:
+                        return prefix
+                    return None
+                return None
+
+        return None
+
     def _detect_variable_type(
             self, node: Node,
             all_funcs_meths: dict[str, 'FunctionMethod']) -> Optional[str]:
@@ -717,8 +750,10 @@ class FunctionMethod():
                                                           'FunctionMethod']):
         """Gets the local variable types of the function."""
 
-        query = self.tree_sitter_lang.query('( short_var_declaration ) @vd')
-        for _, exprs in query.captures(self.root).items():
+        query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                            '( short_var_declaration ) @vd')
+        for exprs in tree_sitter_utils.query_captures(query,
+                                                      self.root).values():
             for decl_node in exprs:
                 left = decl_node.child_by_field_name('left')
                 right = decl_node.child_by_field_name('right')
@@ -737,8 +772,10 @@ class FunctionMethod():
                 if decl_name and decl_type:
                     self.var_map[decl_name] = decl_type
 
-        query = self.tree_sitter_lang.query('( for_statement ) @fd')
-        for _, exprs in query.captures(self.root).items():
+        query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                            '( for_statement ) @fd')
+        for exprs in tree_sitter_utils.query_captures(query,
+                                                      self.root).values():
             for for_node in exprs:
                 for child in for_node.children:
                     if child.type != 'range_clause':
@@ -776,9 +813,10 @@ class FunctionMethod():
         """Gets the callsites of the function."""
 
         callsites = []
-        call_query = self.tree_sitter_lang.query('( call_expression ) @ce')
-        call_res = call_query.captures(self.root)
-        for _, call_exprs in call_res.items():
+        call_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                                 '( call_expression ) @ce')
+        call_res = tree_sitter_utils.query_captures(call_query, self.root)
+        for call_exprs in call_res.values():
             for call_expr in call_exprs:
                 call = call_expr.child_by_field_name('function')
                 if not call:
@@ -786,6 +824,10 @@ class FunctionMethod():
 
                 target_name = self._process_call_expr_child(
                     call, all_funcs_meths)
+                if target_name and '.' not in target_name:
+                    error_prefix = self._get_error_selector_prefix(call_expr)
+                    if error_prefix:
+                        target_name = f'{error_prefix}.{target_name}'
                 if target_name in ['new', 'make']:
                     if target_name not in all_funcs_meths:
                         target_name = None
