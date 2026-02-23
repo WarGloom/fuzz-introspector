@@ -1366,9 +1366,11 @@ def extract_tests_from_directories(directories,
                 if not is_candidate_source(absolute_path):
                     continue
 
-                if is_inspiration_root and is_non_fuzz_harness(absolute_path):
-                    all_test_files.add(absolute_path)
                 if "test" in f:
+                    all_test_files.add(absolute_path)
+                    continue
+
+                if is_inspiration_root and is_non_fuzz_harness(absolute_path):
                     all_test_files.add(absolute_path)
     new_test_files = set()
     for test_file in all_test_files:
