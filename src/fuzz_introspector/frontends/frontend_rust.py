@@ -626,6 +626,10 @@ class RustProject(datatypes.Project[RustSourceCodeFile]):
 
     def __init__(self, source_code_files: list[RustSourceCodeFile]):
         super().__init__(source_code_files)
+        self._function_uses_cache_key: tuple[int, int] | None = None
+        self._function_depth_cache_key: tuple[int, int] | None = None
+        self._function_uses_cache: dict[str, int] = {}
+        self._function_depth_cache: dict[str, int] = {}
 
     def generate_report(self,
                         entry_function: str = '',
@@ -801,48 +805,37 @@ class RustProject(datatypes.Project[RustSourceCodeFile]):
     def calculate_function_uses(self, target_name: str,
                                 all_functions: list[RustFunction]) -> int:
         """Calculate how many functions called the target function."""
-        func_use_count = 0
-        for function in all_functions:
-            found = False
-            for callsite in function.base_callsites:
-                if callsite[0] == target_name:
-                    found = True
-                    break
-                if callsite[0].endswith(target_name):
-                    found = True
-                    break
-            if found:
-                func_use_count += 1
-
-        return func_use_count
+        self._ensure_function_uses_cache(all_functions)
+        return self._function_uses_cache.get(target_name, 0)
 
     def calculate_function_depth(
             self, target_function: RustFunction,
             all_functions: dict[str, RustFunction]) -> int:
         """Calculate function depth of the target function."""
+        self._ensure_function_depth_cache(all_functions)
+        return self._function_depth_cache.get(target_function.name, 0)
 
-        def _recursive_function_depth(function: RustFunction) -> int:
-            callsites = function.base_callsites
-            if len(callsites) == 0:
-                return 0
+    def _ensure_function_uses_cache(self,
+                                    all_functions: list[RustFunction]) -> None:
+        """Ensure uses cache exists for helper lookups."""
+        cache_key = (id(all_functions), len(all_functions))
+        if self._function_uses_cache_key == cache_key:
+            return
 
-            depth = 0
-            visited.append(function.name)
-            for callsite in callsites:
-                target = get_function_node(callsite[0], all_functions, True)
-                if target and target.name in visited:
-                    depth = max(depth, 1)
-                elif target:
-                    depth = max(depth, _recursive_function_depth(target) + 1)
-                else:
-                    visited.append(callsite[0])
+        self._function_uses_cache = self._build_function_uses_map(
+            all_functions)
+        self._function_uses_cache_key = cache_key
 
-            return depth
+    def _ensure_function_depth_cache(
+            self, all_functions: dict[str, RustFunction]) -> None:
+        """Ensure depth cache exists for helper lookups."""
+        cache_key = (id(all_functions), len(all_functions))
+        if self._function_depth_cache_key == cache_key:
+            return
 
-        visited: list[str] = []
-        func_depth = _recursive_function_depth(target_function)
-
-        return func_depth
+        self._function_depth_cache = self._build_function_depth_map(
+            all_functions)
+        self._function_depth_cache_key = cache_key
 
     def extract_calltree(self,
                          source_file: str = '',

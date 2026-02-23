@@ -1076,6 +1076,9 @@ class JvmProject(Project[JvmSourceCodeFile]):
     def __init__(self, source_code_files: list[JvmSourceCodeFile]):
         super().__init__(source_code_files)
         self.all_classes = []
+        self._method_metric_cache_key: tuple[int, int] | None = None
+        self._method_uses_cache: dict[str, int] = {}
+        self._method_depth_cache: dict[str, int] = {}
         for source_code in self.source_code_files:
             self.all_classes.extend(source_code.classes)
 
@@ -1258,45 +1261,24 @@ class JvmProject(Project[JvmSourceCodeFile]):
     def calculate_method_uses(self, target_name: str,
                               all_methods: list[JavaMethod]) -> int:
         """Calculate how many method called the target method."""
-        method_use_count = 0
-        for method in all_methods:
-            found = False
-            for callsite in method.base_callsites:
-                if callsite[0] == target_name:
-                    found = True
-                    break
-            if found:
-                method_use_count += 1
-
-        return method_use_count
+        self._ensure_method_metric_cache(all_methods)
+        return self._method_uses_cache.get(target_name, 0)
 
     def calculate_method_depth(self, target_method: JavaMethod,
                                all_methods: list[JavaMethod]) -> int:
         """Calculate method depth of the target method."""
+        self._ensure_method_metric_cache(all_methods)
+        return self._method_depth_cache.get(target_method.name, 0)
 
-        def _recursive_method_depth(method: JavaMethod) -> int:
-            callsites = method.base_callsites
-            if len(callsites) == 0:
-                return 0
+    def _ensure_method_metric_cache(self, methods: list[JavaMethod]) -> None:
+        """Ensure uses/depth caches exist for method helper lookups."""
+        cache_key = (id(methods), len(methods))
+        if self._method_metric_cache_key == cache_key:
+            return
 
-            depth = 0
-            visited.append(method.name)
-            for callsite in callsites:
-                target = method_dict.get(callsite[0])
-                if callsite[0] in visited:
-                    depth = max(depth, 1)
-                elif target:
-                    depth = max(depth, _recursive_method_depth(target) + 1)
-                else:
-                    visited.append(callsite[0])
-
-            return depth
-
-        visited: list[str] = []
-        method_dict = {method.name: method for method in all_methods}
-        method_depth = _recursive_method_depth(target_method)
-
-        return method_depth
+        self._method_uses_cache = self._build_method_uses_map(methods)
+        self._method_depth_cache = self._build_method_depth_map(methods)
+        self._method_metric_cache_key = cache_key
 
     def extract_calltree(self,
                          source_file: str = '',

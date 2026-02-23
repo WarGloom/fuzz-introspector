@@ -20,11 +20,17 @@ This plan covers the next work items:
   - Added regression coverage for report-phase extraction parity/exclusions.
   - Added extraction fast-path to skip content reads for files already
     selected via filename (`"test" in filename`) inside inspiration roots.
-- [~] PR2: second slice landed.
+- [x] PR2: frontend O(F^2) reduction slices landed.
   - first slice: precomputed uses/depth caches in C++/Go/JVM/Rust report generation paths.
   - second slice: Go `FunctionMethod` now caches zero-valued `function_uses` and
     `function_depth` results (avoids repeated recomputation for leaf/unreferenced functions),
     with regression tests in `src/test/test_frontends_go.py`.
+  - final safe slice: C++/JVM/Rust helper methods now reuse one cached
+    uses/depth map per input function set instead of rescanning per call,
+    with focused regression tests in:
+    - `src/test/test_frontends_cpp.py`
+    - `src/test/test_frontends_jvm.py`
+    - `src/test/test_frontends_rust.py`
 - [x] PR3: cache-finalization slices landed.
   - `CoverageProfile` key-resolution now short-circuits direct-key hits before
     demangle/normalization work.
@@ -54,32 +60,22 @@ This plan covers the next work items:
 ## Remaining hotspot inventory (not fully solved yet)
 1. `src/fuzz_introspector/analysis.py`
    - `correlate_introspection_functions_to_debug_info(...)`: repeated header scanning.
-   - `extract_tests_from_directories(...)`: still multi-walk over overlapping directory sets.
-2. `src/fuzz_introspector/frontends/frontend_c_cpp.py`
-   - per-function repeated usage/depth computation in report generation.
-3. `src/fuzz_introspector/frontends/frontend_go.py`
-   - repeated function-uses/depth scans in `FunctionMethod` methods.
-4. `src/fuzz_introspector/frontends/frontend_jvm.py`
-   - per-method repeated uses/depth scans.
-5. `src/fuzz_introspector/frontends/frontend_rust.py`
-   - per-function repeated uses/depth scans.
-6. `src/fuzz_introspector/code_coverage.py`
-   - repeated demangle/normalize lookup chain for coverage-key resolution.
-7. `src/fuzz_introspector/utils.py`
-   - `resolve_coverage_link(...)` re-reads/parses coverage helper files repeatedly.
-8. Report-phase config exclusion gap (tracked bug)
-   - Bug report: `docs/config-exclusion-not-applied-in-report-phase.md`
-   - `FILES_TO_AVOID` from `FUZZ_INTROSPECTOR_CONFIG` is honored in LLVM instrumentation, but not in report-phase test extraction.
-   - Current report scan still relies on hardcoded substring filters in `extract_tests_from_directories(...)`.
+   - additional low-risk opportunities still exist in test extraction traversal, but
+     the overlapping-directory multi-walk issue from P3A is already reduced.
 
-## Verification: bug status in current code
-- Verdict: still actual.
-- Evidence (report phase):
-  - `src/fuzz_introspector/html_report.py:849` calls `analysis.extract_test_information(...)` with no exclusion/config argument.
-  - `src/fuzz_introspector/analysis.py:1155` defines `extract_tests_from_directories(...)` without any config input; `src/fuzz_introspector/analysis.py:1195` uses fixed `to_avoid` values only.
-  - `src/fuzz_introspector/analysis.py:1236` performs `os.walk(...)` over seed directories and only prunes hidden dirs (`dirs[:] = [d for d in dirs if not d.startswith('.')]`), not config-driven patterns.
-  - `src/fuzz_introspector/commands.py:167` triggers report creation without loading `FUZZ_INTROSPECTOR_CONFIG` or forwarding `FILES_TO_AVOID`.
-- Evidence (build phase parity baseline):
+## Verification: report-phase exclusion parity status
+- Verdict: fixed in this branch.
+- Evidence (report phase now consumes config exclusions):
+  - `src/fuzz_introspector/commands.py:35` adds `load_report_exclude_patterns_from_config(...)` and
+    `src/fuzz_introspector/commands.py:204` loads patterns from `FUZZ_INTROSPECTOR_CONFIG` when not explicitly provided.
+  - `src/fuzz_introspector/commands.py:221` forwards `exclude_patterns` into
+    `html_report.create_html_report(...)`.
+  - `src/fuzz_introspector/html_report.py:987` forwards `exclude_patterns` into
+    `analysis.extract_test_information(...)`.
+  - `src/fuzz_introspector/analysis.py:1251` accepts `exclude_patterns` in
+    `extract_tests_from_directories(...)` and `src/fuzz_introspector/analysis.py:1311`
+    applies compiled regex filtering for both candidate files and directory pruning.
+- Evidence (build phase parity baseline remains unchanged):
   - `frontends/llvm/lib/Transforms/FuzzIntrospector/FuzzIntrospector.cpp:428` reads config via `FUZZ_INTROSPECTOR_CONFIG`.
   - `frontends/llvm/lib/Transforms/FuzzIntrospector/FuzzIntrospector.cpp:444` loads `FILES_TO_AVOID` entries.
   - `frontends/llvm/lib/Transforms/FuzzIntrospector/FuzzIntrospector.cpp:1549` applies file-avoid regexes in `shouldAvoidFunction(...)`.

@@ -1077,6 +1077,9 @@ class CppProject(Project[CppSourceCodeFile]):
     def __init__(self, source_code_files: list[CppSourceCodeFile]):
         super().__init__(source_code_files)
         self.internal_func_list: list[dict[str, Any]] = []
+        self._function_metric_cache_key: tuple[int, int] | None = None
+        self._function_uses_cache: dict[str, int] = {}
+        self._function_depth_cache: dict[str, int] = {}
 
     def get_function_from_name(self, function_name):
         for func in self.all_functions:
@@ -1379,54 +1382,26 @@ class CppProject(Project[CppSourceCodeFile]):
 
     def _calculate_function_uses(self, target_name: str) -> int:
         """Calculate how many functions called the target function."""
-        func_use_count = 0
-
-        for source_file in self.source_code_files:
-            for function in source_file.func_defs:
-                found = False
-                for callsite in function.base_callsites:
-                    if callsite[0] == target_name:
-                        found = True
-                        break
-                    if callsite[0].endswith(target_name):
-                        found = True
-                        break
-                if found:
-                    func_use_count += 1
-
-        return func_use_count
+        self._ensure_function_metric_cache()
+        return self._function_uses_cache.get(target_name, 0)
 
     def _calculate_function_depth(self,
                                   target_function: FunctionDefinition) -> int:
         """Calculate function depth of the target function."""
+        self._ensure_function_metric_cache()
+        return self._function_depth_cache.get(target_function.name, 0)
 
-        def _recursive_function_depth(function: FunctionDefinition) -> int:
-            if function.depth != -1:
-                return function.depth
+    def _ensure_function_metric_cache(self) -> None:
+        """Ensure uses/depth caches exist for current project functions."""
+        cache_key = (id(self.all_functions), len(self.all_functions))
+        if self._function_metric_cache_key == cache_key:
+            return
 
-            callsites = function.base_callsites
-            if len(callsites) == 0:
-                return 0
-
-            depth = 0
-            visited.append(function.name)
-            for callsite in callsites:
-                target = self._find_source_with_func_def(callsite[0])
-                if target and target[1].name in visited:
-                    depth = max(depth, 1)
-                elif target:
-                    depth = max(depth,
-                                _recursive_function_depth(target[1]) + 1)
-                    function.depth = depth
-                else:
-                    visited.append(callsite[0])
-
-            return depth
-
-        visited: list[str] = []
-        func_depth = _recursive_function_depth(target_function)
-
-        return func_depth
+        self._function_uses_cache = self._build_function_uses_map(
+            self.all_functions)
+        self._function_depth_cache = self._build_function_depth_map(
+            self.all_functions)
+        self._function_metric_cache_key = cache_key
 
     def _find_source_with_func_def(
             self, name: str
