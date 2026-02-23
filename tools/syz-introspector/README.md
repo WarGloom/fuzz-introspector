@@ -5,7 +5,7 @@
 
 ```
 # Set up env
-python3.11 -m virtualenv .venv
+python3.14 -m virtualenv .venv
 . .venv/bin/activate
 
 # Clone linux

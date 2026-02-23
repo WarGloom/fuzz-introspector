@@ -11,14 +11,32 @@ permissions: read-all
 jobs:
   unittests:
     runs-on: ubuntu-latest
-    name: Unit Tests
+    name: Unit Tests (${{ matrix.lane }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: baseline
+            python_jit: "0"
+            experimental: false
+          - lane: jit
+            python_jit: "1"
+            experimental: true
+    continue-on-error: ${{ matrix.experimental }}
+    env:
+      PYTHON_JIT: ${{ matrix.python_jit }}
     steps:
       - name: Check out source repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v2.4.0
       - name: Set up Python environment
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v3.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.14"
+      - name: Guard JIT lane on runtime availability
+        id: jit_guard
+        if: matrix.lane == 'jit'
+        run: |
+          python -c "import sys; has_jit = hasattr(sys, '_jit') and hasattr(sys._jit, 'is_available') and sys._jit.is_available(); print(f'available={str(has_jit).lower()}')" >> "$GITHUB_OUTPUT"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -27,12 +45,18 @@ jobs:
           python -m pip install atheris
           cd ..
       - name: Prepare test case files
+        if: matrix.lane != 'jit' || steps.jit_guard.outputs.available == 'true'
         run: |
           cd tests/java && ./runTest.sh test3 && ./runTest.sh test4 && ./runTest.sh test11 && ./runTest.sh test12
       - name: Test unittests and generate coverage report
+        if: matrix.lane != 'jit' || steps.jit_guard.outputs.available == 'true'
         run: |
           coverage run -m pytest -vv src/test/
+      - name: Skip JIT lane when unavailable
+        if: matrix.lane == 'jit' && steps.jit_guard.outputs.available != 'true'
+        run: echo "PYTHON_JIT is not available in this interpreter build; lane intentionally skipped."
       - name: Display and clean up unittests coverage report
+        if: matrix.lane != 'jit' || steps.jit_guard.outputs.available == 'true'
         run: |
           coverage report -m
           rm .coverage

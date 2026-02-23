@@ -11,7 +11,7 @@ available through various APIs.
 
 ## Launching a local version
 
-This webapp currently is build, tested and run with Python 3.11. Other versions
+This webapp currently is build, tested and run with Python 3.14. Other versions
 may work but are not officially supported.
 
 To launch the web app locally you need to:
@@ -30,9 +30,9 @@ git clone https://github.com/ossf/fuzz-introspector
 cd tools/web-fuzzing-introspection
 
 # Create virtual environment
-python3.11 -m virtualenv .venv
+python3.14 -m virtualenv .venv
 . .venv/bin/activate
-python3.11 -m pip install -r ./requirements.txt
+python3.14 -m pip install -r ./requirements.txt
 
 
 # Create (small) DB

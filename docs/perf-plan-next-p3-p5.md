@@ -25,7 +25,7 @@ This plan covers the next work items:
   - second slice: Go `FunctionMethod` now caches zero-valued `function_uses` and
     `function_depth` results (avoids repeated recomputation for leaf/unreferenced functions),
     with regression tests in `src/test/test_frontends_go.py`.
-- [~] PR3: first cache-finalization slice landed.
+- [x] PR3: cache-finalization slices landed.
   - `CoverageProfile` key-resolution now short-circuits direct-key hits before
     demangle/normalization work.
   - Added covmap-size-aware negative miss cache to avoid repeated transform
@@ -36,6 +36,20 @@ This plan covers the next work items:
   - Added refresh/invalidation regressions in
     `src/test/test_utils_coverage_cache.py` for repeated hit and
     deleted-index-file refresh behavior.
+  - Added Go coverage option-cache regressions in
+    `src/test/test_utils_coverage_cache.py` for cache re-use and
+    file-change refresh behavior.
+- [x] PR4: Python 3.14 baseline rollout completed.
+  - Active Python jobs in `testing.yml`, `mypy.yml`,
+    `webapp-api-test.yml`, and `webapp-mypy.yml` now use Python 3.14.
+  - Package floor moved to `requires-python = ">=3.14"`.
+  - Python version references updated in README and tool docs.
+  - Read the Docs build runtime moved to Python 3.14.
+- [x] PR5: non-blocking JIT lane added.
+  - `testing.yml` now includes a baseline lane (`PYTHON_JIT=0`) and
+    an experimental JIT lane (`PYTHON_JIT=1`) with `continue-on-error`.
+  - JIT lane has availability guard and explicit skip output when the
+    interpreter build does not expose runtime JIT support.
 
 ## Remaining hotspot inventory (not fully solved yet)
 1. `src/fuzz_introspector/analysis.py`
@@ -198,6 +212,6 @@ This plan covers the next work items:
 - JIT lane exists as non-blocking and reports status without gating merges.
 
 ## Immediate next 3 steps
-1. Implement PR0 (report-phase config exclusion parity bugfix from `docs/config-exclusion-not-applied-in-report-phase.md`).
-2. Implement PR1 (`analysis.py` remaining hotspot cleanup).
-3. Implement PR2 (frontend O(F^2) reductions in C++/Go/JVM/Rust frontends).
+1. Monitor CI stability for Python 3.14 baseline and the non-blocking JIT lane.
+2. Keep report-phase exclusion parity (PR0) and extraction hot paths under regression tests as adjacent features evolve.
+3. Revisit optional PR6 only after deterministic analysis merge contracts are implemented.
