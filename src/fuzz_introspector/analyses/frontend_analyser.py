@@ -188,19 +188,20 @@ class FrontendAnalyser(analysis.AnalysisInterface):
         # Perform a second run of the frontend on the target project. This
         # ensure non-compiled source codes ignored by LTO are also included
         # in the analysis.
-        oss_fuzz.analyse_folder(language=language,
-                                directory=basefolder,
-                                out=temp_dir,
-                                module_only=True)
+        oss_fuzz.analyse_folder(
+            language=language, directory=basefolder, out=temp_dir, module_only=True
+        )
 
         # Generate FI backend analysis report from second frontend run result
         introspection_proj = analysis.IntrospectionProject(
-            proj_profile.language, basefolder, temp_dir)
+            proj_profile.language, basefolder, temp_dir
+        )
         introspection_proj.load_data_files(True, temp_dir, basefolder)
 
         # Calls standalone analysis
-        self.standalone_analysis(introspection_proj.proj_profile,
-                                 introspection_proj.profiles, out_dir)
+        self.standalone_analysis(
+            introspection_proj.proj_profile, introspection_proj.profiles, out_dir
+        )
 
         return ""
 
@@ -227,10 +228,7 @@ class FrontendAnalyser(analysis.AnalysisInterface):
 
         # Auto determine base information if not provided
         if not self.directory:
-            paths = [
-                os.path.abspath(func.function_source_file)
-                for func in functions
-            ]
+            paths = [os.path.abspath(func.function_source_file) for func in functions]
             common_path = os.path.commonpath(paths)
             if os.path.isfile(common_path):
                 common_path = os.path.dirname(common_path)
@@ -241,9 +239,10 @@ class FrontendAnalyser(analysis.AnalysisInterface):
 
         # Ensure all test/example files has been added
         test_files.update(
-            analysis.extract_tests_from_directories(self.directory,
-                                                    self.language, out_dir,
-                                                    False))
+            analysis.extract_tests_from_directories(
+                self.directory, self.language, out_dir, False
+            )
+        )
 
         tree_sitter_lang = self.LANGUAGE.get(self.language)
         if not tree_sitter_lang:
@@ -286,10 +285,8 @@ class FrontendAnalyser(analysis.AnalysisInterface):
                 if not name_node.text or not type_node.text:
                     continue
 
-                name = name_node.text.decode(encoding="utf-8",
-                                             errors="ignore").strip()
-                base = type_node.text.decode(encoding="utf-8",
-                                             errors="ignore").strip()
+                name = name_node.text.decode(encoding="utf-8", errors="ignore").strip()
+                base = type_node.text.decode(encoding="utf-8", errors="ignore").strip()
 
                 pos = (name_node.start_point[0], name_node.start_point[1])
                 kind = kinds.get(pos, "dp")
@@ -316,10 +313,8 @@ class FrontendAnalyser(analysis.AnalysisInterface):
                 if not name_node.text or not stmt_node.text:
                     continue
 
-                name = name_node.text.decode(encoding="utf-8",
-                                             errors="ignore").strip()
-                stmt = stmt_node.text.decode(encoding="utf-8",
-                                             errors="ignore").strip()
+                name = name_node.text.decode(encoding="utf-8", errors="ignore").strip()
+                stmt = stmt_node.text.decode(encoding="utf-8", errors="ignore").strip()
 
                 pos = (stmt_node.start_point[0], stmt_node.end_point[0])
                 if name in declarations:
@@ -334,8 +329,7 @@ class FrontendAnalyser(analysis.AnalysisInterface):
                 if not name_node.text:
                     continue
 
-                name = name_node.text.decode(encoding="utf-8",
-                                             errors="ignore").strip()
+                name = name_node.text.decode(encoding="utf-8", errors="ignore").strip()
 
                 # Skip non-project functions
                 if name not in func_names:
@@ -351,8 +345,10 @@ class FrontendAnalyser(analysis.AnalysisInterface):
 
                         if curr.type == "identifier" and curr.text:
                             params.add(
-                                curr.text.decode(encoding="utf-8",
-                                                 errors="ignore").strip())
+                                curr.text.decode(
+                                    encoding="utf-8", errors="ignore"
+                                ).strip()
+                            )
                             break
                         if curr.child_count > 0:
                             stack.extend(curr.children)
@@ -361,7 +357,8 @@ class FrontendAnalyser(analysis.AnalysisInterface):
                 # details including declaration initialisation of parameters
                 # used for this function call
                 filtered = [
-                    decl for param, decl in declarations.items()
+                    decl
+                    for param, decl in declarations.items()
                     if param in params
                     and not self._check_primitive(str(decl.get("type", "")))
                 ]
@@ -370,16 +367,16 @@ class FrontendAnalyser(analysis.AnalysisInterface):
                     continue
 
                 handled.append(key)
-                func_call_list.append({
-                    "function_name": name,
-                    "params": filtered,
-                    "call_start": name_node.start_point[0] + 1,
-                    "call_end": name_node.end_point[0] + 1,
-                })
+                func_call_list.append(
+                    {
+                        "function_name": name,
+                        "params": filtered,
+                        "call_start": name_node.start_point[0] + 1,
+                        "call_end": name_node.end_point[0] + 1,
+                    }
+                )
 
-            func_call_list = [
-                call for call in func_call_list if call["params"]
-            ]
+            func_call_list = [call for call in func_call_list if call["params"]]
             if func_call_list:
                 test_functions[test_file] = func_call_list
 
@@ -388,8 +385,7 @@ class FrontendAnalyser(analysis.AnalysisInterface):
             f.write(json.dumps(list(test_files)))
 
         # Store test files with cross reference information
-        with open(os.path.join(out_dir, "all_tests_with_xreference.json"),
-                  "w") as f:
+        with open(os.path.join(out_dir, "all_tests_with_xreference.json"), "w") as f:
             f.write(json.dumps(test_functions))
 
         return None
