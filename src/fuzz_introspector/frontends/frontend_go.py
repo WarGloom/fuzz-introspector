@@ -439,8 +439,8 @@ class FunctionMethod:
         self.arg_types: list[str] = []
         self.return_type = ""
         self.sig = ""
-        self.function_uses = 0
-        self.function_depth = 0
+        self.function_uses: int | None = None
+        self.function_depth: int | None = None
         self.base_callsites: list[tuple[str, int]] = []
         self.detailed_callsites: list[dict[str, str]] = []
         self.var_map: dict[str, str] = {}
@@ -464,23 +464,27 @@ class FunctionMethod:
     def get_function_uses(self,
                           all_funcs_meths: list["FunctionMethod"]) -> int:
         """Calculate how many function called this function."""
-        if not self.function_uses:
-            for func in all_funcs_meths:
-                found = False
-                for callsite in func.base_callsites:
-                    if callsite[0] == self.name:
-                        found = True
-                        break
-                if found:
-                    self.function_uses += 1
+        if self.function_uses is not None:
+            return self.function_uses
 
-        return self.function_uses
+        function_uses = 0
+        for func in all_funcs_meths:
+            found = False
+            for callsite in func.base_callsites:
+                if callsite[0] == self.name:
+                    found = True
+                    break
+            if found:
+                function_uses += 1
+
+        self.function_uses = function_uses
+        return function_uses
 
     def get_function_depth(self,
                            all_funcs_meths: list["FunctionMethod"]) -> int:
         """Calculate function depth of this function."""
 
-        if self.function_depth:
+        if self.function_depth is not None:
             return self.function_depth
 
         visited: list[str] = []

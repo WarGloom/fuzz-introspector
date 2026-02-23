@@ -17,8 +17,11 @@ This plan covers the next work items:
 ## Progress status (memory-improvements)
 - [x] PR0: report-phase exclusion plumbing and tests landed.
 - [ ] PR1: verify fixture-level `test-files.json` parity checks.
-- [~] PR2: first slice landed with precomputed uses/depth caches in
-  C++/Go/JVM/Rust report generation paths.
+- [~] PR2: second slice landed.
+  - first slice: precomputed uses/depth caches in C++/Go/JVM/Rust report generation paths.
+  - second slice: Go `FunctionMethod` now caches zero-valued `function_uses` and
+    `function_depth` results (avoids repeated recomputation for leaf/unreferenced functions),
+    with regression tests in `src/test/test_frontends_go.py`.
 - [ ] PR3+
 
 ## Remaining hotspot inventory (not fully solved yet)

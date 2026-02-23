@@ -13,13 +13,48 @@
 # limitations under the License.
 """Unit testing script for the Go frontend"""
 
-from fuzz_introspector.frontends import oss_fuzz  # noqa: E402
+from fuzz_introspector.frontends import frontend_go, oss_fuzz  # noqa: E402
+
+
+def _new_function_method(
+        name: str,
+        base_callsites: list[tuple[str, int]]) -> frontend_go.FunctionMethod:
+    function = frontend_go.FunctionMethod.__new__(frontend_go.FunctionMethod)
+    function.name = name
+    function.base_callsites = base_callsites
+    function.function_uses = None
+    function.function_depth = None
+    return function
+
+
+def test_go_function_uses_caches_zero_value():
+    caller = _new_function_method("caller", [])
+    target = _new_function_method("target", [])
+
+    function_uses = target.get_function_uses([caller, target])
+
+    caller.base_callsites = [("target", 11)]
+
+    assert function_uses == 0
+    assert target.get_function_uses([caller, target]) == 0
+
+
+def test_go_function_depth_caches_zero_value():
+    target = _new_function_method("target", [])
+    child = _new_function_method("child", [])
+
+    function_depth = target.get_function_depth([target, child])
+
+    target.base_callsites = [("child", 3)]
+
+    assert function_depth == 0
+    assert target.get_function_depth([target, child]) == 0
 
 
 def test_tree_sitter_go_sample1():
     project, _ = oss_fuzz.analyse_folder(
-        'go',
-        'src/test/data/source-code/go/test-project-1',
+        "go",
+        "src/test/data/source-code/go/test-project-1",
         dump_output=False,
     )
 
@@ -27,18 +62,19 @@ def test_tree_sitter_go_sample1():
     harness = project.get_source_codes_with_harnesses()
     assert len(harness) == 1
 
-    functions_reached = project.get_reachable_functions(harness[0].source_file, harness[0])
+    functions_reached = project.get_reachable_functions(
+        harness[0].source_file, harness[0])
 
     # Callsite check
-    assert 'calculate' in functions_reached
-    assert 'fmt.Sprintf' in functions_reached
-    assert 'unusedFunction' not in functions_reached
+    assert "calculate" in functions_reached
+    assert "fmt.Sprintf" in functions_reached
+    assert "unusedFunction" not in functions_reached
 
 
 def test_tree_sitter_go_sample2():
     project, _ = oss_fuzz.analyse_folder(
-        'go',
-        'src/test/data/source-code/go/test-project-2',
+        "go",
+        "src/test/data/source-code/go/test-project-2",
         dump_output=False,
     )
 
@@ -46,19 +82,20 @@ def test_tree_sitter_go_sample2():
     harness = project.get_source_codes_with_harnesses()
     assert len(harness) == 1
 
-    functions_reached = project.get_reachable_functions(harness[0].source_file, harness[0])
+    functions_reached = project.get_reachable_functions(
+        harness[0].source_file, harness[0])
 
     # Callsite check
-    assert 'strconv.Atoi' in functions_reached
-    assert 'Person.Greet' in functions_reached
-    assert 'Dog.Greet' not in functions_reached
-    assert 'Person.UnusedMethod' not in functions_reached
+    assert "strconv.Atoi" in functions_reached
+    assert "Person.Greet" in functions_reached
+    assert "Dog.Greet" not in functions_reached
+    assert "Person.UnusedMethod" not in functions_reached
 
 
 def test_tree_sitter_go_sample3():
     project, _ = oss_fuzz.analyse_folder(
-        'go',
-        'src/test/data/source-code/go/test-project-3',
+        "go",
+        "src/test/data/source-code/go/test-project-3",
         dump_output=False,
     )
 
@@ -66,26 +103,27 @@ def test_tree_sitter_go_sample3():
     harness = project.get_source_codes_with_harnesses()
     assert len(harness) == 1
 
-    functions_reached = project.get_reachable_functions(harness[0].source_file, harness[0])
+    functions_reached = project.get_reachable_functions(
+        harness[0].source_file, harness[0])
 
     # Callsite check
-    assert 'strconv.Atoi' in functions_reached
-    assert 'NewDog' in functions_reached
-    assert 'Person.Greet' in functions_reached
-    assert 'Dog.Introduce' in functions_reached
-    assert 'Robot.Describe' in functions_reached
-    assert 'Person.Introduce' not in functions_reached
-    assert 'Person.Describe' not in functions_reached
-    assert 'Dog.Greet' not in functions_reached
-    assert 'Dog.Describe' not in functions_reached
-    assert 'Robot.Greet' not in functions_reached
-    assert 'Robot.Introduce' not in functions_reached
+    assert "strconv.Atoi" in functions_reached
+    assert "NewDog" in functions_reached
+    assert "Person.Greet" in functions_reached
+    assert "Dog.Introduce" in functions_reached
+    assert "Robot.Describe" in functions_reached
+    assert "Person.Introduce" not in functions_reached
+    assert "Person.Describe" not in functions_reached
+    assert "Dog.Greet" not in functions_reached
+    assert "Dog.Describe" not in functions_reached
+    assert "Robot.Greet" not in functions_reached
+    assert "Robot.Introduce" not in functions_reached
 
 
 def test_tree_sitter_go_sample4():
     project, _ = oss_fuzz.analyse_folder(
-        'go',
-        'src/test/data/source-code/go/test-project-4',
+        "go",
+        "src/test/data/source-code/go/test-project-4",
         dump_output=False,
     )
 
@@ -93,19 +131,20 @@ def test_tree_sitter_go_sample4():
     harness = project.get_source_codes_with_harnesses()
     assert len(harness) == 1
 
-    functions_reached = project.get_reachable_functions(harness[0].source_file, harness[0])
+    functions_reached = project.get_reachable_functions(
+        harness[0].source_file, harness[0])
 
     # Callsite check
-    assert 'strconv.Atoi' in functions_reached
-    assert 'Person.Greet' in functions_reached
-    assert 'Dog.Introduce' in functions_reached
-    assert 'Robot.Describe' in functions_reached
-    assert 'Person.Introduce' not in functions_reached
-    assert 'Person.Describe' not in functions_reached
-    assert 'Dog.Greet' not in functions_reached
-    assert 'Dog.Describe' not in functions_reached
-    assert 'Robot.Greet' not in functions_reached
-    assert 'Robot.Introduce' not in functions_reached
+    assert "strconv.Atoi" in functions_reached
+    assert "Person.Greet" in functions_reached
+    assert "Dog.Introduce" in functions_reached
+    assert "Robot.Describe" in functions_reached
+    assert "Person.Introduce" not in functions_reached
+    assert "Person.Describe" not in functions_reached
+    assert "Dog.Greet" not in functions_reached
+    assert "Dog.Describe" not in functions_reached
+    assert "Robot.Greet" not in functions_reached
+    assert "Robot.Introduce" not in functions_reached
 
 
 def test_tree_sitter_go_sample5():
@@ -114,8 +153,8 @@ def test_tree_sitter_go_sample5():
     deteremine what instance the item is used until runtime.
     """
     project, _ = oss_fuzz.analyse_folder(
-        'go',
-        'src/test/data/source-code/go/test-project-5',
+        "go",
+        "src/test/data/source-code/go/test-project-5",
         dump_output=False,
     )
 
@@ -123,18 +162,19 @@ def test_tree_sitter_go_sample5():
     harness = project.get_source_codes_with_harnesses()
     assert len(harness) == 1
 
-    functions_reached = project.get_reachable_functions(harness[0].source_file, harness[0])
+    functions_reached = project.get_reachable_functions(
+        harness[0].source_file, harness[0])
 
     # Callsite check
-    assert 'strconv.ParseFloat' in functions_reached
-    assert 'Shape.Area' in functions_reached
-    assert 'Shape.Perimeter' in functions_reached
+    assert "strconv.ParseFloat" in functions_reached
+    assert "Shape.Area" in functions_reached
+    assert "Shape.Perimeter" in functions_reached
 
 
 def test_tree_sitter_go_sample6():
     project, _ = oss_fuzz.analyse_folder(
-        'go',
-        'src/test/data/source-code/go/test-project-6',
+        "go",
+        "src/test/data/source-code/go/test-project-6",
         dump_output=False,
     )
 
@@ -142,19 +182,20 @@ def test_tree_sitter_go_sample6():
     harness = project.get_source_codes_with_harnesses()
     assert len(harness) == 1
 
-    functions_reached = project.get_reachable_functions(harness[0].source_file, harness[0])
+    functions_reached = project.get_reachable_functions(
+        harness[0].source_file, harness[0])
 
     # Callsite check
-    assert 'Circle.Describe' in functions_reached
-    assert 'time.Sleep' in functions_reached
-    assert 'Square.Describe' not in functions_reached
-    assert 'unreachableGoroutine' not in functions_reached
+    assert "Circle.Describe" in functions_reached
+    assert "time.Sleep" in functions_reached
+    assert "Square.Describe" not in functions_reached
+    assert "unreachableGoroutine" not in functions_reached
 
 
 def test_tree_sitter_go_sample7():
     project, _ = oss_fuzz.analyse_folder(
-        'go',
-        'src/test/data/source-code/go/test-project-7',
+        "go",
+        "src/test/data/source-code/go/test-project-7",
         dump_output=False,
     )
 
@@ -162,16 +203,17 @@ def test_tree_sitter_go_sample7():
     harness = project.get_source_codes_with_harnesses()
     assert len(harness) == 1
 
-    functions_reached = project.get_reachable_functions(harness[0].source_file, harness[0])
+    functions_reached = project.get_reachable_functions(
+        harness[0].source_file, harness[0])
 
     # Callsite check
-    assert 'package.SayHello' in functions_reached
+    assert "package.SayHello" in functions_reached
 
 
 def test_tree_sitter_go_sample8():
     project, _ = oss_fuzz.analyse_folder(
-        'go',
-        'src/test/data/source-code/go/test-project-8',
+        "go",
+        "src/test/data/source-code/go/test-project-8",
         dump_output=False,
     )
 
@@ -179,22 +221,23 @@ def test_tree_sitter_go_sample8():
     harness = project.get_source_codes_with_harnesses()
     assert len(harness) == 1
 
-    functions_reached = project.get_reachable_functions(harness[0].source_file, harness[0])
+    functions_reached = project.get_reachable_functions(
+        harness[0].source_file, harness[0])
 
     # Callsite check
-    assert 'Person.Greet' in functions_reached
-    assert 'Shape.Area' in functions_reached
-    assert 'Shape.Perimeter' in functions_reached
-    assert 'close' in functions_reached
-    assert 'unreachableGoroutine' not in functions_reached
-    assert 'processValue' not in functions_reached
-    assert 'Person.GoodBye' not in functions_reached
+    assert "Person.Greet" in functions_reached
+    assert "Shape.Area" in functions_reached
+    assert "Shape.Perimeter" in functions_reached
+    assert "close" in functions_reached
+    assert "unreachableGoroutine" not in functions_reached
+    assert "processValue" not in functions_reached
+    assert "Person.GoodBye" not in functions_reached
 
 
 def test_tree_sitter_go_sample9():
     project, _ = oss_fuzz.analyse_folder(
-        'go',
-        'src/test/data/source-code/go/test-project-9',
+        "go",
+        "src/test/data/source-code/go/test-project-9",
         dump_output=False,
     )
 
@@ -202,23 +245,25 @@ def test_tree_sitter_go_sample9():
     harness = project.get_source_codes_with_harnesses()
     assert len(harness) == 2
 
-    result_one = project.get_reachable_functions(harness[0].source_file, harness[0])
-    result_two = project.get_reachable_functions(harness[1].source_file, harness[1])
+    result_one = project.get_reachable_functions(harness[0].source_file,
+                                                 harness[0])
+    result_two = project.get_reachable_functions(harness[1].source_file,
+                                                 harness[1])
 
     # Callsite check
-    if 'fuzzer_one' in harness[0].source_file:
+    if "fuzzer_one" in harness[0].source_file:
         functions_reached_one = result_one
         functions_reached_two = result_two
     else:
         functions_reached_one = result_two
         functions_reached_two = result_one
 
-    assert 'SharedFunctionA' in functions_reached_one
-    assert 'unreachableMethodA' not in functions_reached_one
-    assert 'unreachableMethodB' not in functions_reached_one
-    assert 'SharedFunctionB' not in functions_reached_one
+    assert "SharedFunctionA" in functions_reached_one
+    assert "unreachableMethodA" not in functions_reached_one
+    assert "unreachableMethodB" not in functions_reached_one
+    assert "SharedFunctionB" not in functions_reached_one
 
-    assert 'SharedFunctionB' in functions_reached_two
-    assert 'unreachableMethodA' not in functions_reached_two
-    assert 'unreachableMethodB' not in functions_reached_two
-    assert 'SharedFunctionA' not in functions_reached_two
+    assert "SharedFunctionB" in functions_reached_two
+    assert "unreachableMethodA" not in functions_reached_two
+    assert "unreachableMethodB" not in functions_reached_two
+    assert "SharedFunctionA" not in functions_reached_two
