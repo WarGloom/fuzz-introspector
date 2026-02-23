@@ -192,17 +192,25 @@ This plan covers the next work items:
 - Validation:
   - parity checks over deterministic test/report fixtures.
 
-### PR6 - optional, after above: safe analysis parallelization design
+### PR6 - optional, after above: safe analysis parallelization
+- Design reference:
+  - `docs/pr6-safe-analysis-parallelization-design.md`
 - Target files:
   - `src/fuzz_introspector/html_report.py`
   - `src/fuzz_introspector/json_report.py`
   - selected analysis modules under `src/fuzz_introspector/analyses/`
 - Changes:
   - Do not run current analyses in parallel directly.
-  - First define worker contract for isolated analysis outputs,
-  - then deterministic merge in main process.
+  - Implement deterministic worker output contract (envelope v1) before enabling workers > 1.
+  - Merge all analysis outputs in main process using canonical registry order from `analyses.all_analyses`.
+  - Enforce merge conflict rules for duplicate analysis names, artifact collisions, and JSON namespace collisions.
+  - Introduce retry policy (max one retry per retryable worker failure) with fail-fast on fatal merge/schema errors.
 - Reason:
   - current analyses share mutable structures and shared files; naive parallelization is race-prone.
+- Next actions (phase-gated):
+  1. Phase 1: land envelope + merge coordinator in serial compatibility mode with deterministic parity tests.
+  2. Phase 2: enable limited parallel worker execution behind a feature flag for vetted analyses only.
+  3. Phase 3: expand to remaining analyses (or mark serial-only) after CI burn-in.
 
 ## Acceptance criteria
 - Report phase honors config-driven directory/file exclusions (from `FILES_TO_AVOID` or equivalent passed patterns) during test extraction traversal.
@@ -216,4 +224,4 @@ This plan covers the next work items:
 ## Immediate next 3 steps
 1. Monitor CI stability for Python 3.14 baseline and the non-blocking JIT lane.
 2. Keep report-phase exclusion parity (PR0) and extraction hot paths under regression tests as adjacent features evolve.
-3. Revisit optional PR6 only after deterministic analysis merge contracts are implemented.
+3. Start PR6 Phase 1 from `docs/pr6-safe-analysis-parallelization-design.md` (envelope schema, serial merge coordinator, determinism/conflict tests).
