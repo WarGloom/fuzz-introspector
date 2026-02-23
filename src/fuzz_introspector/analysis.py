@@ -1151,28 +1151,10 @@ def extract_tests_from_directories(directories,
     copies them to the `constants.SAVED_SOURCE_FOLDER` folder with the same
     absolute path appended."""
     all_directories = set()
-    all_files_in_subtree = set()
     for directory in directories:
-        for root, _, files in os.walk(directory):
-            for f in files:
-                file_path = os.path.join(root, f)
-                all_files_in_subtree.add(file_path)
-
-                assembled_dir = '/'
-                for dd2 in file_path.split('/'):
-                    # Skip empty dd2
-                    if not dd2:
-                        continue
-
-                    # Skip hidden directories
-                    if dd2.startswith('.'):
-                        break
-
-                    assembled_dir += dd2
-                    if os.path.isdir(assembled_dir
-                                     ) and assembled_dir.startswith(directory):
-                        all_directories.add(assembled_dir)
-                    assembled_dir += '/'
+        for root, dirs, _ in os.walk(directory):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            all_directories.add(root)
 
     inspirations = ["sample", "test", "example"]
     all_inspiration_dirs = set()
@@ -1203,6 +1185,7 @@ def extract_tests_from_directories(directories,
     ]
     for directory in all_inspiration_dirs:
         for root, dirs, files in os.walk(directory):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
             for f in files:
                 if not any(f.endswith(ext) for ext in test_extensions):
                     continue
@@ -1216,19 +1199,20 @@ def extract_tests_from_directories(directories,
                     continue
                 try:
                     with open(absolute_path, 'r') as file_fp:
-                        if 'LLVMFuzzerTestOneInput' in file_fp.read():
+                        content = file_fp.read()
+                        if 'LLVMFuzzerTestOneInput' in content:
                             continue
                         # For rust projects
-                        if 'fuzz_target' in file_fp.read():
+                        if 'fuzz_target' in content:
                             continue
                         # For python projects
-                        if '.Fuzz()' in file_fp.read():
+                        if '.Fuzz()' in content:
                             continue
                         # For jvm projects
-                        if 'fuzzerTestOneInput' in file_fp.read():
+                        if 'fuzzerTestOneInput' in content:
                             continue
                         # For go projects
-                        if 'Fuzz' in file_fp.read():
+                        if 'Fuzz' in content:
                             continue
                 except UnicodeDecodeError:
                     continue
@@ -1237,6 +1221,7 @@ def extract_tests_from_directories(directories,
     # Iterate through all directories and search for files with test in them.
     for directory in all_directories:
         for root, dirs, files in os.walk(directory):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
             for f in files:
                 if not any(f.endswith(ext) for ext in test_extensions):
                     continue
