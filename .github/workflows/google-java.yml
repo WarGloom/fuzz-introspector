@@ -15,5 +15,6 @@ jobs:
         with:
           args: "--replace"
           skip-commit: true
+          files: "frontends/java/**/*.java"
       - name: Print diffs
         run: git --no-pager diff --exit-code
