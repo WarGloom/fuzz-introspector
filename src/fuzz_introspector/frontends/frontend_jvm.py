@@ -21,6 +21,7 @@ from tree_sitter import Language, Node
 
 import logging
 
+from fuzz_introspector.frontends import tree_sitter_utils
 from fuzz_introspector.frontends.datatypes import Project, SourceCodeFile
 
 logger = logging.getLogger(name=__name__)
@@ -98,9 +99,10 @@ class JvmSourceCodeFile(SourceCodeFile):
 
     def _set_package_declaration(self):
         """Internal helper for retrieving the source package."""
-        query = self.tree_sitter_lang.query('( package_declaration ) @fd ')
-        res = query.captures(self.root)
-        for _, nodes in res.items():
+        query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                            '( package_declaration ) @fd ')
+        res = tree_sitter_utils.query_captures(query, self.root)
+        for nodes in res.values():
             for node in nodes:
                 for package in node.children:
                     if package.type in ['scoped_identifier', 'identifier']:
@@ -117,9 +119,10 @@ class JvmSourceCodeFile(SourceCodeFile):
     def _set_import_declaration(self):
         """Internal helper for retrieving all import."""
         # Process by import statements
-        query = self.tree_sitter_lang.query('( import_declaration ) @fd ')
-        res = query.captures(self.root)
-        for _, nodes in res.items():
+        query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                            '( import_declaration ) @fd ')
+        res = tree_sitter_utils.query_captures(query, self.root)
+        for nodes in res.values():
             for node in nodes:
                 package = ''
                 wildcard = False
