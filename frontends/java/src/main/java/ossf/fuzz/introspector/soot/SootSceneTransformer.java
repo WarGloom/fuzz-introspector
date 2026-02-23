@@ -186,7 +186,8 @@ public class SootSceneTransformer extends SceneTransformer {
       CalculationUtils.calculateAllCallDepth(this.methodList);
 
       if (!isAutoFuzz) {
-        fullSinkMethodList = SinkDiscoveryUtils.discoverAllSinks(sinkMethodMap, projectClassMethodMap, callGraph);
+        fullSinkMethodList =
+            SinkDiscoveryUtils.discoverAllSinks(sinkMethodMap, projectClassMethodMap, callGraph);
         CalltreeUtils.addSinkMethods(this.methodList, this.fullSinkMethodList, this.isAutoFuzz);
       }
 
@@ -394,10 +395,7 @@ public class SootSceneTransformer extends SceneTransformer {
             if (unit instanceof Stmt) {
               Callsite callsite =
                   BlockGraphInfoUtils.handleMethodInvocationInStatement(
-                      (Stmt) unit,
-                      c.getFilePath(),
-                      this.sinkMethodMap,
-                      this.excludeMethodList);
+                      (Stmt) unit, c.getFilePath(), this.sinkMethodMap, this.excludeMethodList);
               if (callsite != null) {
                 element.addCallsite(callsite);
               }

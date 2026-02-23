@@ -49,7 +49,7 @@ public class BlockGraphInfoUtils {
 
     for (List<SootMethod> methods : projectClassMethodMap.values()) {
       for (SootMethod method : methods) {
-        try{
+        try {
           BlockGraph blockGraph = new BriefBlockGraph(method.retrieveActiveBody());
 
           for (Block block : blockGraph.getBlocks()) {
