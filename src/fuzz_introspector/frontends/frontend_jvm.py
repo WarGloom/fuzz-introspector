@@ -1120,6 +1120,9 @@ class JvmProject(Project[JvmSourceCodeFile]):
         for method in project_methods:
             method.extract_callsites(all_classes)
 
+        method_uses_map = self._build_method_uses_map(project_methods)
+        method_depth_map = self._build_method_depth_map(project_methods)
+
         # Process all project methods
         method_list = []
         for method in project_methods:
@@ -1148,10 +1151,8 @@ class JvmProject(Project[JvmSourceCodeFile]):
             method_dict['returnType'] = method.return_type
             method_dict['BranchProfiles'] = []
             method_dict['Callsites'] = method.detailed_callsites
-            method_dict['functionUses'] = self.calculate_method_uses(
-                method.name, project_methods)
-            method_dict['functionDepth'] = self.calculate_method_depth(
-                method, project_methods)
+            method_dict['functionUses'] = method_uses_map.get(method.name, 0)
+            method_dict['functionDepth'] = method_depth_map.get(method.name, 0)
             method_dict['constantsTouched'] = []
             method_dict['BBCount'] = 0
             method_dict['signature'] = method.sig
@@ -1194,6 +1195,56 @@ class JvmProject(Project[JvmSourceCodeFile]):
 
         # Store report to avoid regeneration
         self.report = report
+
+    def _build_method_uses_map(self, methods: list[JavaMethod]) -> dict[str,
+                                                                        int]:
+        """Build reverse call graph based use counts."""
+        method_uses: dict[str, set[str]] = {
+            method.name: set()
+            for method in methods
+        }
+        method_names = set(method_uses.keys())
+
+        for method in methods:
+            for callsite_name, _ in method.base_callsites:
+                if callsite_name in method_names:
+                    method_uses[callsite_name].add(method.name)
+
+        return {
+            method_name: len(caller_names)
+            for method_name, caller_names in method_uses.items()
+        }
+
+    def _build_method_depth_map(self,
+                                methods: list[JavaMethod]) -> dict[str, int]:
+        """Build depth cache for all methods in project report."""
+        method_dict = {method.name: method for method in methods}
+        depth_cache: dict[str, int] = {}
+        recursion_stack: set[str] = set()
+
+        def _compute_depth(method: JavaMethod) -> int:
+            if method.name in depth_cache:
+                return depth_cache[method.name]
+
+            if method.name in recursion_stack:
+                return 1
+
+            recursion_stack.add(method.name)
+            depth = 0
+            for target_name, _ in method.base_callsites:
+                target = method_dict.get(target_name)
+                if not target:
+                    continue
+                depth = max(depth, _compute_depth(target) + 1)
+
+            recursion_stack.remove(method.name)
+            depth_cache[method.name] = depth
+            return depth
+
+        for method in methods:
+            _compute_depth(method)
+
+        return depth_cache
 
     def find_source_with_method(self,
                                 name: str) -> Optional[JvmSourceCodeFile]:
