@@ -34,7 +34,7 @@ LITERAL_TYPE_MAP = {
     "rune_literal": "rune",
     "true": "bool",
     "false": "bool",
-    "iota": "int"
+    "iota": "int",
 }
 
 
@@ -45,8 +45,8 @@ class GoSourceCodeFile(SourceCodeFile):
         """Perform some language specific processes in subclasses."""
         self.imports: list[str] = []
         # List of function definitions in the source file.
-        self.functions: list['FunctionMethod'] = []
-        self.methods: list['FunctionMethod'] = []
+        self.functions: list["FunctionMethod"] = []
+        self.methods: list["FunctionMethod"] = []
 
         # Load function/method declaration
         self._set_function_declaration()
@@ -57,21 +57,21 @@ class GoSourceCodeFile(SourceCodeFile):
 
     def _set_function_declaration(self):
         """Internal helper for retrieving all functions."""
-        func_query_str = '( function_declaration ) @fd '
+        func_query_str = "( function_declaration ) @fd "
         func_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
                                                  func_query_str)
         function_res = tree_sitter_utils.query_captures(func_query, self.root)
-        for func in function_res.get('fd', []):
+        for func in function_res.get("fd", []):
             self.functions.append(
                 FunctionMethod(func, self.tree_sitter_lang, self, True))
 
     def _set_method_declaration(self):
         """Internal helper for retrieving all methods."""
-        func_query_str = '( method_declaration ) @fd '
+        func_query_str = "( method_declaration ) @fd "
         func_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
                                                  func_query_str)
         function_res = tree_sitter_utils.query_captures(func_query, self.root)
-        for func in function_res.get('fd', []):
+        for func in function_res.get("fd", []):
             self.methods.append(
                 FunctionMethod(func, self.tree_sitter_lang, self, False))
 
@@ -79,7 +79,7 @@ class GoSourceCodeFile(SourceCodeFile):
         """Internal helper for retrieving all imports."""
         import_set = set()
 
-        import_query_str = '( import_declaration ) @imp'
+        import_query_str = "( import_declaration ) @imp"
         import_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
                                                    import_query_str)
         import_query_res = tree_sitter_utils.query_captures(
@@ -87,16 +87,16 @@ class GoSourceCodeFile(SourceCodeFile):
         for imports in import_query_res.values():
             for imp in imports:
                 for import_spec in imp.children:
-                    if import_spec.type != 'import_spec_list':
+                    if import_spec.type != "import_spec_list":
                         continue
 
                     for path in import_spec.children:
-                        if path.type == 'import_spec':
-                            path = path.text.decode(encoding='utf-8',
-                                                    errors='ignore').replace(
-                                                        '"', '')
+                        if path.type == "import_spec":
+                            path = path.text.decode(encoding="utf-8",
+                                                    errors="ignore").replace(
+                                                        '"', "")
                             # Only store the package name, not full path
-                            import_set.add(path.rsplit('/', 1)[-1])
+                            import_set.add(path.rsplit("/", 1)[-1])
 
         self.imports = list(import_set)
 
@@ -110,7 +110,7 @@ class GoSourceCodeFile(SourceCodeFile):
         return func_names
 
     def get_function_node(
-            self, target_function_name: str) -> Optional['FunctionMethod']:
+            self, target_function_name: str) -> Optional["FunctionMethod"]:
         """Gets the tree-sitter node corresponding to a function."""
 
         # Find the first instance of the function name
@@ -126,10 +126,10 @@ class GoSourceCodeFile(SourceCodeFile):
 
     def has_libfuzzer_harness(self) -> bool:
         """Returns whether the source code holds a libfuzzer harness"""
-        if any(func.name.startswith('Fuzz') for func in self.functions):
+        if any(func.name.startswith("Fuzz") for func in self.functions):
             return True
 
-        if any(meth.name.startswith('Fuzz') for meth in self.methods):
+        if any(meth.name.startswith("Fuzz") for meth in self.methods):
             return True
 
         return False
@@ -147,11 +147,11 @@ class GoSourceCodeFile(SourceCodeFile):
 
     def get_entry_function_name(self) -> str:
         """Returns the entry function name of the harness if found,"""
-        for func in (self.functions + self.methods):
-            if func.name.startswith('Fuzz'):
+        for func in self.functions + self.methods:
+            if func.name.startswith("Fuzz"):
                 return func.name
 
-        return ''
+        return ""
 
 
 class GoProject(Project[GoSourceCodeFile]):
@@ -170,27 +170,27 @@ class GoProject(Project[GoSourceCodeFile]):
         }
 
     def generate_report(self,
-                        entry_function: str = '',
-                        harness_name: str = '',
-                        harness_source: str = '') -> None:
+                        entry_function: str = "",
+                        harness_name: str = "",
+                        harness_source: str = "") -> None:
         """Helper function for generating yaml function report."""
         # pylint: disable=unused-argument
-        report: dict[str, Any] = {'report': 'name'}
-        report['sources'] = []
-        report['Fuzzer filename'] = harness_source
+        report: dict[str, Any] = {"report": "name"}
+        report["sources"] = []
+        report["Fuzzer filename"] = harness_source
 
         # Log entry function if provided
         if entry_function:
-            report['Fuzzing method'] = entry_function
+            report["Fuzzing method"] = entry_function
 
         # Find all functions
         project_functions: list[FunctionMethod] = []
         function_list: list[dict[str, Any]] = []
         for source_code in self.source_code_files:
-            report['sources'].append({
-                'source_file':
+            report["sources"].append({
+                "source_file":
                 source_code.source_file,
-                'function_names':
+                "function_names":
                 source_code.get_defined_function_names(),
             })
 
@@ -213,40 +213,42 @@ class GoProject(Project[GoSourceCodeFile]):
 
         for func_def in project_functions:
             func_dict: dict[str, Any] = {}
-            func_dict['functionName'] = func_def.name
-            func_dict['functionSourceFile'] = func_def.parent_source.source_file
-            func_dict['functionLinenumber'] = func_def.start_line
-            func_dict['functionLinenumberEnd'] = func_def.end_line
-            func_dict['linkageType'] = ''
-            func_dict['func_position'] = {
-                'start': func_def.start_line,
-                'end': func_def.end_line
+            func_dict["functionName"] = func_def.name
+            func_dict[
+                "functionSourceFile"] = func_def.parent_source.source_file
+            func_dict["functionLinenumber"] = func_def.start_line
+            func_dict["functionLinenumberEnd"] = func_def.end_line
+            func_dict["linkageType"] = ""
+            func_dict["func_position"] = {
+                "start": func_def.start_line,
+                "end": func_def.end_line,
             }
-            func_dict['CyclomaticComplexity'] = func_def.complexity
-            func_dict['EdgeCount'] = func_dict['CyclomaticComplexity']
-            func_dict['ICount'] = func_def.icount
-            func_dict['argNames'] = func_def.arg_names[:]
-            func_dict['argTypes'] = func_def.arg_types[:]
-            func_dict['argCount'] = len(func_dict['argTypes'])
-            func_dict['returnType'] = func_def.return_type
-            func_dict['BranchProfiles'] = []
-            func_dict['Callsites'] = func_def.detailed_callsites
-            func_dict['functionUses'] = function_uses_map.get(func_def.name, 0)
-            func_dict['functionDepth'] = function_depth_map.get(func_def.name, 0)
-            func_dict['constantsTouched'] = []
-            func_dict['BBCount'] = 0
-            func_dict['signature'] = func_def.sig
+            func_dict["CyclomaticComplexity"] = func_def.complexity
+            func_dict["EdgeCount"] = func_dict["CyclomaticComplexity"]
+            func_dict["ICount"] = func_def.icount
+            func_dict["argNames"] = func_def.arg_names[:]
+            func_dict["argTypes"] = func_def.arg_types[:]
+            func_dict["argCount"] = len(func_dict["argTypes"])
+            func_dict["returnType"] = func_def.return_type
+            func_dict["BranchProfiles"] = []
+            func_dict["Callsites"] = func_def.detailed_callsites
+            func_dict["functionUses"] = function_uses_map.get(func_def.name, 0)
+            func_dict["functionDepth"] = function_depth_map.get(
+                func_def.name, 0)
+            func_dict["constantsTouched"] = []
+            func_dict["BBCount"] = 0
+            func_dict["signature"] = func_def.sig
             func_callsites = func_def.base_callsites
             funcs_reached = set()
             for cs_dst, _ in func_callsites:
                 funcs_reached.add(cs_dst)
-            func_dict['functionsReached'] = list(funcs_reached)
+            func_dict["functionsReached"] = list(funcs_reached)
 
             function_list.append(func_dict)
 
         if function_list:
-            report['All functions'] = {}
-            report['All functions']['Elements'] = function_list
+            report["All functions"] = {}
+            report["All functions"]["Elements"] = function_list
 
         # Store functions/methods globally
         self.all_functions = project_functions[:]
@@ -254,7 +256,7 @@ class GoProject(Project[GoSourceCodeFile]):
         self.report = report
 
     def _build_function_uses_map(
-            self, functions: list['FunctionMethod']) -> dict[str, int]:
+            self, functions: list["FunctionMethod"]) -> dict[str, int]:
         """Build reverse call graph based use counts."""
         function_uses: dict[str, set[str]] = {
             function.name: set()
@@ -273,8 +275,7 @@ class GoProject(Project[GoSourceCodeFile]):
         }
 
     def _build_function_depth_map(
-            self, function_map: dict[str,
-                                     'FunctionMethod']) -> dict[str, int]:
+            self, function_map: dict[str, "FunctionMethod"]) -> dict[str, int]:
         """Build depth cache for all functions in project report."""
         depth_cache: dict[str, int] = {}
         recursion_stack: set[str] = set()
@@ -303,14 +304,16 @@ class GoProject(Project[GoSourceCodeFile]):
 
         return depth_cache
 
-    def extract_calltree(self,
-                         source_file: str = '',
-                         source_code: Optional[SourceCodeFile] = None,
-                         function: Optional[str] = None,
-                         visited_functions: Optional[set[str]] = None,
-                         depth: int = 0,
-                         line_number: int = -1,
-                         other_props: Optional[dict[str, Any]] = None) -> str:
+    def extract_calltree(
+        self,
+        source_file: str = "",
+        source_code: Optional[SourceCodeFile] = None,
+        function: Optional[str] = None,
+        visited_functions: Optional[set[str]] = None,
+        depth: int = 0,
+        line_number: int = -1,
+        other_props: Optional[dict[str, Any]] = None,
+    ) -> str:
         """Extracts calltree string of a calltree so that FI core can use it."""
         # pylint: disable=unused-argument
         if not visited_functions:
@@ -318,24 +321,24 @@ class GoProject(Project[GoSourceCodeFile]):
 
         if not function:
             if not source_code:
-                return ''
+                return ""
             function = source_code.get_entry_function_name()
 
         if not function:
-            return ''
+            return ""
 
-        line_to_print = '  ' * depth
+        line_to_print = "  " * depth
         line_to_print += function
-        line_to_print += ' '
+        line_to_print += " "
         line_to_print += source_file
 
         if not source_code or not isinstance(source_code, GoSourceCodeFile):
             source_code = self.find_source_with_func_def(function)
 
-        line_to_print += ' '
+        line_to_print += " "
         line_to_print += str(line_number)
 
-        line_to_print += '\n'
+        line_to_print += "\n"
         if not source_code:
             return line_to_print
 
@@ -353,15 +356,17 @@ class GoProject(Project[GoSourceCodeFile]):
                 function=cs,
                 visited_functions=visited_functions,
                 depth=depth + 1,
-                line_number=line)
+                line_number=line,
+            )
         return line_to_print
 
     def get_reachable_functions(
-            self,
-            source_file: str = '',
-            source_code: Optional[SourceCodeFile] = None,
-            function: Optional[str] = None,
-            visited_functions: Optional[set[str]] = None) -> set[str]:
+        self,
+        source_file: str = "",
+        source_code: Optional[SourceCodeFile] = None,
+        function: Optional[str] = None,
+        visited_functions: Optional[set[str]] = None,
+    ) -> set[str]:
         """Get a list of reachable functions for a provided function name."""
         # pylint: disable=unused-argument
         if not visited_functions:
@@ -390,7 +395,8 @@ class GoProject(Project[GoSourceCodeFile]):
             visited_functions = self.get_reachable_functions(
                 source_code.source_file,
                 function=cs,
-                visited_functions=visited_functions)
+                visited_functions=visited_functions,
+            )
 
         return visited_functions
 
@@ -404,11 +410,16 @@ class GoProject(Project[GoSourceCodeFile]):
         return None
 
 
-class FunctionMethod():
+class FunctionMethod:
     """Wrapper for a General Declaration for function/method"""
 
-    def __init__(self, root: Node, tree_sitter_lang: Language,
-                 source_code: GoSourceCodeFile, is_function: bool):
+    def __init__(
+        self,
+        root: Node,
+        tree_sitter_lang: Language,
+        source_code: GoSourceCodeFile,
+        is_function: bool,
+    ):
         self.root = root
         self.tree_sitter_lang = tree_sitter_lang
         self.parent_source = source_code
@@ -419,15 +430,15 @@ class FunctionMethod():
         self.end_line = self.root.end_point.row + 1
 
         # Other properties
-        self.name = ''
-        self.receiver = ''
-        self.receiver_name = ''
+        self.name = ""
+        self.receiver = ""
+        self.receiver_name = ""
         self.complexity = 0
         self.icount = 0
         self.arg_names: list[str] = []
         self.arg_types: list[str] = []
-        self.return_type = ''
-        self.sig = ''
+        self.return_type = ""
+        self.sig = ""
         self.function_uses = 0
         self.function_depth = 0
         self.base_callsites: list[tuple[str, int]] = []
@@ -446,12 +457,12 @@ class FunctionMethod():
     def function_source_code_as_text(self) -> str:
         """Returns the source code the function."""
         if self.root and self.root.text:
-            return self.root.text.decode(encoding='utf-8', errors='ignore')
+            return self.root.text.decode(encoding="utf-8", errors="ignore")
 
-        return ''
+        return ""
 
     def get_function_uses(self,
-                          all_funcs_meths: list['FunctionMethod']) -> int:
+                          all_funcs_meths: list["FunctionMethod"]) -> int:
         """Calculate how many function called this function."""
         if not self.function_uses:
             for func in all_funcs_meths:
@@ -466,7 +477,7 @@ class FunctionMethod():
         return self.function_uses
 
     def get_function_depth(self,
-                           all_funcs_meths: list['FunctionMethod']) -> int:
+                           all_funcs_meths: list["FunctionMethod"]) -> int:
         """Calculate function depth of this function."""
 
         if self.function_depth:
@@ -500,34 +511,34 @@ class FunctionMethod():
         """Process properties."""
 
         # Process receiver
-        receiver = self.root.child_by_field_name('receiver')
+        receiver = self.root.child_by_field_name("receiver")
         if receiver:
             for child in receiver.children:
-                if child.type == 'parameter_declaration':
-                    receiver_name = child.child_by_field_name('name')
-                    receiver_type = child.child_by_field_name('type')
+                if child.type == "parameter_declaration":
+                    receiver_name = child.child_by_field_name("name")
+                    receiver_type = child.child_by_field_name("type")
 
                     if receiver_name and receiver_type:
                         self.receiver = receiver_type.text.decode(
-                            encoding='utf-8', errors='ignore')
+                            encoding="utf-8", errors="ignore")
                         self.receiver_name = receiver_name.text.decode(
-                            encoding='utf-8', errors='ignore')
+                            encoding="utf-8", errors="ignore")
                         self.var_map[self.receiver_name] = self.receiver
 
         # Process name
         name_node = self.root
-        while name_node.child_by_field_name('name') is not None:
-            name_node = name_node.child_by_field_name('name')
-            self.name = name_node.text.decode(encoding='utf-8',
-                                              errors='ignore')
+        while name_node.child_by_field_name("name") is not None:
+            name_node = name_node.child_by_field_name("name")
+            self.name = name_node.text.decode(encoding="utf-8",
+                                              errors="ignore")
         if self.receiver:
-            self.name = f'{self.receiver}.{self.name}'
+            self.name = f"{self.receiver}.{self.name}"
 
         # Process arguments
         param_names = []
         param_types = []
         query = tree_sitter_utils.get_query(self.tree_sitter_lang,
-                                            '( parameter_list ) @pl')
+                                            "( parameter_list ) @pl")
         for exprs in tree_sitter_utils.query_captures(query,
                                                       self.root).values():
             for param_node in exprs:
@@ -535,27 +546,27 @@ class FunctionMethod():
                     if not param.is_named:
                         continue
 
-                    param_name = ''
-                    param_type = ''
+                    param_name = ""
+                    param_type = ""
 
                     # Param name
                     param_tmp = param
-                    while param_tmp.child_by_field_name('name') is not None:
-                        param_tmp = param_tmp.child_by_field_name('name')
-                    param_name = param_tmp.text.decode(encoding='utf-8',
-                                                       errors='ignore')
+                    while param_tmp.child_by_field_name("name") is not None:
+                        param_tmp = param_tmp.child_by_field_name("name")
+                    param_name = param_tmp.text.decode(encoding="utf-8",
+                                                       errors="ignore")
 
                     # Param type
-                    if not param.child_by_field_name('type'):
+                    if not param.child_by_field_name("type"):
                         continue
-                    type_str = param.child_by_field_name('type').text.decode(
-                        encoding='utf-8', errors='ignore')
+                    type_str = param.child_by_field_name("type").text.decode(
+                        encoding="utf-8", errors="ignore")
                     param_tmp = param
                     while param_tmp.child_by_field_name(
-                            'declarator') is not None:
-                        if param_tmp.type == 'pointer_declarator':
-                            type_str += '*'
-                        param_tmp = param_tmp.child_by_field_name('declarator')
+                            "declarator") is not None:
+                        if param_tmp.type == "pointer_declarator":
+                            type_str += "*"
+                        param_tmp = param_tmp.child_by_field_name("declarator")
                     param_type = type_str
 
                     if param_name and param_type:
@@ -568,23 +579,23 @@ class FunctionMethod():
         self.arg_types = param_types
 
         # Process return value
-        result = self.root.child_by_field_name('result')
+        result = self.root.child_by_field_name("result")
         if result:
-            self.return_type = result.text.decode(encoding='utf-8',
-                                                  errors='ignore')
+            self.return_type = result.text.decode(encoding="utf-8",
+                                                  errors="ignore")
         else:
-            self.return_type = 'void'
+            self.return_type = "void"
 
         # Process signature
         # Go function signature format
         # (Optional_Receiver) Func_Name(Argument_Types) Optional_Return_Type
-        self.sig = f'{self.name}({",".join(self.arg_types)})'
+        self.sig = f"{self.name}({','.join(self.arg_types)})"
 
-        if self.return_type != 'void':
-            self.sig = f'{self.sig} {self.return_type}'
+        if self.return_type != "void":
+            self.sig = f"{self.sig} {self.return_type}"
 
         if self.receiver:
-            self.sig = f'({self.receiver}) {self.sig}'
+            self.sig = f"({self.receiver}) {self.sig}"
 
     def _process_complexity(self):
         """Gets complexity measure based on counting branch nodes in a
@@ -640,45 +651,45 @@ class FunctionMethod():
 
     def _process_call_expr_child(
             self, call_child: Node,
-            all_funcs_meths: dict[str, 'FunctionMethod']) -> Optional[str]:
+            all_funcs_meths: dict[str, "FunctionMethod"]) -> Optional[str]:
         """Internal helper to process call expr."""
         # pylint: disable=unused-argument
         target_name = None
 
         # Simple call
-        if call_child.type == 'identifier':
+        if call_child.type == "identifier":
             if call_child.text:
-                target_name = call_child.text.decode(encoding='utf-8',
-                                                     errors='ignore')
+                target_name = call_child.text.decode(encoding="utf-8",
+                                                     errors="ignore")
 
         # Package/method call
-        if call_child.type == 'selector_expression':
+        if call_child.type == "selector_expression":
             if call_child.text:
-                target_name = call_child.text.decode(encoding='utf-8',
-                                                     errors='ignore')
+                target_name = call_child.text.decode(encoding="utf-8",
+                                                     errors="ignore")
 
             # Variable call
-            split_call = target_name.split('.') if target_name else []
+            split_call = target_name.split(".") if target_name else []
             if len(split_call) > 1:
                 # For indexing selector
-                if '[' in split_call[-2] and ']' in split_call[-2]:
-                    var_name = self.var_map.get(split_call[-2].split('[')[0])
+                if "[" in split_call[-2] and "]" in split_call[-2]:
+                    var_name = self.var_map.get(split_call[-2].split("[")[0])
                     if var_name:
-                        if '[' in var_name and ']' in var_name:
-                            var_name = var_name.split(']')[-1]
-                        elif var_name == 'string':
-                            var_name = 'uint8'
+                        if "[" in var_name and "]" in var_name:
+                            var_name = var_name.split("]")[-1]
+                        elif var_name == "string":
+                            var_name = "uint8"
                 else:
                     var_name = self.var_map.get(split_call[-2])
                 if var_name:
-                    target_name = f'{var_name}.{split_call[-1]}'
+                    target_name = f"{var_name}.{split_call[-1]}"
 
                 elif split_call[0] not in self.parent_source.imports:
-                    target_name = (target_name.split('.')[-1]
-                                   if target_name else None)
+                    target_name = target_name.split(
+                        ".")[-1] if target_name else None
 
             # Chain call
-            split_call = target_name.rsplit(').', 1) if target_name else []
+            split_call = target_name.rsplit(").", 1) if target_name else []
             if len(split_call) > 1:
                 target_name = split_call[1]
 
@@ -696,17 +707,18 @@ class FunctionMethod():
         child_count = len(statement.children)
         for idx in range(child_count):
             child = statement.children[idx]
-            if child.start_byte == parent.start_byte and child.end_byte == parent.end_byte:
+            if (child.start_byte == parent.start_byte
+                    and child.end_byte == parent.end_byte):
                 if idx == 0:
                     return None
                 for prev_idx in range(idx - 1, -1, -1):
                     prev_child = statement.children[prev_idx]
-                    if prev_child.type != 'ERROR' or not prev_child.text:
+                    if prev_child.type != "ERROR" or not prev_child.text:
                         continue
 
-                    prefix = prev_child.text.decode(encoding='utf-8',
-                                                    errors='ignore').strip()
-                    if prefix.endswith('.'):
+                    prefix = prev_child.text.decode(encoding="utf-8",
+                                                    errors="ignore").strip()
+                    if prefix.endswith("."):
                         prefix = prefix[:-1]
                     if prefix in self.parent_source.imports:
                         return prefix
@@ -717,7 +729,7 @@ class FunctionMethod():
 
     def _detect_variable_type(
             self, node: Node,
-            all_funcs_meths: dict[str, 'FunctionMethod']) -> Optional[str]:
+            all_funcs_meths: dict[str, "FunctionMethod"]) -> Optional[str]:
         """Internal recursive helper to determine the return type of the
         expression."""
 
@@ -727,23 +739,23 @@ class FunctionMethod():
                 return LITERAL_TYPE_MAP[child.type]
 
             # Identifier
-            if child.type == 'identifier':
-                if child.text and child.text.decode(
-                        encoding='utf-8', errors='ignore') in self.var_map:
-                    return self.var_map[child.text.decode(encoding='utf-8',
-                                                          errors='ignore')]
+            if child.type == "identifier":
+                if (child.text and child.text.decode(
+                        encoding="utf-8", errors="ignore") in self.var_map):
+                    return self.var_map[child.text.decode(encoding="utf-8",
+                                                          errors="ignore")]
 
             # Composite Literal
-            elif child.type == 'composite_literal':
-                composite_type = child.child_by_field_name('type')
+            elif child.type == "composite_literal":
+                composite_type = child.child_by_field_name("type")
                 if composite_type and composite_type.text:
-                    return composite_type.text.decode(encoding='utf-8',
-                                                      errors='ignore')
+                    return composite_type.text.decode(encoding="utf-8",
+                                                      errors="ignore")
 
             # Call expression
-            elif child.type == 'call_expression':
-                call = child.child_by_field_name('function')
-                args = child.child_by_field_name('arguments')
+            elif child.type == "call_expression":
+                call = child.child_by_field_name("function")
+                args = child.child_by_field_name("arguments")
 
                 if not call or not args:
                     continue
@@ -754,44 +766,44 @@ class FunctionMethod():
                 if target_name in all_funcs_meths:
                     return all_funcs_meths[target_name].return_type
 
-                if target_name == 'new':
+                if target_name == "new":
                     for arg in args.children:
-                        if arg.type.endswith('identifier') and arg.text:
-                            return arg.text.decode(encoding='utf-8',
-                                                   errors='ignore')
+                        if arg.type.endswith("identifier") and arg.text:
+                            return arg.text.decode(encoding="utf-8",
+                                                   errors="ignore")
 
-                elif target_name == 'make':
+                elif target_name == "make":
                     for arg in args.children:
-                        type_node = arg.child_by_field_name('value')
+                        type_node = arg.child_by_field_name("value")
                         if type_node and type_node.text:
-                            return type_node.text.decode(encoding='utf-8',
-                                                         errors='ignore')
+                            return type_node.text.decode(encoding="utf-8",
+                                                         errors="ignore")
 
-                        type_node = arg.child_by_field_name('element')
+                        type_node = arg.child_by_field_name("element")
                         if type_node and type_node.text:
-                            return type_node.text.decode(encoding='utf-8',
-                                                         errors='ignore')
+                            return type_node.text.decode(encoding="utf-8",
+                                                         errors="ignore")
 
             # Selector expression
-            elif child.type == 'selector_expression':
+            elif child.type == "selector_expression":
                 target_name = self._process_call_expr_child(
                     child, all_funcs_meths)
                 if target_name:
                     return target_name
 
             # Index expression / Slice expression
-            elif child.type in ['index_expression', 'slice_expression']:
-                op = child.child_by_field_name('operand')
+            elif child.type in ["index_expression", "slice_expression"]:
+                op = child.child_by_field_name("operand")
                 if not op or not op.text:
                     continue
 
                 parent_type = self.var_map.get(
-                    op.text.decode(encoding='utf-8', errors='ignore'))
+                    op.text.decode(encoding="utf-8", errors="ignore"))
                 if parent_type:
-                    if '[' in parent_type and ']' in parent_type:
-                        return parent_type.rsplit(']', 1)[-1]
-                    if parent_type == 'string':
-                        return 'uint8'
+                    if "[" in parent_type and "]" in parent_type:
+                        return parent_type.rsplit("]", 1)[-1]
+                    if parent_type == "string":
+                        return "uint8"
 
             # Other expression that need to recursive deeper
             # unary_expression binary_expression
@@ -803,25 +815,25 @@ class FunctionMethod():
 
     def extract_local_variable_type(self,
                                     all_funcs_meths: dict[str,
-                                                          'FunctionMethod']):
+                                                          "FunctionMethod"]):
         """Gets the local variable types of the function."""
 
         query = tree_sitter_utils.get_query(self.tree_sitter_lang,
-                                            '( short_var_declaration ) @vd')
+                                            "( short_var_declaration ) @vd")
         for exprs in tree_sitter_utils.query_captures(query,
                                                       self.root).values():
             for decl_node in exprs:
-                left = decl_node.child_by_field_name('left')
-                right = decl_node.child_by_field_name('right')
-                decl_name = ''
+                left = decl_node.child_by_field_name("left")
+                right = decl_node.child_by_field_name("right")
+                decl_name = ""
 
                 if not left or not right:
                     continue
 
                 for child in left.children:
-                    if child.type == 'identifier' and child.text:
-                        decl_name = child.text.decode(encoding='utf-8',
-                                                      errors='ignore')
+                    if child.type == "identifier" and child.text:
+                        decl_name = child.text.decode(encoding="utf-8",
+                                                      errors="ignore")
 
                 decl_type = self._detect_variable_type(right, all_funcs_meths)
 
@@ -829,35 +841,35 @@ class FunctionMethod():
                     self.var_map[decl_name] = decl_type
 
         query = tree_sitter_utils.get_query(self.tree_sitter_lang,
-                                            '( for_statement ) @fd')
+                                            "( for_statement ) @fd")
         for exprs in tree_sitter_utils.query_captures(query,
                                                       self.root).values():
             for for_node in exprs:
                 for child in for_node.children:
-                    if child.type != 'range_clause':
+                    if child.type != "range_clause":
                         continue
 
-                    left = child.child_by_field_name('left')
-                    right = child.child_by_field_name('right')
+                    left = child.child_by_field_name("left")
+                    right = child.child_by_field_name("right")
                     if not left or not right:
                         continue
 
                     for left_child in left.children:
-                        if left_child.type == 'identifier' and left_child.text:
+                        if left_child.type == "identifier" and left_child.text:
                             decl_name = left_child.text.decode(
-                                encoding='utf-8', errors='ignore')
+                                encoding="utf-8", errors="ignore")
 
-                    if right.type == 'identifier':
+                    if right.type == "identifier":
                         if not right.text:
                             continue
 
                         decl_type = self.var_map.get(
-                            right.text.decode(encoding='utf-8',
-                                              errors='ignore'), '')
-                        if decl_type and '[' in decl_type and ']' in decl_type:
-                            decl_type = decl_type.split(']', 1)[-1]
-                        elif decl_type == 'string':
-                            decl_type = 'uint8'
+                            right.text.decode(encoding="utf-8",
+                                              errors="ignore"), "")
+                        if decl_type and "[" in decl_type and "]" in decl_type:
+                            decl_type = decl_type.split("]", 1)[-1]
+                        elif decl_type == "string":
+                            decl_type = "uint8"
                     else:
                         decl_type = self._detect_variable_type(
                             right, all_funcs_meths)
@@ -865,26 +877,26 @@ class FunctionMethod():
                     if decl_name and decl_type:
                         self.var_map[decl_name] = decl_type
 
-    def extract_callsites(self, all_funcs_meths: dict[str, 'FunctionMethod']):
+    def extract_callsites(self, all_funcs_meths: dict[str, "FunctionMethod"]):
         """Gets the callsites of the function."""
 
         callsites = []
         call_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
-                                                 '( call_expression ) @ce')
+                                                 "( call_expression ) @ce")
         call_res = tree_sitter_utils.query_captures(call_query, self.root)
         for call_exprs in call_res.values():
             for call_expr in call_exprs:
-                call = call_expr.child_by_field_name('function')
+                call = call_expr.child_by_field_name("function")
                 if not call:
                     continue
 
                 target_name = self._process_call_expr_child(
                     call, all_funcs_meths)
-                if target_name and '.' not in target_name:
+                if target_name and "." not in target_name:
                     error_prefix = self._get_error_selector_prefix(call_expr)
                     if error_prefix:
-                        target_name = f'{error_prefix}.{target_name}'
-                if target_name in ['new', 'make']:
+                        target_name = f"{error_prefix}.{target_name}"
+                if target_name in ["new", "make"]:
                     if target_name not in all_funcs_meths:
                         target_name = None
 
@@ -899,8 +911,8 @@ class FunctionMethod():
         self.base_callsites = [(x[0], x[2]) for x in callsites]
         # Process detailed callsites
         for dst, src_line in self.base_callsites:
-            src_loc = f'{self.parent_source.source_file}:{src_line},1'
-            self.detailed_callsites.append({'Src': src_loc, 'Dst': dst})
+            src_loc = f"{self.parent_source.source_file}:{src_line},1"
+            self.detailed_callsites.append({"Src": src_loc, "Dst": dst})
 
 
 def load_treesitter_trees(source_files: list[str],
@@ -910,10 +922,10 @@ def load_treesitter_trees(source_files: list[str],
     results = []
 
     for code_file in source_files:
-        source_cls = GoSourceCodeFile('go', code_file)
+        source_cls = GoSourceCodeFile("go", code_file)
         if is_log:
             if source_cls.has_libfuzzer_harness():
-                logger.info('harness: %s', code_file)
+                logger.info("harness: %s", code_file)
         results.append(source_cls)
 
     return GoProject(results)
@@ -921,7 +933,7 @@ def load_treesitter_trees(source_files: list[str],
 
 def analyse_source_code(source_content: str) -> GoSourceCodeFile:
     """Returns a source abstraction based on a single source string."""
-    source_code = GoSourceCodeFile('go',
-                                   source_file='in-memory string',
+    source_code = GoSourceCodeFile("go",
+                                   source_file="in-memory string",
                                    source_content=source_content.encode())
     return source_code

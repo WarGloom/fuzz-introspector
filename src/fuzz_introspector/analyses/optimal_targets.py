@@ -272,8 +272,8 @@ class OptimalTargets(analysis.AnalysisInterface):
                 break
             optimal_target_fd = max(
                 target_fds,
-                key=lambda potential_target: int(
-                    potential_target.new_unreached_complexity))
+                key=lambda potential_target: int(potential_target.
+                                                 new_unreached_complexity))
 
             # Add function to optimal targets
             optimal_functions_targeted.append(optimal_target_fd)

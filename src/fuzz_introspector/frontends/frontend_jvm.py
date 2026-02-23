@@ -1196,8 +1196,8 @@ class JvmProject(Project[JvmSourceCodeFile]):
         # Store report to avoid regeneration
         self.report = report
 
-    def _build_method_uses_map(self, methods: list[JavaMethod]) -> dict[str,
-                                                                        int]:
+    def _build_method_uses_map(self,
+                               methods: list[JavaMethod]) -> dict[str, int]:
         """Build reverse call graph based use counts."""
         method_uses: dict[str, set[str]] = {
             method.name: set()

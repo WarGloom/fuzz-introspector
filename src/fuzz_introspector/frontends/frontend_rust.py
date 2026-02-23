@@ -744,8 +744,8 @@ class RustProject(datatypes.Project[RustSourceCodeFile]):
 
         def _resolve_target(name: str) -> Optional[RustFunction]:
             if name not in resolve_cache:
-                resolve_cache[name] = get_function_node(name, all_functions,
-                                                        True)
+                resolve_cache[name] = get_function_node(
+                    name, all_functions, True)
             return resolve_cache[name]
 
         def _compute_depth(function: RustFunction) -> int:

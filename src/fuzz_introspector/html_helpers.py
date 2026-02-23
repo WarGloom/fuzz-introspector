@@ -498,7 +498,8 @@ def create_horisontal_calltree_image(image_name: str,
                 curr_color = color_list[i]
                 curr_size = 1.0
         # Plot the last case
-        ax.add_patch(Rectangle((curr_x, 0.0), curr_size, 1.0, color=curr_color))
+        ax.add_patch(Rectangle((curr_x, 0.0), curr_size, 1.0,
+                               color=curr_color))
         logger.info("- iterated over color list")
 
         # Save the image
