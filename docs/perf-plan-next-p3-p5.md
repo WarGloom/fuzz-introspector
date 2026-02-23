@@ -31,6 +31,11 @@ This plan covers the next work items:
   - Added covmap-size-aware negative miss cache to avoid repeated transform
     chain work for unresolved names.
   - Added focused regression tests in `src/test/test_code_coverage.py`.
+  - `resolve_coverage_link(...)` Python path now caches discovered
+    `html_status.json` index path to avoid repeated tree scans.
+  - Added refresh/invalidation regressions in
+    `src/test/test_utils_coverage_cache.py` for repeated hit and
+    deleted-index-file refresh behavior.
 
 ## Remaining hotspot inventory (not fully solved yet)
 1. `src/fuzz_introspector/analysis.py`
