@@ -474,44 +474,49 @@ def create_horisontal_calltree_image(image_name: str,
     if len(color_list) == 0:
         color_list = ['red']
 
-    # Create a plot
-    fig, ax = plt.subplots()
-    ax.clear()
-    fig.set_size_inches(15, 2.5)
-    ax.plot()
+    fig = None
+    try:
+        # Create a plot
+        fig, ax = plt.subplots()
+        ax.clear()
+        fig.set_size_inches(15, 2.5)
+        ax.plot()
 
-    # Create our rectangles
-    curr_x = 0.0
-    curr_size = 1.0
-    curr_color = color_list[0]
-    for i in range(1, len(color_list)):
-        if curr_color == color_list[i]:
-            curr_size += 1.0
-        else:
-            ax.add_patch(
-                Rectangle((curr_x, 0.0), curr_size, 1.0, color=curr_color))
+        # Create our rectangles
+        curr_x = 0.0
+        curr_size = 1.0
+        curr_color = color_list[0]
+        for i in range(1, len(color_list)):
+            if curr_color == color_list[i]:
+                curr_size += 1.0
+            else:
+                ax.add_patch(
+                    Rectangle((curr_x, 0.0), curr_size, 1.0, color=curr_color))
 
-            # Start next color area
-            curr_x += curr_size
-            curr_color = color_list[i]
-            curr_size = 1.0
-    # Plot the last case
-    ax.add_patch(Rectangle((curr_x, 0.0), curr_size, 1.0, color=curr_color))
-    logger.info("- iterated over color list")
+                # Start next color area
+                curr_x += curr_size
+                curr_color = color_list[i]
+                curr_size = 1.0
+        # Plot the last case
+        ax.add_patch(Rectangle((curr_x, 0.0), curr_size, 1.0, color=curr_color))
+        logger.info("- iterated over color list")
 
-    # Save the image
-    if dump_files:
-        logger.info("- saving image")
-        ax.set_yticklabels([])
-        ax.set_yticks([])
-        xlabel = ax.set_xlabel("Callsite index")
+        # Save the image
+        if dump_files:
+            logger.info("- saving image")
+            ax.set_yticklabels([])
+            ax.set_yticks([])
+            xlabel = ax.set_xlabel("Callsite index")
 
-        plt.title(image_name.replace(".png", "").replace("_colormap", ""))
-        fig.tight_layout()
-        fig.savefig(os.path.join(out_dir, image_name),
-                    bbox_extra_artists=[xlabel])
-        logger.info("- image saved")
-    return color_list
+            plt.title(image_name.replace(".png", "").replace("_colormap", ""))
+            fig.tight_layout()
+            fig.savefig(os.path.join(out_dir, image_name),
+                        bbox_extra_artists=[xlabel])
+            logger.info("- image saved")
+        return color_list
+    finally:
+        if fig is not None:
+            plt.close(fig)
 
 
 def html_get_report_creation_tag() -> str:

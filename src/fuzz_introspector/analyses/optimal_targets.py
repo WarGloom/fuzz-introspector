@@ -41,32 +41,29 @@ def add_func_to_reached_and_clone(
     func_to_add: function_profile.FunctionProfile
 ) -> project_profile.MergedProjectProfile:
     """
-    Add new functions as "reached" in a merged profile, and returns a new copy
-    of the merged profile with reachability information as if the functions in
-    func_to_add are added to the merged profile. The use of this is to
-    calculate what the state will be of a merged profile by targetting a new
-    set of functions. We can use this function in a computation of "optimum
-    fuzzer target analysis", which computes what the combination of ideal
-    function targets.
+    Add new functions as "reached" in a merged profile and update it in place.
+    This computes what the state will be in optimal target analysis when
+    targeting a new set of functions.
     """
-    logger.info("Creating a deepcopy")
-    merged_profile = copy.deepcopy(merged_profile_old)
+    merged_profile = merged_profile_old
+    all_functions = merged_profile.all_functions
+    target_lang = merged_profile_old.profiles[0].target_lang
 
     # Update hitcount of the function in the new merged profile
     logger.info("Updating hitcount")
-    f = merged_profile.all_functions[func_to_add.function_name]
+    f = all_functions[func_to_add.function_name]
     if f.cyclomatic_complexity == func_to_add.cyclomatic_complexity:
         f.hitcount = 1
 
     # Update hitcount of all functions reached by the function
     for func_name in func_to_add.functions_reached:
-        if func_name not in merged_profile.all_functions:
-            if merged_profile_old.profiles[0].target_lang == 'jvm':
+        if func_name not in all_functions:
+            if target_lang == 'jvm':
                 logger.debug('%s not provided within classpath', func_name)
             else:
                 logger.debug('Mismatched function name: %s', func_name)
             continue
-        f = merged_profile.all_functions[func_name]
+        f = all_functions[func_name]
         f.hitcount += 1
 
         if merged_profile.target_lang == "rust":
@@ -79,19 +76,19 @@ def add_func_to_reached_and_clone(
     # Recompute all analysis that is based on hitcounts in all functions as
     # hitcount has changed for elements in the dictionary.
     logger.info("Updating hitcount-related data")
-    for f_profile in merged_profile.all_functions.values():
+    for f_profile in all_functions.values():
         cc = 0
         uncovered_cc = 0
         for reached_func_name in f_profile.functions_reached:
-            if reached_func_name not in merged_profile.all_functions:
-                if merged_profile_old.profiles[0].target_lang == "jvm":
+            if reached_func_name not in all_functions:
+                if target_lang == "jvm":
                     logger.debug('%s not provided within classpath',
                                  reached_func_name)
                 else:
                     logger.debug('Mismatched function name: %s',
                                  reached_func_name)
                 continue
-            f_reached = merged_profile.all_functions[reached_func_name]
+            f_reached = all_functions[reached_func_name]
             cc += f_reached.cyclomatic_complexity
             if f_reached.hitcount == 0:
                 uncovered_cc += f_reached.cyclomatic_complexity
@@ -104,7 +101,7 @@ def add_func_to_reached_and_clone(
         f_profile.total_cyclomatic_complexity = (
             cc + f_profile.cyclomatic_complexity)
 
-    if merged_profile.all_functions[func_to_add.function_name].hitcount == 0:
+    if all_functions[func_to_add.function_name].hitcount == 0:
         logger.info("Error. Hitcount did not get set for some reason. Exiting")
         raise DataLoaderError("Hitcount did not get set for some reason")
 
@@ -273,17 +270,16 @@ class OptimalTargets(analysis.AnalysisInterface):
             logger.info("  - sorting by unreached complexity. ")
             if len(target_fds) == 0:
                 break
-            optimal_target_fd = target_fds[0]
-            for potential_target in target_fds:
-                if int(potential_target.new_unreached_complexity) > int(
-                        optimal_target_fd.new_unreached_complexity):
-                    optimal_target_fd = potential_target
+            optimal_target_fd = max(
+                target_fds,
+                key=lambda potential_target: int(
+                    potential_target.new_unreached_complexity))
 
             # Add function to optimal targets
             optimal_functions_targeted.append(optimal_target_fd)
 
-            new_merged_profile = add_func_to_reached_and_clone(
-                new_merged_profile, optimal_target_fd)
+            add_func_to_reached_and_clone(new_merged_profile,
+                                          optimal_target_fd)
 
             # Update the optimal targets. We only need to do this
             # if more drivers need to be created.
