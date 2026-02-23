@@ -53,15 +53,21 @@ This plan covers the next work items:
   - Read the Docs build runtime moved to Python 3.14.
 - [x] PR5: non-blocking JIT lane added.
   - `testing.yml` now includes a baseline lane (`PYTHON_JIT=0`) and
-    an experimental JIT lane (`PYTHON_JIT=1`) with `continue-on-error`.
+  an experimental JIT lane (`PYTHON_JIT=1`) with `continue-on-error`.
   - JIT lane has availability guard and explicit skip output when the
-    interpreter build does not expose runtime JIT support.
+  interpreter build does not expose runtime JIT support.
+- [x] PR1 follow-up: `analysis.py` remaining non-optional hotspot slice landed.
+  - Correlation path now prebuilds per-file line indexes and uses binary search
+    for exact/closest debug-function lookup (avoids repeated per-function scans
+    and repeated string/int normalization work).
+  - Added focused regressions in `src/test/test_analysis_hotspots.py` for exact
+    line matching, closest-preceding fallback, malformed source-line handling,
+    and overlapping seed-directory traversal deduplication.
 
 ## Remaining hotspot inventory (not fully solved yet)
-1. `src/fuzz_introspector/analysis.py`
-   - `correlate_introspection_functions_to_debug_info(...)`: repeated header scanning.
-   - additional low-risk opportunities still exist in test extraction traversal, but
-     the overlapping-directory multi-walk issue from P3A is already reduced.
+- No remaining non-optional P3-P5 hotspots tracked in this plan.
+- Optional future work only: additional extraction traversal micro-optimizations in
+  `src/fuzz_introspector/analysis.py` if new profiles show material impact.
 
 ## Verification: report-phase exclusion parity status
 - Verdict: fixed in this branch.

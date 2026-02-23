@@ -14,6 +14,7 @@
 """Performs analysis on the profiles output from fuzz introspector LLVM pass"""
 
 import abc
+import bisect
 import logging
 import multiprocessing
 import os
@@ -1004,10 +1005,55 @@ def convert_param_list_to_str_v2(param_list):
     return raw_sig.strip()
 
 
-def correlate_introspector_func_to_debug_information(if_func,
-                                                     all_debug_functions,
-                                                     debug_dict_by_name,
-                                                     debug_dict_by_filename):
+def _safe_int(value, default=None):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_debug_function_indexes(debug_all_functions, header_index_by_name):
+    debug_dict_by_name = {}
+    debug_dict_by_filename = {}
+    debug_lines_by_filename = {}
+
+    for debug_function in debug_all_functions:
+        source_dict = debug_function.get("source", {})
+        normalized_source_file = os.path.normpath(
+            source_dict.get("source_file", ""))
+        source_dict["source_file"] = normalized_source_file
+        debug_function["possible-header-files"] = list(
+            header_index_by_name.get(debug_function.get("name", ""), set()))
+
+        parsed_line_number = _safe_int(source_dict.get("source_line", "-1"),
+                                       default=None)
+
+        debug_dict_by_name.setdefault(debug_function.get("name", ""),
+                                      []).append(debug_function)
+        debug_dict_by_filename.setdefault(normalized_source_file,
+                                          []).append(debug_function)
+        if parsed_line_number is None:
+            continue
+        debug_lines_by_filename.setdefault(normalized_source_file, []).append(
+            (parsed_line_number, debug_function))
+
+    for source_file, line_debug_pairs in debug_lines_by_filename.items():
+        line_debug_pairs.sort(key=lambda item: item[0])
+        debug_lines_by_filename[source_file] = {
+            "lines": [line for line, _ in line_debug_pairs],
+            "functions": [func for _, func in line_debug_pairs],
+        }
+
+    return debug_dict_by_name, debug_dict_by_filename, debug_lines_by_filename
+
+
+def correlate_introspector_func_to_debug_information(
+    if_func,
+    all_debug_functions,
+    debug_dict_by_name,
+    debug_dict_by_filename,
+    debug_lines_by_filename=None,
+):
     """Correlate a single LLVM-based function to a given function in the
     collected debug information."""
     # Check if name matches. If so, this one is easy.
@@ -1020,36 +1066,61 @@ def correlate_introspector_func_to_debug_information(if_func,
             return func_signature, debug_function
 
     # We could not find the right one, let's search more broadly for it.
+    del all_debug_functions
+    source_file = os.path.normpath(if_func.get("Functions filename", ""))
+    source_line_begin = _safe_int(if_func.get("source_line_begin"),
+                                  default=None)
+    if source_line_begin is None:
+        return None, None
+
+    indexed_debug_lines = None
+    if debug_lines_by_filename is not None:
+        indexed_debug_lines = debug_lines_by_filename.get(source_file)
+    if indexed_debug_lines is not None:
+        line_values = indexed_debug_lines["lines"]
+        matching_debug_functions = indexed_debug_lines["functions"]
+        exact_line_idx = bisect.bisect_left(line_values, source_line_begin)
+        if (exact_line_idx < len(line_values)
+                and line_values[exact_line_idx] == source_line_begin
+                and source_line_begin != 0):
+            matched_debug_func = matching_debug_functions[exact_line_idx]
+            func_signature = convert_debug_info_to_signature_v2(
+                matched_debug_func, if_func)
+            return func_signature, matched_debug_func
+
+        preceding_line_idx = exact_line_idx - 1
+        if preceding_line_idx >= 0:
+            matched_debug_func = matching_debug_functions[preceding_line_idx]
+            func_signature = convert_debug_info_to_signature_v2(
+                matched_debug_func, if_func)
+            return func_signature, matched_debug_func
+
     target_minimum = 999999
     tfunc_signature = None
     most_likely_func = None
 
-    for dfunction in debug_dict_by_filename.get(
-            os.path.normpath(if_func["Functions filename"]), []):
-        try:
-            dline = int(dfunction["source"].get("source_line", "-1"))
-        except ValueError:
+    for dfunction in debug_dict_by_filename.get(source_file, []):
+        dline = _safe_int(dfunction["source"].get("source_line", "-1"),
+                          default=None)
+        if dline is None:
             continue
 
-        if dfunction["source"].get("source_file", "") == os.path.normpath(
-                if_func["Functions filename"]):
-            # Match based on containment, as there can be discrepancies between function
-            # signatur start (as from frunc_to_match) and the lines of code of the first
-            # instruction.
-            distance_between_beginnings = int(
-                if_func["source_line_begin"]) - dline
+        # Match based on containment, as there can be discrepancies between function
+        # signatur start (as from frunc_to_match) and the lines of code of the first
+        # instruction.
+        distance_between_beginnings = source_line_begin - dline
 
-            if distance_between_beginnings == 0 and dline != 0:
-                func_signature = convert_debug_info_to_signature_v2(
-                    dfunction, if_func)
-                return func_signature, dfunction
+        if distance_between_beginnings == 0 and dline != 0:
+            func_signature = convert_debug_info_to_signature_v2(
+                dfunction, if_func)
+            return func_signature, dfunction
 
-            elif (distance_between_beginnings > 0
-                  and distance_between_beginnings < target_minimum):
-                tfunc_signature = convert_debug_info_to_signature_v2(
-                    dfunction, if_func)
-                most_likely_func = dfunction
-                target_minimum = distance_between_beginnings
+        if (distance_between_beginnings > 0
+                and distance_between_beginnings < target_minimum):
+            tfunc_signature = convert_debug_info_to_signature_v2(
+                dfunction, if_func)
+            most_likely_func = dfunction
+            target_minimum = distance_between_beginnings
 
     if most_likely_func is not None:
         return tfunc_signature, most_likely_func
@@ -1101,29 +1172,9 @@ def correlate_introspection_functions_to_debug_info(all_functions_json_report,
     # A lot of look-ups are needed when matching LLVM functions to debug
     # functions. Start with creating two indexes to make these look-ups
     # faster.
-    debug_dict_by_name = {}
-    debug_dict_by_filename = {}
-    for df in debug_all_functions:
-        # Normalize the source file
-        df["source"]["source_file"] = os.path.normpath(df["source"].get(
-            "source_file", ""))
-
-        # Find the header file of this debug function.
-        name = df.get("name", "TOTALLYRANDOMNOTFUNCNAME123")
-        df["possible-header-files"] = list(
-            header_index_by_name.get(name, set()))
-
-        # Append debug function to name-index.
-        entry_list1 = debug_dict_by_name.get(df.get("name", ""), [])
-        entry_list1.append(df)
-        debug_dict_by_name[df.get("name", "")] = entry_list1
-
-        # Append debug function to file-index.
-        entry_list2 = debug_dict_by_filename.get(
-            df["source"].get("source_file", ""), [])
-        entry_list2.append(df)
-        debug_dict_by_filename[df["source"].get("source_file",
-                                                "")] = entry_list2
+    (debug_dict_by_name, debug_dict_by_filename,
+     debug_lines_by_filename) = (_build_debug_function_indexes(
+         debug_all_functions, header_index_by_name))
 
     for dl3 in debug_dict_by_filename:
         print("%s ------- %d" % (dl3, len(debug_dict_by_filename[dl3])))
@@ -1132,8 +1183,12 @@ def correlate_introspection_functions_to_debug_info(all_functions_json_report,
     for if_func in all_functions_json_report:
         func_sig, correlated_debug_function = (
             correlate_introspector_func_to_debug_information(
-                if_func, debug_all_functions, debug_dict_by_name,
-                debug_dict_by_filename))
+                if_func,
+                debug_all_functions,
+                debug_dict_by_name,
+                debug_dict_by_filename,
+                debug_lines_by_filename,
+            ))
 
         if func_sig is not None:
             if_func["function_signature"] = func_sig
@@ -1359,7 +1414,7 @@ def extract_tests_from_directories(directories,
             ]
             is_inspiration_root = any(ins in root for ins in inspirations)
             for f in files:
-                if not any(f.endswith(ext) for ext in test_extensions):
+                if not f.endswith(tuple(test_extensions)):
                     continue
                 # Absolute path
                 absolute_path = os.path.join(root, f)
