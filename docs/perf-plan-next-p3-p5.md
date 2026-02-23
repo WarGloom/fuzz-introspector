@@ -194,7 +194,7 @@ This plan covers the next work items:
 
 ### PR6 - optional, after above: safe analysis parallelization
 - Design reference:
-  - `docs/pr6-safe-analysis-parallelization-design.md`
+  - `docs/pr6-safe-analysis-parallelization-design.md` (finalized v1 envelope schema and merge-intent definitions)
 - Target files:
   - `src/fuzz_introspector/html_report.py`
   - `src/fuzz_introspector/json_report.py`
