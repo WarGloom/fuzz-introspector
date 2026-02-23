@@ -872,7 +872,8 @@ def extract_namespace(mangled_function_name, return_type=None):
     )
     # logger.info("Demangled name: %s" % (demangled_func_name))
     if return_type is not None and demangled_func_name.startswith(f"{return_type} "):
-        demangled_func_name = demangled_func_name[len(return_type) + 1 :]
+        return_type_offset = len(return_type) + 1
+        demangled_func_name = demangled_func_name[return_type_offset:]
         # logger.info("Removed function type: %s" % (demangled_func_name))
     if "::" not in demangled_func_name:
         return []
@@ -1248,7 +1249,7 @@ def extract_tests_from_directories(
     for directory in directories:
         normalized_directories.add(os.path.normpath(directory))
 
-    seed_directories = []
+    seed_directories: list[str] = []
     for directory in sorted(normalized_directories, key=len):
         is_sub_directory = False
         for seed_directory in seed_directories:
