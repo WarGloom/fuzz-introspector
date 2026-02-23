@@ -63,6 +63,7 @@ class CoverageProfile:
         self.file_map: Dict[str, List[Tuple[int, int]]] = dict()
         self.branch_cov_map: Dict[str, List[int]] = dict()
         self._func_cov_key_cache: Dict[str, str] = dict()
+        self._func_cov_key_miss_cache: Dict[str, int] = dict()
         self._cov_type = ""
         self.coverage_files: List[str] = []
         self.dual_file_map: Dict[str, Dict[str, List[int]]] = dict()
@@ -180,28 +181,47 @@ class CoverageProfile:
         return self.covmap[fuzz_key]
 
     def _resolve_covmap_function_key(self, funcname: str) -> Optional[str]:
+        covmap_size = len(self.covmap)
+        if self._func_cov_key_miss_cache.get(funcname) == covmap_size:
+            return None
+
         cached_key = self._func_cov_key_cache.get(funcname)
         if cached_key is not None and cached_key in self.covmap:
             return cached_key
 
-        candidate_keys = [
-            funcname,
-            utils.demangle_cpp_func(funcname),
-            utils.normalise_str(funcname),
-            utils.remove_jvm_generics(funcname),
-        ]
+        if funcname in self.covmap:
+            self._func_cov_key_cache[funcname] = funcname
+            self._func_cov_key_miss_cache.pop(funcname, None)
+            return funcname
 
-        for candidate_key in candidate_keys:
-            if candidate_key in self.covmap:
-                self._func_cov_key_cache[funcname] = candidate_key
-                return candidate_key
+        candidate_key = utils.demangle_cpp_func(funcname)
+        if candidate_key in self.covmap:
+            self._func_cov_key_cache[funcname] = candidate_key
+            self._func_cov_key_miss_cache.pop(funcname, None)
+            return candidate_key
+
+        candidate_key = utils.normalise_str(funcname)
+        if candidate_key in self.covmap:
+            self._func_cov_key_cache[funcname] = candidate_key
+            self._func_cov_key_miss_cache.pop(funcname, None)
+            return candidate_key
+
+        candidate_key = utils.remove_jvm_generics(funcname)
+        if candidate_key in self.covmap:
+            self._func_cov_key_cache[funcname] = candidate_key
+            self._func_cov_key_miss_cache.pop(funcname, None)
+            return candidate_key
 
         # Handle special case for rust where crate is missing from function name
         rust_funcname = utils.demangle_rust_func(funcname)
         rust_key = utils.locate_rust_fuzz_key(rust_funcname, self.covmap)
         if rust_key is not None:
             self._func_cov_key_cache[funcname] = rust_key
-        return rust_key
+            self._func_cov_key_miss_cache.pop(funcname, None)
+            return rust_key
+
+        self._func_cov_key_miss_cache[funcname] = covmap_size
+        return None
 
     def _python_ast_funcname_to_cov_file(self, function_name) -> Optional[str]:
         """Convert a Python module path to a given file, and searches the

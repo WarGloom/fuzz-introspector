@@ -25,7 +25,12 @@ This plan covers the next work items:
   - second slice: Go `FunctionMethod` now caches zero-valued `function_uses` and
     `function_depth` results (avoids repeated recomputation for leaf/unreferenced functions),
     with regression tests in `src/test/test_frontends_go.py`.
-- [ ] PR3+
+- [~] PR3: first cache-finalization slice landed.
+  - `CoverageProfile` key-resolution now short-circuits direct-key hits before
+    demangle/normalization work.
+  - Added covmap-size-aware negative miss cache to avoid repeated transform
+    chain work for unresolved names.
+  - Added focused regression tests in `src/test/test_code_coverage.py`.
 
 ## Remaining hotspot inventory (not fully solved yet)
 1. `src/fuzz_introspector/analysis.py`
