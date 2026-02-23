@@ -107,6 +107,43 @@ def test_extract_tests_from_directories_without_patterns_keeps_default_behaviour
     assert dep_file in extracted
 
 
+def test_extract_tests_from_directories_avoids_file_reads_for_test_named_files(
+    monkeypatch,
+):
+    project_root = "/workspace/project"
+    sample_dir = "/workspace/project/sample"
+    sample_test_file = "/workspace/project/sample/test_case.cpp"
+
+    tree = {
+        project_root: (["sample"], []),
+        sample_dir: ([], ["test_case.cpp"]),
+    }
+
+    def fake_walk(start_path):
+        stack = [start_path]
+        while stack:
+            root = stack.pop()
+            dirs, files = tree.get(root, ([], []))
+            yielded_dirs = list(dirs)
+            yield root, yielded_dirs, list(files)
+            for directory in reversed(yielded_dirs):
+                stack.append(os.path.join(root, directory))
+
+    def fail_on_open(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("extract_tests_from_directories unexpectedly read a file")
+
+    monkeypatch.setattr(analysis.os, "walk", fake_walk)
+    monkeypatch.setattr("builtins.open", fail_on_open)
+
+    with tempfile.TemporaryDirectory(dir=os.getcwd()) as temp_dir:
+        extracted = analysis.extract_tests_from_directories(
+            {project_root}, "c-cpp", temp_dir, need_copy=False
+        )
+
+    assert sample_test_file in extracted
+
+
 def test_run_analysis_on_dir_loads_and_forwards_report_exclusions(monkeypatch):
     captured_exclusions = {}
 

@@ -16,7 +16,10 @@ This plan covers the next work items:
 
 ## Progress status (memory-improvements)
 - [x] PR0: report-phase exclusion plumbing and tests landed.
-- [ ] PR1: verify fixture-level `test-files.json` parity checks.
+- [x] PR1: verify fixture-level `test-files.json` parity checks.
+  - Added regression coverage for report-phase extraction parity/exclusions.
+  - Added extraction fast-path to skip content reads for files already
+    selected via filename (`"test" in filename`) inside inspiration roots.
 - [~] PR2: second slice landed.
   - first slice: precomputed uses/depth caches in C++/Go/JVM/Rust report generation paths.
   - second slice: Go `FunctionMethod` now caches zero-valued `function_uses` and
