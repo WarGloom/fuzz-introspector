@@ -144,3 +144,92 @@ def test_jvm_coverage(tmpdir, sample_jvm_coverage_xml):
     assert cp.covmap["[BASE64EncoderStreamFuzzer].<init>()"] == [(23, 0)]
     assert cp.covmap[
         "[BASE64EncoderStreamFuzzer].fuzzerTestOneInput(FuzzedDataProvider)"] == [(25, 3), (27, 6)]
+
+
+def test_get_hit_details_skips_transform_chain_for_direct_hit(monkeypatch):
+    cp = code_coverage.CoverageProfile()
+    cp.covmap = {"direct_hit": [(11, 1)]}
+
+    def fail_if_called(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("unexpected transform call for direct key lookup")
+
+    monkeypatch.setattr(code_coverage.utils, "demangle_cpp_func", fail_if_called)
+    monkeypatch.setattr(code_coverage.utils, "normalise_str", fail_if_called)
+    monkeypatch.setattr(code_coverage.utils, "remove_jvm_generics", fail_if_called)
+    monkeypatch.setattr(code_coverage.utils, "demangle_rust_func", fail_if_called)
+    monkeypatch.setattr(code_coverage.utils, "locate_rust_fuzz_key", fail_if_called)
+
+    assert cp.get_hit_details("direct_hit") == [(11, 1)]
+
+
+def test_get_hit_details_negative_cache_avoids_repeated_transform_work(monkeypatch):
+    cp = code_coverage.CoverageProfile()
+    cp.covmap = {"known": [(7, 3)]}
+    call_counts = {
+        "demangle_cpp_func": 0,
+        "normalise_str": 0,
+        "remove_jvm_generics": 0,
+        "demangle_rust_func": 0,
+        "locate_rust_fuzz_key": 0,
+    }
+
+    def tracked_demangle_cpp(value):
+        call_counts["demangle_cpp_func"] += 1
+        return value + "__cpp"
+
+    def tracked_normalise(value):
+        call_counts["normalise_str"] += 1
+        return value + "__norm"
+
+    def tracked_remove_jvm_generics(value):
+        call_counts["remove_jvm_generics"] += 1
+        return value + "__jvm"
+
+    def tracked_demangle_rust(value):
+        call_counts["demangle_rust_func"] += 1
+        return value + "__rust"
+
+    def tracked_locate_rust(value, covmap):
+        del value, covmap
+        call_counts["locate_rust_fuzz_key"] += 1
+        return None
+
+    monkeypatch.setattr(code_coverage.utils, "demangle_cpp_func", tracked_demangle_cpp)
+    monkeypatch.setattr(code_coverage.utils, "normalise_str", tracked_normalise)
+    monkeypatch.setattr(code_coverage.utils, "remove_jvm_generics",
+                        tracked_remove_jvm_generics)
+    monkeypatch.setattr(code_coverage.utils, "demangle_rust_func", tracked_demangle_rust)
+    monkeypatch.setattr(code_coverage.utils, "locate_rust_fuzz_key", tracked_locate_rust)
+
+    assert cp.get_hit_details("missing") == []
+    assert cp.get_hit_details("missing") == []
+    assert call_counts == {
+        "demangle_cpp_func": 1,
+        "normalise_str": 1,
+        "remove_jvm_generics": 1,
+        "demangle_rust_func": 1,
+        "locate_rust_fuzz_key": 1,
+    }
+
+
+def test_get_hit_details_negative_cache_invalidates_on_covmap_growth(monkeypatch):
+    cp = code_coverage.CoverageProfile()
+    cp.covmap = {"known": [(3, 1)]}
+    call_count = {"demangle_cpp_func": 0}
+
+    def tracked_demangle_cpp(value):
+        call_count["demangle_cpp_func"] += 1
+        return value + "__cpp"
+
+    monkeypatch.setattr(code_coverage.utils, "demangle_cpp_func", tracked_demangle_cpp)
+    monkeypatch.setattr(code_coverage.utils, "normalise_str", lambda value: value)
+    monkeypatch.setattr(code_coverage.utils, "remove_jvm_generics", lambda value: value)
+    monkeypatch.setattr(code_coverage.utils, "demangle_rust_func", lambda value: value)
+    monkeypatch.setattr(code_coverage.utils, "locate_rust_fuzz_key",
+                        lambda value, covmap: None)
+
+    assert cp.get_hit_details("missing") == []
+    cp.covmap["missing"] = [(99, 5)]
+    assert cp.get_hit_details("missing") == [(99, 5)]
+    assert call_count["demangle_cpp_func"] == 1
