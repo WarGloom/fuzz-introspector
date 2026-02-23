@@ -1167,10 +1167,9 @@ class CppProject(Project[CppSourceCodeFile]):
                 func_dict['signature'] = func.sig
                 func_dict['assertStmts'] = func.assert_stmts
                 func_dict['Callsites'] = func.detailed_callsites
-                func_dict['functionUses'] = function_uses_map.get(func.name,
-                                                                  0)
-                func_dict['functionDepth'] = function_depth_map.get(func.name,
-                                                                    0)
+                func_dict['functionUses'] = function_uses_map.get(func.name, 0)
+                func_dict['functionDepth'] = function_depth_map.get(
+                    func.name, 0)
                 func_dict['functionsReached'] = list(reached)
 
                 logger.debug('Done')
