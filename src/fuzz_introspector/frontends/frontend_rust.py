@@ -671,6 +671,11 @@ class RustProject(datatypes.Project[RustSourceCodeFile]):
         for func in self.all_functions:
             func.extract_callsites(self.all_functions_dict)
 
+        function_uses_map = self._build_function_uses_map(self.all_functions)
+        function_depth_map = self._build_function_depth_map(
+            self.all_functions_dict)
+
+        for func in self.all_functions:
             func_dict: dict[str, Any] = {}
             func_dict['functionName'] = func.name
             func_dict['functionSourceFile'] = func.parent_source.source_file
@@ -690,10 +695,8 @@ class RustProject(datatypes.Project[RustSourceCodeFile]):
             func_dict['returnType'] = func.return_type
             func_dict['BranchProfiles'] = []
             func_dict['Callsites'] = func.detailed_callsites
-            func_dict['functionUses'] = self.calculate_function_uses(
-                func.name, self.all_functions)
-            func_dict['functionDepth'] = self.calculate_function_depth(
-                func, self.all_functions_dict)
+            func_dict['functionUses'] = function_uses_map.get(func.name, 0)
+            func_dict['functionDepth'] = function_depth_map.get(func.name, 0)
             func_dict['constantsTouched'] = []
             func_dict['BBCount'] = 0
             func_dict['signature'] = func.sig
@@ -710,6 +713,64 @@ class RustProject(datatypes.Project[RustSourceCodeFile]):
             report['All functions']['Elements'] = func_list
 
         self.report = report
+
+    def _build_function_uses_map(
+            self, functions: list[RustFunction]) -> dict[str, int]:
+        """Build reverse call graph based use counts."""
+        function_uses: dict[str, set[str]] = {
+            function.name: set()
+            for function in functions
+        }
+        function_names = set(function_uses.keys())
+
+        for function in functions:
+            for callsite_name, _ in function.base_callsites:
+                for suffix_index in range(len(callsite_name)):
+                    match_name = callsite_name[suffix_index:]
+                    if match_name in function_names:
+                        function_uses[match_name].add(function.name)
+
+        return {
+            function_name: len(caller_names)
+            for function_name, caller_names in function_uses.items()
+        }
+
+    def _build_function_depth_map(
+            self, all_functions: dict[str, RustFunction]) -> dict[str, int]:
+        """Build depth cache for all functions in project report."""
+        depth_cache: dict[str, int] = {}
+        recursion_stack: set[str] = set()
+        resolve_cache: dict[str, Optional[RustFunction]] = {}
+
+        def _resolve_target(name: str) -> Optional[RustFunction]:
+            if name not in resolve_cache:
+                resolve_cache[name] = get_function_node(name, all_functions,
+                                                        True)
+            return resolve_cache[name]
+
+        def _compute_depth(function: RustFunction) -> int:
+            if function.name in depth_cache:
+                return depth_cache[function.name]
+
+            if function.name in recursion_stack:
+                return 1
+
+            recursion_stack.add(function.name)
+            depth = 0
+            for target_name, _ in function.base_callsites:
+                target = _resolve_target(target_name)
+                if not target:
+                    continue
+                depth = max(depth, _compute_depth(target) + 1)
+
+            recursion_stack.remove(function.name)
+            depth_cache[function.name] = depth
+            return depth
+
+        for function in all_functions.values():
+            _compute_depth(function)
+
+        return depth_cache
 
     def dump_module_logic(self,
                           report_name: str = '',

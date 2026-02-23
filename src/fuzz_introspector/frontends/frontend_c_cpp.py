@@ -1129,21 +1129,18 @@ class CppProject(Project[CppSourceCodeFile]):
                 # Extracting callsites of functions
                 logger.debug('Extracing callsites')
                 func.extract_callsites(self)
+                logger.debug('Done extracting callsites')
+
+            function_uses_map = self._build_function_uses_map(
+                self.all_functions)
+            function_depth_map = self._build_function_depth_map(
+                self.all_functions)
+
+            for func in self.all_functions:
                 callsites = func.base_callsites
                 reached = set()
                 for cs_dst, _ in callsites:
                     reached.add(cs_dst)
-                logger.debug('Done extracting callsites')
-
-                # Calculating function uses
-                logger.debug('Calculating function uses')
-                func_uses = self._calculate_function_uses(func.name)
-                logger.debug('Done calculating function uses')
-
-                # Calculating function depth
-                logger.debug('Calculating function depth')
-                func_depth = self._calculate_function_depth(func)
-                logger.debug('Done calculating function depth')
 
                 # Storing function information
                 func_dict: dict[str, Any] = {}
@@ -1170,8 +1167,10 @@ class CppProject(Project[CppSourceCodeFile]):
                 func_dict['signature'] = func.sig
                 func_dict['assertStmts'] = func.assert_stmts
                 func_dict['Callsites'] = func.detailed_callsites
-                func_dict['functionUses'] = func_uses
-                func_dict['functionDepth'] = func_depth
+                func_dict['functionUses'] = function_uses_map.get(func.name,
+                                                                  0)
+                func_dict['functionDepth'] = function_depth_map.get(func.name,
+                                                                    0)
                 func_dict['functionsReached'] = list(reached)
 
                 logger.debug('Done')
@@ -1188,6 +1187,64 @@ class CppProject(Project[CppSourceCodeFile]):
         self.report['Fuzzing method'] = 'LLVMFuzzerTestOneInput'
         self.report['Fuzzer filename'] = harness_source
         _function_node_cache.clear()
+
+    def _build_function_uses_map(
+            self, functions: list[FunctionDefinition]) -> dict[str, int]:
+        """Build reverse call graph based use counts."""
+        function_names = {function.name for function in functions}
+        function_uses: dict[str, set[str]] = {
+            function.name: set()
+            for function in functions
+        }
+
+        for function in functions:
+            for callsite_name, _ in function.base_callsites:
+                for suffix_index in range(len(callsite_name)):
+                    match_name = callsite_name[suffix_index:]
+                    if match_name in function_names:
+                        function_uses[match_name].add(function.name)
+
+        return {
+            function_name: len(caller_names)
+            for function_name, caller_names in function_uses.items()
+        }
+
+    def _build_function_depth_map(
+            self, functions: list[FunctionDefinition]) -> dict[str, int]:
+        """Build depth cache for all functions in project report."""
+        depth_cache: dict[str, int] = {}
+        recursion_stack: set[str] = set()
+        resolve_cache: dict[str, Optional[FunctionDefinition]] = {}
+
+        def _resolve_target(name: str) -> Optional[FunctionDefinition]:
+            if name not in resolve_cache:
+                target = self._find_source_with_func_def(name)
+                resolve_cache[name] = target[1] if target else None
+            return resolve_cache[name]
+
+        def _compute_depth(function: FunctionDefinition) -> int:
+            if function.name in depth_cache:
+                return depth_cache[function.name]
+
+            if function.name in recursion_stack:
+                return 1
+
+            recursion_stack.add(function.name)
+            depth = 0
+            for target_name, _ in function.base_callsites:
+                target = _resolve_target(target_name)
+                if not target:
+                    continue
+                depth = max(depth, _compute_depth(target) + 1)
+
+            recursion_stack.remove(function.name)
+            depth_cache[function.name] = depth
+            return depth
+
+        for function in functions:
+            _compute_depth(function)
+
+        return depth_cache
 
     def extract_calltree(self,
                          source_file: str = '',

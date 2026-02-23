@@ -184,6 +184,7 @@ class GoProject(Project[GoSourceCodeFile]):
             report['Fuzzing method'] = entry_function
 
         # Find all functions
+        project_functions: list[FunctionMethod] = []
         function_list: list[dict[str, Any]] = []
         for source_code in self.source_code_files:
             report['sources'].append({
@@ -204,48 +205,103 @@ class GoProject(Project[GoSourceCodeFile]):
                     self.functions_methods_map)
 
                 func_def.extract_callsites(self.functions_methods_map)
-                func_dict: dict[str, Any] = {}
-                func_dict['functionName'] = func_def.name
-                func_dict['functionSourceFile'] = source_code.source_file
-                func_dict['functionLinenumber'] = func_def.start_line
-                func_dict['functionLinenumberEnd'] = func_def.end_line
-                func_dict['linkageType'] = ''
-                func_dict['func_position'] = {
-                    'start': func_def.start_line,
-                    'end': func_def.end_line
-                }
-                func_dict['CyclomaticComplexity'] = func_def.complexity
-                func_dict['EdgeCount'] = func_dict['CyclomaticComplexity']
-                func_dict['ICount'] = func_def.icount
-                func_dict['argNames'] = func_def.arg_names[:]
-                func_dict['argTypes'] = func_def.arg_types[:]
-                func_dict['argCount'] = len(func_dict['argTypes'])
-                func_dict['returnType'] = func_def.return_type
-                func_dict['BranchProfiles'] = []
-                func_dict['Callsites'] = func_def.detailed_callsites
-                func_dict['functionUses'] = func_def.get_function_uses(
-                    list(self.functions_methods_map.values()))
-                func_dict['functionDepth'] = func_def.get_function_depth(
-                    list(self.functions_methods_map.values()))
-                func_dict['constantsTouched'] = []
-                func_dict['BBCount'] = 0
-                func_dict['signature'] = func_def.sig
-                func_callsites = func_def.base_callsites
-                funcs_reached = set()
-                for cs_dst, _ in func_callsites:
-                    funcs_reached.add(cs_dst)
-                func_dict['functionsReached'] = list(funcs_reached)
+                project_functions.append(func_def)
 
-                function_list.append(func_dict)
+        function_uses_map = self._build_function_uses_map(project_functions)
+        function_depth_map = self._build_function_depth_map(
+            self.functions_methods_map)
+
+        for func_def in project_functions:
+            func_dict: dict[str, Any] = {}
+            func_dict['functionName'] = func_def.name
+            func_dict['functionSourceFile'] = func_def.parent_source.source_file
+            func_dict['functionLinenumber'] = func_def.start_line
+            func_dict['functionLinenumberEnd'] = func_def.end_line
+            func_dict['linkageType'] = ''
+            func_dict['func_position'] = {
+                'start': func_def.start_line,
+                'end': func_def.end_line
+            }
+            func_dict['CyclomaticComplexity'] = func_def.complexity
+            func_dict['EdgeCount'] = func_dict['CyclomaticComplexity']
+            func_dict['ICount'] = func_def.icount
+            func_dict['argNames'] = func_def.arg_names[:]
+            func_dict['argTypes'] = func_def.arg_types[:]
+            func_dict['argCount'] = len(func_dict['argTypes'])
+            func_dict['returnType'] = func_def.return_type
+            func_dict['BranchProfiles'] = []
+            func_dict['Callsites'] = func_def.detailed_callsites
+            func_dict['functionUses'] = function_uses_map.get(func_def.name, 0)
+            func_dict['functionDepth'] = function_depth_map.get(func_def.name, 0)
+            func_dict['constantsTouched'] = []
+            func_dict['BBCount'] = 0
+            func_dict['signature'] = func_def.sig
+            func_callsites = func_def.base_callsites
+            funcs_reached = set()
+            for cs_dst, _ in func_callsites:
+                funcs_reached.add(cs_dst)
+            func_dict['functionsReached'] = list(funcs_reached)
+
+            function_list.append(func_dict)
 
         if function_list:
             report['All functions'] = {}
             report['All functions']['Elements'] = function_list
 
         # Store functions/methods globally
-        self.all_functions = functions_methods[:]
+        self.all_functions = project_functions[:]
 
         self.report = report
+
+    def _build_function_uses_map(
+            self, functions: list['FunctionMethod']) -> dict[str, int]:
+        """Build reverse call graph based use counts."""
+        function_uses: dict[str, set[str]] = {
+            function.name: set()
+            for function in functions
+        }
+        function_names = set(function_uses.keys())
+
+        for function in functions:
+            for callsite_name, _ in function.base_callsites:
+                if callsite_name in function_names:
+                    function_uses[callsite_name].add(function.name)
+
+        return {
+            function_name: len(caller_names)
+            for function_name, caller_names in function_uses.items()
+        }
+
+    def _build_function_depth_map(
+            self, function_map: dict[str,
+                                     'FunctionMethod']) -> dict[str, int]:
+        """Build depth cache for all functions in project report."""
+        depth_cache: dict[str, int] = {}
+        recursion_stack: set[str] = set()
+
+        def _compute_depth(function: FunctionMethod) -> int:
+            if function.name in depth_cache:
+                return depth_cache[function.name]
+
+            if function.name in recursion_stack:
+                return 1
+
+            recursion_stack.add(function.name)
+            depth = 0
+            for target_name, _ in function.base_callsites:
+                target = function_map.get(target_name)
+                if not target:
+                    continue
+                depth = max(depth, _compute_depth(target) + 1)
+
+            recursion_stack.remove(function.name)
+            depth_cache[function.name] = depth
+            return depth
+
+        for function in function_map.values():
+            _compute_depth(function)
+
+        return depth_cache
 
     def extract_calltree(self,
                          source_file: str = '',
