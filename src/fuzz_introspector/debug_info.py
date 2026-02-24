@@ -33,7 +33,10 @@ def extract_all_compile_units(content, all_files_in_debug_info):
         # Source code files
         if "Compile unit:" in line:
             split_line = line.split(" ")
-            file_dict = {"source_file": split_line[-1], "language": split_line[2]}
+            file_dict = {
+                "source_file": split_line[-1],
+                "language": split_line[2]
+            }
 
             # TODO: (David) remove this hack to frontend
             # LLVM may combine two absolute paths, which causes the
@@ -41,8 +44,7 @@ def extract_all_compile_units(content, all_files_in_debug_info):
             # Fix this here
             if "//" in file_dict["source_file"]:
                 file_dict["source_file"] = "/" + "/".join(
-                    file_dict["source_file"].split("//")[1:]
-                )
+                    file_dict["source_file"].split("//")[1:])
 
             all_files_in_debug_info[file_dict["source_file"]] = file_dict
 
@@ -60,7 +62,10 @@ def extract_global_variables(content, global_variables, source_files):
                 source_line = "-1"
             global_variables[source_file + source_line] = {
                 "name": global_variable_name,
-                "source": {"source_file": source_file, "source_line": source_line},
+                "source": {
+                    "source_file": source_file,
+                    "source_line": source_line
+                },
             }
             # Add the file to all files in project
             if source_file not in source_files:
@@ -83,10 +88,8 @@ def extract_types(content, all_types, all_files_in_debug_info):
         if read_types:
             if "Type: Name:" in line:
                 if current_struct is not None:
-                    hashkey = (
-                        current_struct["source"]["source_file"]
-                        + current_struct["source"]["source_line"]
-                    )
+                    hashkey = (current_struct["source"]["source_file"] +
+                               current_struct["source"]["source_line"])
                     all_types[hashkey] = current_struct
                     current_struct = None
                 if "DW_TAG_structure" in line:
@@ -129,10 +132,8 @@ def extract_types(content, all_types, all_files_in_debug_info):
                             "source_line": source_line,
                         },
                     }
-                    hashkey = (
-                        current_type["source"]["source_file"]
-                        + current_type["source"]["source_line"]
-                    )
+                    hashkey = (current_type["source"]["source_file"] +
+                               current_type["source"]["source_line"])
                     all_types[hashkey] = current_type
                     # Add the file to all files in project
                     if source_file not in all_files_in_debug_info:
@@ -151,15 +152,13 @@ def extract_types(content, all_types, all_files_in_debug_info):
                     except IndexError:
                         source_line = "-1"
 
-                    current_struct["elements"].append(
-                        {
-                            "name": elem_name,
-                            "source": {
-                                "source_file": source_file,
-                                "source_line": source_line,
-                            },
-                        }
-                    )
+                    current_struct["elements"].append({
+                        "name": elem_name,
+                        "source": {
+                            "source_file": source_file,
+                            "source_line": source_line,
+                        },
+                    })
                     # Add the file to all files in project
                     if source_file not in all_files_in_debug_info:
                         all_files_in_debug_info[source_file] = {
@@ -168,9 +167,8 @@ def extract_types(content, all_types, all_files_in_debug_info):
                         }
 
 
-def extract_all_functions_in_debug_info(
-    content, all_functions_in_debug, all_files_in_debug_info
-):
+def extract_all_functions_in_debug_info(content, all_functions_in_debug,
+                                        all_files_in_debug_info):
     function_identifier = "## Functions defined in module"
     read_functions = False
     current_function = None
@@ -191,10 +189,8 @@ def extract_all_functions_in_debug_info(
                     current_function["return_type"] = return_type
 
                 try:
-                    hashkey = (
-                        current_function["source"]["source_file"]
-                        + current_function["source"]["source_line"]
-                    )
+                    hashkey = (current_function["source"]["source_file"] +
+                               current_function["source"]["source_line"])
                 except KeyError:
                     hashkey = None
 
@@ -218,10 +214,8 @@ def extract_all_functions_in_debug_info(
                         current_function["args"] = current_args
                         current_function["return_type"] = return_type
                     try:
-                        hashkey = (
-                            current_function["source"]["source_file"]
-                            + current_function["source"]["source_line"]
-                        )
+                        hashkey = (current_function["source"]["source_file"] +
+                                   current_function["source"]["source_line"])
                     except KeyError:
                         hashkey = None
 
@@ -237,12 +231,8 @@ def extract_all_functions_in_debug_info(
                 function_name = " ".join(line.split(" ")[1:])
                 # print("Adding function: %s"%(function_name))
                 current_function["name"] = function_name
-            if (
-                " from " in line
-                and ":" in line
-                and "- Operand" not in line
-                and "Elem " not in line
-            ):
+            if (" from " in line and ":" in line and "- Operand" not in line
+                    and "Elem " not in line):
                 location = line.split(" from ")[-1]
                 source_file = location.split(":")[0].strip()
                 try:
@@ -265,11 +255,9 @@ def extract_all_functions_in_debug_info(
                 # Decipher type
                 current_args = current_function.get("args", [])
                 if "Name: {" not in line:
-                    l1 = (
-                        line.replace("Operand Type:", "")
-                        .replace("Type: ", "")
-                        .replace("-", "")
-                    )
+                    l1 = (line.replace("Operand Type:",
+                                       "").replace("Type: ",
+                                                   "").replace("-", ""))
                     pointer_count = 0
                     const_count = 0
                     for arg_type in l1.split(","):
@@ -288,31 +276,73 @@ def extract_all_functions_in_debug_info(
 
                     current_args.append(end_type)
                 elif "Name: " in line:
-                    current_args.append(line.split("{")[-1].split("}")[0].strip())
+                    current_args.append(
+                        line.split("{")[-1].split("}")[0].strip())
                 else:
                     current_args.append(line)
                 current_function["args"] = current_args
 
 
-def load_debug_report(debug_files):
+def load_debug_report(debug_files, base_dir=None):
+    """Load debug report from files.
+
+    Args:
+        debug_files: List of debug report file paths
+        base_dir: Optional base directory to resolve relative paths against
+                  when loading in a different environment
+
+    Returns:
+        Dictionary containing debug information with paths resolved
+    """
     all_files_in_debug_info = dict()
     all_functions_in_debug = dict()
     all_global_variables = dict()
     all_types = dict()
+    path_mapping = {}
+    original_base_dir = None
 
     # Extract all of the details
     for debug_file in debug_files:
-        with open(debug_file, "r") as debug_f:
-            content = debug_f.read()
+        try:
+            with open(debug_file, "r") as debug_f:
+                raw_content = debug_f.read()
 
-            extract_all_compile_units(content, all_files_in_debug_info)
-            extract_all_functions_in_debug_info(
-                content, all_functions_in_debug, all_files_in_debug_info
-            )
-            extract_global_variables(
-                content, all_global_variables, all_files_in_debug_info
-            )
-            extract_types(content, all_types, all_files_in_debug_info)
+            # Try to extract path mapping from the debug file
+            if not path_mapping:
+                try:
+                    report_data = json.loads(raw_content)
+                    path_mapping = report_data.get("_path_mapping", {})
+                    original_base_dir = report_data.get("_base_dir", None)
+                except (json.JSONDecodeError, KeyError):
+                    # Not a JSON file or no mapping available - that's fine
+                    pass
+
+            extract_all_compile_units(raw_content, all_files_in_debug_info)
+            extract_all_functions_in_debug_info(raw_content,
+                                                all_functions_in_debug,
+                                                all_files_in_debug_info)
+            extract_global_variables(raw_content, all_global_variables,
+                                     all_files_in_debug_info)
+            extract_types(raw_content, all_types, all_files_in_debug_info)
+        except (IOError, OSError) as e:
+            logger.warning("Failed to read debug file %s: %s", debug_file, e)
+            continue
+    if base_dir and (path_mapping or original_base_dir):
+        # Remap paths from original base to new base
+        for file_dict in all_files_in_debug_info.values():
+            original_path = file_dict["source_file"]
+            # If we have a path mapping, use it
+            if original_path in path_mapping:
+                # Path was relative in original, now make it relative to new base
+                file_dict["source_file"] = original_path
+            elif original_base_dir and os.path.isabs(original_path):
+                # Convert absolute path from original base to new base
+                try:
+                    file_dict["source_file"] = _make_path_absolute(
+                        original_path, base_dir)
+                except (ValueError, OSError) as e:
+                    logger.debug("Failed to resolve path %s: %s",
+                                 original_path, e)
 
     report_dict = {
         "all_files_in_project": list(all_files_in_debug_info.values()),
@@ -324,8 +354,62 @@ def load_debug_report(debug_files):
     return report_dict
 
 
-def dump_debug_report(report_dict, out_dir):
-    # Extract all files
+def _make_path_relative(source_file, base_dir):
+    """Convert absolute path to relative path based on base_dir.
+
+    Args:
+        source_file: The source file path (absolute or relative)
+        base_dir: Base directory to make paths relative to
+
+    Returns:
+        Relative path if conversion is possible, otherwise original path
+    """
+    if not base_dir:
+        return source_file
+
+    abs_source = os.path.abspath(source_file)
+    abs_base = os.path.abspath(base_dir)
+
+    # Check if source_file is under base_dir
+    if abs_source.startswith(abs_base + os.sep) or abs_source == abs_base:
+        rel_path = os.path.relpath(abs_source, abs_base)
+        # Use forward slashes for portability
+        return rel_path.replace(os.sep, "/")
+
+    return source_file
+
+
+def _make_path_absolute(source_file, base_dir):
+    """Convert relative path to absolute path based on base_dir.
+
+    Args:
+        source_file: The source file path (relative or absolute)
+        base_dir: Base directory to resolve relative paths against
+
+    Returns:
+        Absolute path if conversion is possible, otherwise original path
+    """
+    if not base_dir:
+        return source_file
+
+    # If already absolute, return as-is
+    if os.path.isabs(source_file):
+        return source_file
+
+    # Resolve relative path against base_dir
+    abs_path = os.path.abspath(os.path.join(base_dir, source_file))
+    return abs_path
+
+
+def dump_debug_report(report_dict, out_dir, base_dir=None):
+    """Dump debug report to output directory.
+
+    Args:
+        report_dict: Dictionary containing debug information
+        out_dir: Output directory for the debug report
+        base_dir: Optional base directory to make source file paths relative to
+                  for cross-environment portability
+    """
     # Place this import here because it makes it easier to run this module
     # as a main module.
     from fuzz_introspector import constants
@@ -333,17 +417,50 @@ def dump_debug_report(report_dict, out_dir):
     if not os.path.isdir(os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER)):
         os.mkdir(os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER))
 
-    for file_elem in report_dict["all_files_in_project"]:
-        if not os.path.isfile(file_elem["source_file"]):
-            logger.info("No such file: %s" % (file_elem["source_file"]))
-            continue
-        dst = os.path.join(
-            out_dir, constants.SAVED_SOURCE_FOLDER + "/" + file_elem["source_file"]
-        )
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy(file_elem["source_file"], dst)
+    # Track original and remapped paths for the report
+    path_mapping = {}
 
-    with open(os.path.join(out_dir, constants.DEBUG_INFO_DUMP), "w") as debug_dump:
+    for file_elem in report_dict["all_files_in_project"]:
+        source_file = file_elem["source_file"]
+
+        # Convert to relative path if base_dir is provided
+        if base_dir:
+            relative_path = _make_path_relative(source_file, base_dir)
+            if relative_path != source_file:
+                path_mapping[source_file] = relative_path
+                source_file = relative_path
+            # Update the source_file in the file_elem to the relative path
+            file_elem["source_file"] = relative_path
+
+        # Try to locate the file - check both original and relative paths
+        actual_file = None
+        if os.path.isfile(file_elem["source_file"]):
+            actual_file = file_elem["source_file"]
+        elif base_dir and os.path.isfile(
+                os.path.join(base_dir, file_elem["source_file"])):
+            actual_file = os.path.join(base_dir, file_elem["source_file"])
+
+        if actual_file is None:
+            logger.debug("No such file: %s (base_dir: %s)",
+                         file_elem["source_file"], base_dir)
+            continue
+
+        try:
+            dst = os.path.join(
+                out_dir,
+                constants.SAVED_SOURCE_FOLDER + "/" + file_elem["source_file"])
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy(actual_file, dst)
+        except (IOError, OSError) as e:
+            logger.warning("Failed to copy source file %s: %s", actual_file, e)
+
+    # Add path mapping to report for cross-environment loading
+    if path_mapping:
+        report_dict["_path_mapping"] = path_mapping
+        report_dict["_base_dir"] = base_dir
+
+    with open(os.path.join(out_dir, constants.DEBUG_INFO_DUMP),
+              "w") as debug_dump:
         debug_dump.write(json.dumps(report_dict))
 
 
@@ -410,8 +527,7 @@ def extract_debugged_function_signature(dfunc, debug_type_dictionary):
     """Extract the raw types used by a function."""
     try:
         return_type = extract_func_sig_friendly_type_tags(
-            dfunc["type_arguments"][0], debug_type_dictionary
-        )
+            dfunc["type_arguments"][0], debug_type_dictionary)
     except IndexError:
         return_type = "N/A"
     params = []
@@ -419,10 +535,8 @@ def extract_debugged_function_signature(dfunc, debug_type_dictionary):
     if len(dfunc["type_arguments"]) > 1:
         for i in range(1, len(dfunc["type_arguments"])):
             params.append(
-                extract_func_sig_friendly_type_tags(
-                    dfunc["type_arguments"][i], debug_type_dictionary
-                )
-            )
+                extract_func_sig_friendly_type_tags(dfunc["type_arguments"][i],
+                                                    debug_type_dictionary))
 
     source_file = dfunc["file_location"].split(":")[0]
     try:
@@ -482,11 +596,14 @@ def is_enumeration(param_list):
     return False
 
 
-def create_friendly_debug_types(debug_type_dictionary, out_dir, dump_files=True):
+def create_friendly_debug_types(debug_type_dictionary,
+                                out_dir,
+                                dump_files=True):
     """Create an address-indexed json dictionary. The goal is to use this for
     fast iteration over types using e.g. recursive lookups."""
     friendly_name_sig = dict()
-    logging.info("Have to create for %d addresses" % (len(debug_type_dictionary)))
+    logging.info("Have to create for %d addresses" %
+                 (len(debug_type_dictionary)))
     idx = 0
 
     addr_members = dict()
@@ -494,13 +611,14 @@ def create_friendly_debug_types(debug_type_dictionary, out_dir, dump_files=True)
         if elem_val["tag"] == "DW_TAG_member":
             current_members = addr_members.get(int(elem_val["scope"]), [])
             elem_dict = {
-                "addr": elem_addr,
-                "elem_name": elem_val["name"],
-                "elem_friendly_type": convert_param_list_to_str_v2(
+                "addr":
+                elem_addr,
+                "elem_name":
+                elem_val["name"],
+                "elem_friendly_type":
+                convert_param_list_to_str_v2(
                     extract_func_sig_friendly_type_tags(
-                        elem_val["base_type_addr"], debug_type_dictionary
-                    )
-                ),
+                        elem_val["base_type_addr"], debug_type_dictionary)),
             }
             current_members.append(elem_dict)
             addr_members[int(elem_val["scope"])] = current_members
@@ -509,7 +627,8 @@ def create_friendly_debug_types(debug_type_dictionary, out_dir, dump_files=True)
         idx += 1
         if idx % 2500 == 0:
             logging.info("Idx: %d" % (idx))
-        friendly_type = extract_func_sig_friendly_type_tags(addr, debug_type_dictionary)
+        friendly_type = extract_func_sig_friendly_type_tags(
+            addr, debug_type_dictionary)
 
         # is this a struct?
         # Collect elements
@@ -525,18 +644,21 @@ def create_friendly_debug_types(debug_type_dictionary, out_dir, dump_files=True)
                 "is-struct": is_struct(friendly_type),
                 "struct-elems": structure_elems,
                 "is-enum": is_enumeration(friendly_type),
-                "enum-elems": debug_type_dictionary[addr].get("enum_elems", []),
+                "enum-elems":
+                debug_type_dictionary[addr].get("enum_elems", []),
             },
         }
 
     if dump_files:
-        with open(os.path.join(out_dir, "all-friendly-debug-types.json"), "w") as f:
+        with open(os.path.join(out_dir, "all-friendly-debug-types.json"),
+                  "w") as f:
             json.dump(friendly_name_sig, f)
 
 
-def correlate_debugged_function_to_debug_types(
-    all_debug_types, all_debug_functions, out_dir, dump_files=True
-):
+def correlate_debugged_function_to_debug_types(all_debug_types,
+                                               all_debug_functions,
+                                               out_dir,
+                                               dump_files=True):
     """Correlate debug information about all functions and all types. The
     result is a lot of atomic debug-information-extracted types are correlated
     to the debug function."""
@@ -550,13 +672,14 @@ def correlate_debugged_function_to_debug_types(
     # Create json file with addresses as indexes for type information.
     # This can be used to lookup types fast.
     logger.info("Creating dictionary")
-    create_friendly_debug_types(debug_type_dictionary, out_dir, dump_files=dump_files)
+    create_friendly_debug_types(debug_type_dictionary,
+                                out_dir,
+                                dump_files=dump_files)
     logger.info("Finished creating dictionary")
 
     for dfunc in all_debug_functions:
         func_signature_elems, source_location = extract_debugged_function_signature(
-            dfunc, debug_type_dictionary
-        )
+            dfunc, debug_type_dictionary)
 
         dfunc["func_signature_elems"] = func_signature_elems
         dfunc["source"] = source_location
@@ -586,7 +709,8 @@ def extract_syzkaller_type(param_list):
         elif param == "DW_TAG_enumeration_type":
             continue
         elif "ARRAY-SIZE" in param:
-            syzkaller_tag = "%s, %s" % (syzkaller_tag, param.replace("ARRAY-SIZE:", ""))
+            syzkaller_tag = "%s, %s" % (syzkaller_tag,
+                                        param.replace("ARRAY-SIZE:", ""))
         elif "DW_TAG_array" in param:
             syzkaller_tag = "array[%s]" % (syzkaller_tag)
         else:
@@ -621,10 +745,10 @@ def extract_syzkaller_type(param_list):
 def get_struct_members(addr, debug_type_dictionary):
     structure_elems = []
     for elem_addr, elem_val in debug_type_dictionary.items():
-        if elem_val["tag"] == "DW_TAG_member" and int(elem_val["scope"]) == int(addr):
+        if elem_val["tag"] == "DW_TAG_member" and int(
+                elem_val["scope"]) == int(addr):
             friendly_type = extract_func_sig_friendly_type_tags(
-                elem_val["base_type_addr"], debug_type_dictionary
-            )
+                elem_val["base_type_addr"], debug_type_dictionary)
             print("name: %s" % (elem_val["name"]))
             print(friendly_type)
             print(convert_param_list_to_str_v2(friendly_type))
@@ -632,15 +756,18 @@ def get_struct_members(addr, debug_type_dictionary):
             syzkaller_type = extract_syzkaller_type(friendly_type)
 
             elem_dict = {
-                "addr": elem_addr,
-                "syzkaller_type": syzkaller_type,
-                "elem_name": elem_val["name"],
-                "raw": elem_val,
-                "elem_friendly_type": convert_param_list_to_str_v2(
+                "addr":
+                elem_addr,
+                "syzkaller_type":
+                syzkaller_type,
+                "elem_name":
+                elem_val["name"],
+                "raw":
+                elem_val,
+                "elem_friendly_type":
+                convert_param_list_to_str_v2(
                     extract_func_sig_friendly_type_tags(
-                        elem_val["base_type_addr"], debug_type_dictionary
-                    )
-                ),
+                        elem_val["base_type_addr"], debug_type_dictionary)),
                 "friendly-info": {
                     "raw-types": friendly_type,
                     "string_type": convert_param_list_to_str_v2(friendly_type),
@@ -653,7 +780,8 @@ def get_struct_members(addr, debug_type_dictionary):
 
 
 def create_syzkaller_description_for_type(addr, debug_type_dictionary):
-    friendly_type = extract_func_sig_friendly_type_tags(addr, debug_type_dictionary)
+    friendly_type = extract_func_sig_friendly_type_tags(
+        addr, debug_type_dictionary)
 
     if is_struct(friendly_type):
         members = get_struct_members(addr, debug_type_dictionary)
@@ -663,8 +791,7 @@ def create_syzkaller_description_for_type(addr, debug_type_dictionary):
         syzkaller_description = "%s {\n" % (friendly_type[-1])
         for struct_mem in members:
             syzkaller_description += " " * 2 + "{0: <25}".format(
-                struct_mem["elem_name"]
-            )
+                struct_mem["elem_name"])
             syzkaller_description += " " * 4
             syzkaller_description += struct_mem["syzkaller_type"]
             syzkaller_description += "\n"
@@ -689,8 +816,7 @@ def syzkaller_get_struct_type_elems(typename, all_debug_types):
     for debug_addr, debug_type in debug_type_dictionary.items():
         if debug_type["name"] == typename:
             friendly_type = extract_func_sig_friendly_type_tags(
-                debug_addr, debug_type_dictionary
-            )
+                debug_addr, debug_type_dictionary)
 
             if is_struct(friendly_type):
                 members = get_struct_members(debug_addr, debug_type_dictionary)
@@ -710,8 +836,7 @@ def syzkaller_get_type_implementation(typename, all_debug_types):
     for debug_addr, debug_type in debug_type_dictionary.items():
         if debug_type["name"] == typename:
             syzkaller_description = create_syzkaller_description_for_type(
-                debug_addr, debug_type_dictionary
-            )
+                debug_addr, debug_type_dictionary)
             if syzkaller_description:
                 print("-" * 45)
                 print(syzkaller_description)
