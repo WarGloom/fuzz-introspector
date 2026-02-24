@@ -144,6 +144,78 @@ class StubSerialOnlyAnalysis(analysis.AnalysisInterface):
         return "<div>Stub Serial</div>"
 
 
+class StubParallelOrderAnalysis(analysis.AnalysisInterface):
+    name = "StubParallelOrderAnalysis"
+
+    def __init__(self) -> None:
+        self.json_string_result = "{}"
+
+    @classmethod
+    def get_name(cls):
+        return cls.name
+
+    def get_json_string_result(self):
+        return self.json_string_result
+
+    def set_json_string_result(self, json_string):
+        self.json_string_result = json_string
+
+    def analysis_func(
+        self,
+        table_of_contents: html_helpers.HtmlTableOfContents,
+        tables: List[str],
+        proj_profile: Any,
+        profiles: List[Any],
+        basefolder: str,
+        coverage_url: str,
+        conclusions: List[html_helpers.HTMLConclusion],
+        out_dir: str,
+    ) -> str:
+        table_of_contents.add_entry("Order Parallel", "order-parallel",
+                                    html_helpers.HTML_HEADING.H2)
+        table_id = "order_parallel_table"
+        tables.append(table_id)
+        conclusions.append(
+            html_helpers.HTMLConclusion(5, "Order Parallel", "Parallel order"))
+        return f'<table id="{table_id}"></table>'
+
+
+class StubSerialOrderAnalysis(analysis.AnalysisInterface):
+    name = "StubSerialOrderAnalysis"
+
+    def __init__(self) -> None:
+        self.json_string_result = "{}"
+
+    @classmethod
+    def get_name(cls):
+        return cls.name
+
+    def get_json_string_result(self):
+        return self.json_string_result
+
+    def set_json_string_result(self, json_string):
+        self.json_string_result = json_string
+
+    def analysis_func(
+        self,
+        table_of_contents: html_helpers.HtmlTableOfContents,
+        tables: List[str],
+        proj_profile: Any,
+        profiles: List[Any],
+        basefolder: str,
+        coverage_url: str,
+        conclusions: List[html_helpers.HTMLConclusion],
+        out_dir: str,
+    ) -> str:
+        table_of_contents.add_entry("Order Serial", "order-serial",
+                                    html_helpers.HTML_HEADING.H2)
+        table_id = "order_serial_table"
+        tables.append(table_id)
+        conclusions.append(
+            html_helpers.HTMLConclusion(4, "Order Serial", "Serial order"))
+        return f'<table id="{table_id}"></table>'
+
+
 class TestPR6SerialCompatibility:
     """Tests for serial compatibility mode parity."""
 
@@ -453,6 +525,124 @@ class TestPR6ParallelExecution:
         assert StubSerialOnlyAnalysis.get_name(
         ) in summary_contents["analyses"]
 
+    def test_parallel_table_ids_unique(
+        self,
+        parallel_test_data: Dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("FI_PR6_PARALLEL_ANALYSIS", "1")
+        monkeypatch.setenv("FI_PR6_ANALYSIS_WORKERS", "2")
+        monkeypatch.setattr(
+            analysis,
+            "get_all_analyses",
+            lambda: [
+                StubParallelAnalysisOne,
+                StubParallelAnalysisTwo,
+            ],
+        )
+        monkeypatch.setattr(
+            analyses_registry,
+            "all_analyses",
+            [
+                StubParallelAnalysisOne,
+                StubParallelAnalysisTwo,
+            ],
+        )
+        monkeypatch.setattr(
+            analyses_registry,
+            "analysis_parallel_compatibility",
+            {
+                StubParallelAnalysisOne:
+                analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+                StubParallelAnalysisTwo:
+                analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+            },
+        )
+
+        create_section_optional_analyses(
+            parallel_test_data["table_of_contents"],
+            [
+                StubParallelAnalysisOne.get_name(),
+                StubParallelAnalysisTwo.get_name(),
+            ],
+            [],
+            parallel_test_data["tables"],
+            parallel_test_data["introspection_proj"],
+            parallel_test_data["basefolder"],
+            parallel_test_data["coverage_url"],
+            parallel_test_data["conclusions"],
+            parallel_test_data["dump_files"],
+            parallel_test_data["out_dir"],
+        )
+
+        table_ids = parallel_test_data["tables"]
+        assert len(table_ids) == len(
+            set(table_ids)), ("Parallel table IDs must be globally unique")
+
+    def test_parallel_merge_respects_canonical_order(
+        self,
+        parallel_test_data: Dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("FI_PR6_PARALLEL_ANALYSIS", "1")
+        monkeypatch.setenv("FI_PR6_ANALYSIS_WORKERS", "2")
+        monkeypatch.setattr(
+            analysis,
+            "get_all_analyses",
+            lambda: [
+                StubParallelOrderAnalysis,
+                StubSerialOrderAnalysis,
+            ],
+        )
+        monkeypatch.setattr(
+            analyses_registry,
+            "all_analyses",
+            [
+                StubParallelOrderAnalysis,
+                StubSerialOrderAnalysis,
+            ],
+        )
+        monkeypatch.setattr(
+            analyses_registry,
+            "analysis_parallel_compatibility",
+            {
+                StubParallelOrderAnalysis:
+                analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+                StubSerialOrderAnalysis:
+                analyses_registry.PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+            },
+        )
+
+        create_section_optional_analyses(
+            parallel_test_data["table_of_contents"],
+            [
+                StubSerialOrderAnalysis.get_name(),
+                StubParallelOrderAnalysis.get_name(),
+            ],
+            [],
+            parallel_test_data["tables"],
+            parallel_test_data["introspection_proj"],
+            parallel_test_data["basefolder"],
+            parallel_test_data["coverage_url"],
+            parallel_test_data["conclusions"],
+            parallel_test_data["dump_files"],
+            parallel_test_data["out_dir"],
+        )
+
+        toc_titles = [
+            entry.entry_title
+            for entry in parallel_test_data["table_of_contents"].entries
+        ]
+        filtered_titles = [
+            title for title in toc_titles
+            if title != "Analyses and suggestions"
+        ]
+        assert filtered_titles == ["Order Parallel", "Order Serial"]
+        assert parallel_test_data["tables"] == [
+            "order_parallel_table",
+            "order_serial_table",
+        ]
+
 
 class TestPR6RetryConflictPathSafety:
     """Tests for retry logic, conflict detection, and path safety."""
@@ -554,6 +744,46 @@ class TestPR6RetryConflictPathSafety:
             and conflict.get("relative_path") == "reports/output.json"
             for conflict in merged.get(
                 "conflicts", [])), "Artifact conflict must be reported"
+
+    def test_artifact_conflict_does_not_write_partial(
+            self, conflict_test_data: Dict[str, Any]) -> None:
+        """Test that artifacts are not written when merge fails."""
+        out_dir = conflict_test_data["out_dir"]
+        os.makedirs(out_dir, exist_ok=True)
+
+        coordinator = merge_coordinator.MergeCoordinator(out_dir)
+        intent_one = self._make_artifact_intent("reports/output.json",
+                                                b"first")
+        intent_two = self._make_artifact_intent("reports/output.json",
+                                                b"second")
+
+        coordinator.add_analysis_result(
+            "OptimalTargets",
+            merge_coordinator.AnalysisWorkerResult(
+                analysis_name="OptimalTargets",
+                status="success",
+                display_html=False,
+                merge_intents=[intent_one],
+            ).to_envelope(),
+        )
+        coordinator.add_analysis_result(
+            "FuzzEngineInputAnalysis",
+            merge_coordinator.AnalysisWorkerResult(
+                analysis_name="FuzzEngineInputAnalysis",
+                status="success",
+                display_html=False,
+                merge_intents=[intent_two],
+            ).to_envelope(),
+        )
+
+        success, merged = coordinator.merge_results()
+        assert not success, "Artifact conflicts must fail merge"
+        assert any(
+            conflict.get("type") == "artifact_conflict" for conflict in
+            merged.get("conflicts", [])), "Artifact conflict must be reported"
+        assert not os.path.exists(os.path.join(
+            out_dir, "reports/output.json")), (
+                "Artifacts must not be written when merge fails")
 
     def test_path_safety_checks(self, conflict_test_data: Dict[str,
                                                                Any]) -> None:

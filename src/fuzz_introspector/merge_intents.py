@@ -49,6 +49,17 @@ class MergeIntentCollector:
         return list(self._intents)
 
 
+class TableIdOffsetList(list):
+    """List that offsets len() for deterministic table IDs."""
+
+    def __init__(self, base_offset: int) -> None:
+        super().__init__()
+        self._base_offset = base_offset
+
+    def __len__(self) -> int:
+        return self._base_offset + super().__len__()
+
+
 _MERGE_INTENT_COLLECTOR: contextvars.ContextVar[
     Optional[MergeIntentCollector]] = (contextvars.ContextVar(
         "merge_intent_collector", default=None))

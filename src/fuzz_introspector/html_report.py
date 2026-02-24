@@ -52,6 +52,7 @@ logger = logging.getLogger(name=__name__)
 
 PR6_PARALLEL_ANALYSIS_FLAG_ENV = "FI_PR6_PARALLEL_ANALYSIS"
 PR6_PARALLEL_ANALYSIS_WORKERS_ENV = "FI_PR6_ANALYSIS_WORKERS"
+TABLE_ID_STRIDE = 100000
 
 
 def _parse_parallel_worker_count() -> int:
@@ -90,6 +91,23 @@ def _get_parallel_compatibility_by_name() -> dict[str, str]:
         for analysis_cls, compatibility in
         analyses_registry.analysis_parallel_compatibility.items()
     }
+
+
+def _get_canonical_analysis_order(analyses_to_run: List[str]) -> List[str]:
+    return [
+        analysis_cls.get_name()
+        for analysis_cls in analyses_registry.all_analyses
+        if analysis_cls.get_name() in analyses_to_run
+    ]
+
+
+def _build_table_id_offsets(analysis_order: List[str],
+                            base_offset: int) -> Dict[str, int]:
+    table_id_offsets = {}
+    for index, analysis_name in enumerate(analysis_order):
+        table_id_offsets[analysis_name] = base_offset + (index *
+                                                         TABLE_ID_STRIDE)
+    return table_id_offsets
 
 
 def _serialize_toc_entries(
@@ -141,9 +159,10 @@ def _run_analysis_worker(
     out_dir: str,
     dump_files: bool,
     result_queue: multiprocessing.Queue,
+    table_id_offset: int,
 ) -> None:
     analysis_name = analysis_interface.get_name()
-    local_tables: List[str] = []
+    local_tables = merge_intents.TableIdOffsetList(table_id_offset)
     local_toc = html_helpers.HtmlTableOfContents()
     local_conclusions: List[html_helpers.HTMLConclusion] = []
     intent_collector = merge_intents.MergeIntentCollector()
@@ -201,6 +220,7 @@ def _run_parallel_analyses(
     out_dir: str,
     dump_files: bool,
     worker_count: int,
+    table_id_offsets: Dict[str, int],
 ) -> List[Dict[str, Any]]:
     if worker_count < 1:
         return []
@@ -230,6 +250,7 @@ def _run_parallel_analyses(
                     out_dir,
                     dump_files,
                     result_queue,
+                    table_id_offsets.get(analysis_name, 0),
                 ),
             )
             process.start()
@@ -266,6 +287,66 @@ def _run_parallel_analyses(
         results.extend(batch_results)
 
     return results
+
+
+def _run_serial_analysis_with_envelope(
+    analysis_interface: type[analysis.AnalysisInterface],
+    display_html: bool,
+    introspection_proj: analysis.IntrospectionProject,
+    basefolder: str,
+    coverage_url: str,
+    out_dir: str,
+    dump_files: bool,
+    table_id_offset: int,
+) -> Dict[str, Any]:
+    analysis_name = analysis_interface.get_name()
+    local_tables = merge_intents.TableIdOffsetList(table_id_offset)
+    local_toc = html_helpers.HtmlTableOfContents()
+    local_conclusions: List[html_helpers.HTMLConclusion] = []
+    intent_collector = merge_intents.MergeIntentCollector()
+    diagnostics: List[str] = []
+    start_time = time.monotonic()
+
+    try:
+        analysis_instance = analysis.instantiate_analysis_interface(
+            analysis_interface)
+        analysis_instance.dump_files = dump_files
+        analysis_instance.set_display_html(display_html)
+        with merge_intents.merge_intent_context(intent_collector):
+            html_string = analysis_instance.analysis_func(
+                local_toc,
+                local_tables,
+                introspection_proj.proj_profile,
+                introspection_proj.profiles,
+                basefolder,
+                coverage_url,
+                local_conclusions,
+                out_dir,
+            )
+        status = "success"
+    except Exception as exc:  # pragma: no cover - defensive path
+        status = "fatal_error"
+        html_string = ""
+        diagnostics.append(f"{type(exc).__name__}: {exc}")
+        diagnostics.append(traceback.format_exc())
+
+    duration_ms = int((time.monotonic() - start_time) * 1000)
+    worker_result = merge_coordinator.AnalysisWorkerResult(
+        analysis_name=analysis_name,
+        status=status,
+        display_html=display_html,
+        html_fragment=html_string,
+        conclusions=local_conclusions,
+        table_specs=[],
+        merge_intents=intent_collector.get_intents(),
+        diagnostics=diagnostics,
+        duration_ms=duration_ms,
+        worker_pid=os.getpid(),
+    )
+    envelope = worker_result.to_envelope()
+    envelope["toc_entries"] = _serialize_toc_entries(local_toc)
+    envelope["table_ids"] = list(local_tables)
+    return envelope
 
 
 def create_overview_table(
@@ -1017,6 +1098,9 @@ def create_section_optional_analyses(
     parallel_compatibility = _get_parallel_compatibility_by_name()
     parallel_interfaces: List[type[analysis.AnalysisInterface]] = []
     serial_interfaces: List[type[analysis.AnalysisInterface]] = []
+    canonical_order = _get_canonical_analysis_order(combined_analyses)
+    table_id_offsets = _build_table_id_offsets(canonical_order, len(tables))
+    use_parallel_merge = parallel_worker_count > 1
 
     for analysis_interface in analysis.get_all_analyses():
         analysis_name = analysis_interface.get_name()
@@ -1048,6 +1132,7 @@ def create_section_optional_analyses(
             out_dir,
             dump_files,
             parallel_worker_count,
+            table_id_offsets,
         )
         for envelope in parallel_results:
             status = envelope.get("status")
@@ -1062,41 +1147,59 @@ def create_section_optional_analyses(
 
     for analysis_interface in serial_interfaces:
         analysis_name = analysis_interface.get_name()
-        analysis_instance = analysis.instantiate_analysis_interface(
-            analysis_interface)
-        analysis_instance.dump_files = dump_files
-
-        # Set display_html flag for the analysis_instance
-        analysis_instance.set_display_html(analysis_name in analyses_to_run)
-
-        introspection_proj.optional_analyses.append(analysis_instance)
-
-        # Process analysis in serial mode (worker count = 1)
-        intent_collector = merge_intents.MergeIntentCollector()
-        with merge_intents.merge_intent_context(intent_collector):
-            html_string = analysis_instance.analysis_func(
-                table_of_contents,
-                tables,
-                introspection_proj.proj_profile,
-                introspection_proj.profiles,
+        if use_parallel_merge:
+            envelope = _run_serial_analysis_with_envelope(
+                analysis_interface,
+                analysis_name in analyses_to_run,
+                introspection_proj,
                 basefolder,
                 coverage_url,
-                conclusions,
                 out_dir,
+                dump_files,
+                table_id_offsets.get(analysis_name, 0),
             )
+            if envelope.get("status") != "success":
+                logger.error("Serial analysis failed: %s", envelope)
+                raise FuzzIntrospectorError(
+                    "Serial analysis failed; see logs for details")
+            coordinator.add_analysis_result(analysis_name, envelope)
+        else:
+            analysis_instance = analysis.instantiate_analysis_interface(
+                analysis_interface)
+            analysis_instance.dump_files = dump_files
 
-        worker_result = merge_coordinator.AnalysisWorkerResult(
-            analysis_name=analysis_name,
-            status="success",
-            display_html=analysis_name in analyses_to_run,
-            html_fragment=html_string,
-            conclusions=[],
-            table_specs=[],
-            merge_intents=intent_collector.get_intents(),
-            diagnostics=[],
-        )
-        coordinator.add_analysis_result(analysis_name,
-                                        worker_result.to_envelope())
+            # Set display_html flag for the analysis_instance
+            analysis_instance.set_display_html(
+                analysis_name in analyses_to_run)
+
+            introspection_proj.optional_analyses.append(analysis_instance)
+
+            # Process analysis in serial mode (worker count = 1)
+            intent_collector = merge_intents.MergeIntentCollector()
+            with merge_intents.merge_intent_context(intent_collector):
+                html_string = analysis_instance.analysis_func(
+                    table_of_contents,
+                    tables,
+                    introspection_proj.proj_profile,
+                    introspection_proj.profiles,
+                    basefolder,
+                    coverage_url,
+                    conclusions,
+                    out_dir,
+                )
+
+            worker_result = merge_coordinator.AnalysisWorkerResult(
+                analysis_name=analysis_name,
+                status="success",
+                display_html=analysis_name in analyses_to_run,
+                html_fragment=html_string,
+                conclusions=[],
+                table_specs=[],
+                merge_intents=intent_collector.get_intents(),
+                diagnostics=[],
+            )
+            coordinator.add_analysis_result(analysis_name,
+                                            worker_result.to_envelope())
 
     success, merged = coordinator.merge_results()
     if not success:

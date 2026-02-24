@@ -226,8 +226,14 @@ class MergeCoordinator:
 
     def _write_merged_artifacts(self) -> None:
         """Write all merged artifacts to disk."""
-        for intent in self._get_all_artifact_intents():
-            self._write_artifact(intent)
+        artifact_intents = self._get_all_artifact_intents()
+        planned_artifacts = self._prevalidate_artifact_intents(
+            artifact_intents)
+        if self.conflicts or self.errors:
+            return
+
+        for plan in planned_artifacts.values():
+            self._commit_artifact_plan(plan)
 
     def _write_merged_summary_report(self) -> None:
         """Apply merged json_upsert intents to summary.json."""
@@ -297,73 +303,113 @@ class MergeCoordinator:
                     artifact_intents.append(intent)
         return artifact_intents
 
-    def _write_artifact(self, intent: Dict[str, Any]) -> None:
-        """Write a single artifact to disk."""
-        relative_path = intent["relative_path"]
-        content_sha256 = intent["content_sha256"]
+    def _prevalidate_artifact_intents(
+            self, intents: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """Validate artifact intents and build write plans."""
+        planned_artifacts: Dict[str, Dict[str, Any]] = {}
 
-        try:
-            validate_path_safety(relative_path, self.out_dir)
-        except PathSafetyError as exc:
-            self.conflicts.append({
-                "type": "artifact_path_unsafe",
+        for intent in intents:
+            relative_path = intent["relative_path"]
+            content_sha256 = intent["content_sha256"]
+
+            try:
+                validate_path_safety(relative_path, self.out_dir)
+            except PathSafetyError as exc:
+                self.conflicts.append({
+                    "type": "artifact_path_unsafe",
+                    "relative_path": relative_path,
+                    "error": str(exc),
+                })
+                continue
+
+            if relative_path in planned_artifacts:
+                existing_sha256 = planned_artifacts[relative_path][
+                    "content_sha256"]
+                if existing_sha256 != content_sha256:
+                    self.conflicts.append({
+                        "type": "artifact_conflict",
+                        "relative_path": relative_path,
+                        "existing_sha256": existing_sha256,
+                        "new_sha256": content_sha256,
+                    })
+                continue
+
+            plan: Dict[str, Any] = {
                 "relative_path": relative_path,
-                "error": str(exc),
-            })
-            return
+                "content_sha256": content_sha256,
+            }
 
-        # Check for conflicts
-        if relative_path in self.merged_artifacts:
-            existing_sha256 = self.merged_artifacts[relative_path]
-            if existing_sha256 != content_sha256:
-                self.conflicts.append({
-                    "type": "artifact_conflict",
-                    "relative_path": relative_path,
-                    "existing_sha256": existing_sha256,
-                    "new_sha256": content_sha256,
-                })
-                return
+            if "content_b64" in intent:
+                try:
+                    content = bytes.fromhex(intent["content_b64"])
+                except ValueError as exc:
+                    self.errors.append({
+                        "error": f"Invalid content_b64: {exc}",
+                        "relative_path": relative_path,
+                    })
+                    continue
+                calculated_sha256 = hashlib.sha256(content).hexdigest()
+                if calculated_sha256 != content_sha256:
+                    self.errors.append({
+                        "error": "Content hash mismatch for artifact intent",
+                        "relative_path": relative_path,
+                        "expected_sha256": content_sha256,
+                        "actual_sha256": calculated_sha256,
+                    })
+                    continue
+                plan["content_bytes"] = content
+            elif "temp_file_ref" in intent:
+                temp_path = intent["temp_file_ref"]
+                if not os.path.isfile(temp_path):
+                    self.errors.append({
+                        "error": f"Temp file not found: {temp_path}",
+                        "relative_path": relative_path,
+                    })
+                    continue
 
+                with open(temp_path, "rb") as file_handle:
+                    content = file_handle.read()
+                calculated_sha256 = hashlib.sha256(content).hexdigest()
+                if calculated_sha256 != content_sha256:
+                    self.errors.append({
+                        "error": "Content hash mismatch for temp artifact",
+                        "relative_path": relative_path,
+                        "expected_sha256": content_sha256,
+                        "actual_sha256": calculated_sha256,
+                    })
+                    continue
+                plan["temp_file_ref"] = temp_path
+
+            full_path = os.path.join(self.out_dir, relative_path)
+            if os.path.isfile(full_path):
+                existing_sha256 = self._hash_existing_file(full_path)
+                if existing_sha256 != content_sha256:
+                    self.conflicts.append({
+                        "type": "artifact_conflict",
+                        "relative_path": relative_path,
+                        "existing_sha256": existing_sha256,
+                        "new_sha256": content_sha256,
+                    })
+                    continue
+
+            planned_artifacts[relative_path] = plan
+
+        return planned_artifacts
+
+    def _commit_artifact_plan(self, plan: Dict[str, Any]) -> None:
+        """Write a validated artifact plan to disk."""
+        relative_path = plan["relative_path"]
+        content_sha256 = plan["content_sha256"]
         full_path = os.path.join(self.out_dir, relative_path)
-        if os.path.isfile(full_path):
-            existing_sha256 = self._hash_existing_file(full_path)
-            if existing_sha256 != content_sha256:
-                self.conflicts.append({
-                    "type": "artifact_conflict",
-                    "relative_path": relative_path,
-                    "existing_sha256": existing_sha256,
-                    "new_sha256": content_sha256,
-                })
-                return
 
-        # Write the artifact
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
 
-        if "content_b64" in intent:
-            # Decode from hex (base64 was stored as hex for safety)
-            content = bytes.fromhex(intent["content_b64"])
-            with open(full_path, "wb") as f:
-                f.write(content)
-        elif "temp_file_ref" in intent:
-            # Promote temp file
-            temp_path = intent["temp_file_ref"]
-            if not os.path.isfile(temp_path):
-                raise FileNotFoundError(f"Temp file not found: {temp_path}")
+        if "content_bytes" in plan:
+            with open(full_path, "wb") as file_handle:
+                file_handle.write(plan["content_bytes"])
+        elif "temp_file_ref" in plan:
+            os.rename(plan["temp_file_ref"], full_path)
 
-            # Verify content matches
-            with open(temp_path, "rb") as f:
-                content = f.read()
-            calculated_sha256 = hashlib.sha256(content).hexdigest()
-            if calculated_sha256 != content_sha256:
-                raise ValueError(
-                    f"Content mismatch for {relative_path}: expected "
-                    f"{content_sha256}, got {calculated_sha256}")
-
-            # Move the file
-            os.makedirs(os.path.dirname(full_path), exist_ok=True)
-            os.rename(temp_path, full_path)
-
-        # Record the artifact
         self.merged_artifacts[relative_path] = content_sha256
 
     def _hash_existing_file(self, file_path: str) -> str:
