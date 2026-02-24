@@ -231,6 +231,29 @@ HTML determinism policy:
   - CI stability over agreed burn-in window.
   - Documented final matrix (parallel-safe vs serial-only analyses).
 
+## PR6 Stage 5 Compatibility Matrix (Optional Analyses)
+
+Status is based on `parallel_safe_analyses` in
+`src/fuzz_introspector/analyses/__init__.py:51`. Serial-only entries require
+envelope/merge-intent migration before worker parallelization.
+
+| Analysis (registry order) | Status | Serial-only rationale |
+| --- | --- | --- |
+| `OptimalTargets` | serial-only | Mutates merged profile state in place and writes analysis artifacts directly to `out_dir` (JSON/JS). |
+| `EngineInput` | serial-only | Writes shared JSON output and `ENGINE_INPUT_FILE` directly; not routed through merge intents. |
+| `RuntimeCoverageAnalysis` | parallel-safe | n/a |
+| `DriverSynthesizer` | parallel-safe | n/a |
+| `BugDigestor` | parallel-safe | n/a |
+| `FilePathAnalysis` | parallel-safe | n/a |
+| `ThirdPartyAPICoverageAnalyser` | parallel-safe | n/a |
+| `MetadataAnalysis` | parallel-safe | n/a |
+| `SinkCoverageAnalyser` | serial-only | Writes calltree HTML artifacts and analysis JSON directly to `out_dir`. |
+| `FuzzAnnotatedCFG` | parallel-safe | n/a |
+| `SourceCodeLineAnalyser` | serial-only | Standalone-style output writes `functions.json` directly to `out_dir`. |
+| `FarReachLowCoverageAnalyser` | serial-only | Standalone-style output writes `result.json` directly to `out_dir`. |
+| `PublicCandidateAnalyser` | serial-only | Standalone-style output writes `result.json` directly to `out_dir`. |
+| `FrontendAnalyser` | serial-only | Runs a second frontend and writes `all_tests.json`/`all_tests_with_xreference.json` directly to `out_dir`. |
+
 ## Phase 1 Execution Checklist (Exact Next Steps)
 1. Add `AnalysisWorkerResult` envelope schema + validation utility and tests.
 2. Add merge coordinator that consumes envelopes and rebuilds optional-analysis

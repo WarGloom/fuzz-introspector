@@ -195,6 +195,7 @@ This plan covers the next work items:
 ### PR6 - optional, after above: safe analysis parallelization
 - Design reference:
   - `docs/pr6-safe-analysis-parallelization-design.md` (finalized v1 envelope schema and merge-intent definitions)
+  - Compatibility matrix: `docs/pr6-safe-analysis-parallelization-design.md` (PR6 Stage 5 section)
 - Target files:
   - `src/fuzz_introspector/html_report.py`
   - `src/fuzz_introspector/json_report.py`
@@ -211,6 +212,7 @@ This plan covers the next work items:
   1. Phase 1: land envelope + merge coordinator in serial compatibility mode with deterministic parity tests.
   2. Phase 2: enable limited parallel worker execution behind a feature flag for vetted analyses only.
   3. Phase 3: expand to remaining analyses (or mark serial-only) after CI burn-in.
+ - Stage 5 status: in progress (matrix documented; rollout decision pending).
 
 ## Acceptance criteria
 - Report phase honors config-driven directory/file exclusions (from `FILES_TO_AVOID` or equivalent passed patterns) during test extraction traversal.
