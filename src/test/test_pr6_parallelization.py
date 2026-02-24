@@ -23,6 +23,12 @@ from fuzz_introspector.html_report import create_section_optional_analyses
 PARALLEL_EXECUTION_LOG: List[tuple[str, int]] = []
 
 
+def _write_pid_marker(out_dir: str, analysis_name: str) -> None:
+    marker_path = os.path.join(out_dir, f"{analysis_name}.pid")
+    with open(marker_path, "w") as marker_file:
+        marker_file.write(str(os.getpid()))
+
+
 class StubParallelAnalysisOne(analysis.AnalysisInterface):
     name = "StubParallelAnalysisOne"
 
@@ -50,6 +56,7 @@ class StubParallelAnalysisOne(analysis.AnalysisInterface):
         conclusions: List[html_helpers.HTMLConclusion],
         out_dir: str,
     ) -> str:
+        _write_pid_marker(out_dir, self.get_name())
         table_of_contents.add_entry("Stub One", "stub-one",
                                     html_helpers.HTML_HEADING.H2)
         tables.append(f"stubTable{len(tables)}")
@@ -87,6 +94,7 @@ class StubParallelAnalysisTwo(analysis.AnalysisInterface):
         conclusions: List[html_helpers.HTMLConclusion],
         out_dir: str,
     ) -> str:
+        _write_pid_marker(out_dir, self.get_name())
         table_of_contents.add_entry("Stub Two", "stub-two",
                                     html_helpers.HTML_HEADING.H2)
         tables.append(f"stubTable{len(tables)}")
@@ -379,8 +387,15 @@ class TestPR6ParallelExecution:
         )
         monkeypatch.setattr(
             analyses_registry,
-            "parallel_safe_analyses",
-            [StubParallelAnalysisOne, StubParallelAnalysisTwo],
+            "analysis_parallel_compatibility",
+            {
+                StubParallelAnalysisOne:
+                analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+                StubSerialOnlyAnalysis:
+                analyses_registry.PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+                StubParallelAnalysisTwo:
+                analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+            },
         )
 
         html_output = create_section_optional_analyses(
@@ -415,6 +430,16 @@ class TestPR6ParallelExecution:
 
         assert PARALLEL_EXECUTION_LOG == [(StubSerialOnlyAnalysis.get_name(),
                                            os.getpid())]
+
+        for analysis_name in (
+                StubParallelAnalysisOne.get_name(),
+                StubParallelAnalysisTwo.get_name(),
+        ):
+            pid_path = os.path.join(parallel_test_data["out_dir"],
+                                    f"{analysis_name}.pid")
+            with open(pid_path, "r") as pid_file:
+                worker_pid = int(pid_file.read().strip())
+            assert worker_pid != os.getpid()
 
         summary_path = os.path.join(parallel_test_data["out_dir"],
                                     constants.SUMMARY_FILE)

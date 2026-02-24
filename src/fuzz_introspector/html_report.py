@@ -84,10 +84,11 @@ def _parse_parallel_worker_count() -> int:
     return worker_count
 
 
-def _get_parallel_safe_analysis_names() -> set[str]:
+def _get_parallel_compatibility_by_name() -> dict[str, str]:
     return {
-        analysis_cls.get_name()
-        for analysis_cls in analyses_registry.parallel_safe_analyses
+        analysis_cls.get_name(): compatibility
+        for analysis_cls, compatibility in
+        analyses_registry.analysis_parallel_compatibility.items()
     }
 
 
@@ -1013,7 +1014,7 @@ def create_section_optional_analyses(
 
     coordinator = merge_coordinator.MergeCoordinator(out_dir)
     parallel_worker_count = _parse_parallel_worker_count()
-    parallel_safe_names = _get_parallel_safe_analysis_names()
+    parallel_compatibility = _get_parallel_compatibility_by_name()
     parallel_interfaces: List[type[analysis.AnalysisInterface]] = []
     serial_interfaces: List[type[analysis.AnalysisInterface]] = []
 
@@ -1022,7 +1023,12 @@ def create_section_optional_analyses(
         if analysis_name not in combined_analyses:
             continue
 
-        if parallel_worker_count > 1 and analysis_name in parallel_safe_names:
+        compatibility = parallel_compatibility.get(
+            analysis_name,
+            analyses_registry.PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+        )
+        if (parallel_worker_count > 1 and compatibility
+                == analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE):
             parallel_interfaces.append(analysis_interface)
         else:
             serial_interfaces.append(analysis_interface)

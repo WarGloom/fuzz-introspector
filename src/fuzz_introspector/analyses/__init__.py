@@ -29,6 +29,9 @@ from fuzz_introspector.analyses import far_reach_low_coverage_analyser
 from fuzz_introspector.analyses import public_candidate_analyser
 from fuzz_introspector.analyses import frontend_analyser
 
+PARALLEL_COMPATIBILITY_PARALLEL_SAFE = "parallel_safe"
+PARALLEL_COMPATIBILITY_SERIAL_ONLY = "serial_only"
+
 # All optional analyses.
 # Ordering here is important as top analysis will be shown first in the report
 all_analyses: list[type[analysis.AnalysisInterface]] = [
@@ -48,15 +51,34 @@ all_analyses: list[type[analysis.AnalysisInterface]] = [
     frontend_analyser.FrontendAnalyser,
 ]
 
+# Explicit PR6 analysis compatibility matrix.
+analysis_parallel_compatibility = {
+    optimal_targets.OptimalTargets: PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+    engine_input.EngineInput: PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+    runtime_coverage_analysis.RuntimeCoverageAnalysis:
+    PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+    driver_synthesizer.DriverSynthesizer: PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+    bug_digestor.BugDigestor: PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+    filepath_analyser.FilePathAnalysis: PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+    function_call_analyser.ThirdPartyAPICoverageAnalyser:
+    PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+    metadata.MetadataAnalysis: PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+    sinks_analyser.SinkCoverageAnalyser: PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+    annotated_cfg.FuzzAnnotatedCFG: PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+    source_code_line_analyser.SourceCodeLineAnalyser:
+    PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+    far_reach_low_coverage_analyser.FarReachLowCoverageAnalyser:
+    PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+    public_candidate_analyser.PublicCandidateAnalyser:
+    PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+    frontend_analyser.FrontendAnalyser: PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+}  # type: dict[type[analysis.AnalysisInterface], str]
+
 # Analyses vetted for PR6 parallel worker execution.
 parallel_safe_analyses: list[type[analysis.AnalysisInterface]] = [
-    runtime_coverage_analysis.RuntimeCoverageAnalysis,
-    driver_synthesizer.DriverSynthesizer,
-    bug_digestor.BugDigestor,
-    filepath_analyser.FilePathAnalysis,
-    function_call_analyser.ThirdPartyAPICoverageAnalyser,
-    metadata.MetadataAnalysis,
-    annotated_cfg.FuzzAnnotatedCFG,
+    analysis_cls
+    for analysis_cls, compatibility in analysis_parallel_compatibility.items()
+    if compatibility == PARALLEL_COMPATIBILITY_PARALLEL_SAFE
 ]
 
 # This is the list of analyses that are meant to run
