@@ -6,8 +6,6 @@ import dataclasses
 import logging
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ValidationError, validator
-
 from fuzz_introspector.exceptions import FuzzIntrospectorError
 
 logger = logging.getLogger(__name__)

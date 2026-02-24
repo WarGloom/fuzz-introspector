@@ -55,6 +55,9 @@ Before contributing, please follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 You can run the `ci_checks.sh` script to run the linting and api tests that are
 run during CI. Make sure to activate the Python virtual environment as it is
 not done by the script to allow more flexibility for the local dev setup.
+To lint the Python frontend directly, run
+`flake8 --ignore E125,W503,W504,W605 --max-line-length 100 ./frontends/python/*.py`
+from the repo root.
 
 The commit message **needs** to contain a signoff line with your data, this is
 supported by Git see [here](https://git-scm.com/docs/git-commit#Documentation/git-commit.txt---signoff).

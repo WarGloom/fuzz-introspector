@@ -27,7 +27,7 @@ from typing import (
 
 from fuzz_introspector import constants
 from fuzz_introspector import utils
-from fuzz_introspector.datatypes import (fuzzer_profile, bug)
+from fuzz_introspector.datatypes import fuzzer_profile, bug
 
 logger = logging.getLogger(name=__name__)
 
@@ -41,34 +41,34 @@ def read_fuzzer_data_file_to_profile(
     """
     logger.info(" - loading %s", cfg_file)
     target_data_f = cfg_file
-    if cfg_file.endswith('.txt'):
-        target_data_f = '/'.join(cfg_file.split('/')[:-1]) + '/report'
+    if cfg_file.endswith(".txt"):
+        target_data_f = "/".join(cfg_file.split("/")[:-1]) + "/report"
 
-    logging.info('target data f: %s' % (target_data_f))
+    logging.info("target data f: %s" % (target_data_f))
     if not os.path.isfile(target_data_f) and not os.path.isfile(target_data_f +
                                                                 ".yaml"):
-        logger.info('R1')
+        logger.info("R1")
         return None
 
     data_dict_yaml = utils.data_file_read_yaml(target_data_f + ".yaml")
 
     # Must be  dictionary
     if data_dict_yaml is None or not isinstance(data_dict_yaml, dict):
-        logger.info('Found no data yaml file')
-        if os.path.isfile('report.yaml'):
-            data_dict_yaml = utils.data_file_read_yaml('report.yaml')
+        logger.info("Found no data yaml file")
+        if os.path.isfile("report.yaml"):
+            data_dict_yaml = utils.data_file_read_yaml("report.yaml")
             if data_dict_yaml is None or not isinstance(data_dict_yaml, dict):
-                logger.info('Report.yaml is not a valid yaml file')
+                logger.info("Report.yaml is not a valid yaml file")
                 return None
         else:
-            logger.info('Found no module yaml files')
+            logger.info("Found no module yaml files")
             return None
 
     try:
-        with open(cfg_file, 'r') as f:
+        with open(cfg_file, "r") as f:
             cfg_content = f.read()
     except UnicodeDecodeError:
-        logger.info('CFG file not valid.')
+        logger.info("CFG file not valid.")
         return None
 
     profile = fuzzer_profile.FuzzerProfile(cfg_file,
@@ -92,7 +92,7 @@ def _load_profile(data_file: str, language: str, manager, semaphore=None):
     if profile is not None:
         manager[data_file] = profile
     else:
-        logger.error('profile is none')
+        logger.error("profile is none")
     if semaphore is not None:
         semaphore.release()
 
@@ -129,7 +129,7 @@ def load_all_profiles(
         language: str,
         parallelise: bool = True) -> List[fuzzer_profile.FuzzerProfile]:
     """Loads all profiles in target_folder in a multi-threaded manner"""
-    logger.info('Loading profiles from %s', target_folder)
+    logger.info("Loading profiles from %s", target_folder)
     if language == "jvm":
         # Java targets tend to be quite large, so we try to avoid memory
         # exhaustion here.
@@ -139,7 +139,7 @@ def load_all_profiles(
 
     profiles = []
     data_files = utils.get_all_files_in_tree_with_regex(
-        target_folder, "fuzzerLogFile.*\.data$")
+        target_folder, r"fuzzerLogFile.*\.data$")
     data_files.extend(
         utils.get_all_files_in_tree_with_regex(target_folder,
                                                "fuzzer-calltree-*"))
@@ -199,9 +199,14 @@ def load_input_bugs(bug_file: str) -> List[bug.Bug]:
 
     for bug_dict in data["bugs"]:
         try:
-            ib = bug.Bug(bug_dict['source_file'], bug_dict['source_line'],
-                         bug_dict['function_name'], bug_dict['fuzzer_name'],
-                         bug_dict['description'], bug_dict['bug_type'])
+            ib = bug.Bug(
+                bug_dict["source_file"],
+                bug_dict["source_line"],
+                bug_dict["function_name"],
+                bug_dict["fuzzer_name"],
+                bug_dict["description"],
+                bug_dict["bug_type"],
+            )
             input_bugs.append(ib)
         except Exception:
             continue
