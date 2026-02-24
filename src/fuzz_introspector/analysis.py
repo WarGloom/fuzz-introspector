@@ -1203,7 +1203,7 @@ def correlate_introspection_functions_to_debug_info(all_functions_json_report,
 
 def extract_all_sources(language):
     all_files = set()
-    for root, dirs, files in os.walk("/src/"):
+    for root, _, files in os.walk("/src/"):
         for f in files:
             all_files.add(os.path.join(root, f))
     interesting_source_files = set()

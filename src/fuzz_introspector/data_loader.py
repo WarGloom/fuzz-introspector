@@ -44,7 +44,7 @@ def read_fuzzer_data_file_to_profile(
     if cfg_file.endswith(".txt"):
         target_data_f = "/".join(cfg_file.split("/")[:-1]) + "/report"
 
-    logging.info("target data f: %s" % (target_data_f))
+    logger.info("target data f: %s", target_data_f)
     if not os.path.isfile(target_data_f) and not os.path.isfile(target_data_f +
                                                                 ".yaml"):
         logger.info("R1")
@@ -166,7 +166,7 @@ def load_all_profiles(
         for v in return_dict.values():
             profiles.append(v)
     else:
-        return_dict_gen: Dict[Any, Any] = dict()
+        return_dict_gen: Dict[Any, Any] = {}
         for data_file in data_files:
             _load_profile(data_file, language, return_dict_gen, None)
         for v in return_dict_gen.values():
