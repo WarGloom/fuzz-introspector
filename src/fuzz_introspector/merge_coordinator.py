@@ -41,6 +41,7 @@ class MergeCoordinator:
         self.analysis_results: Dict[str, Dict[str, Any]] = {}
         self.conflicts: List[Dict[str, Any]] = []
         self.errors: List[Dict[str, Any]] = []
+        self._table_id_set: set[str] = set()
 
     def add_analysis_result(self, analysis_name: str,
                             result: Dict[str, Any]) -> None:
@@ -151,11 +152,17 @@ class MergeCoordinator:
         # Filter analyses that actually ran
         analyses_in_results = set(self.analysis_results.keys())
 
-        canonical_order = []
+        canonical_order: List[str] = []
         for analysis_cls in all_analyses:
             analysis_name = analysis_cls.get_name()
             if analysis_name in analyses_in_results:
                 canonical_order.append(analysis_name)
+
+        remaining = [
+            analysis_name for analysis_name in self.analysis_results.keys()
+            if analysis_name not in canonical_order
+        ]
+        canonical_order.extend(remaining)
 
         return canonical_order
 
@@ -192,7 +199,15 @@ class MergeCoordinator:
         if "table_ids" in result:
             if "table_ids" not in self.merged_content:
                 self.merged_content["table_ids"] = []
-            self.merged_content["table_ids"].extend(result["table_ids"])
+            for table_id in result["table_ids"]:
+                if table_id in self._table_id_set:
+                    self.conflicts.append({
+                        "type": "table_id_conflict",
+                        "table_id": table_id,
+                    })
+                    continue
+                self._table_id_set.add(table_id)
+                self.merged_content["table_ids"].append(table_id)
 
     def _merge_json_upsert(self, intent: Dict[str, Any]) -> None:
         """Merge a JSON upsert intent."""
@@ -350,8 +365,8 @@ class MergeCoordinator:
                     continue
                 calculated_sha256 = hashlib.sha256(content).hexdigest()
                 if calculated_sha256 != content_sha256:
-                    self.errors.append({
-                        "error": "Content hash mismatch for artifact intent",
+                    self.conflicts.append({
+                        "type": "artifact_content_hash_mismatch",
                         "relative_path": relative_path,
                         "expected_sha256": content_sha256,
                         "actual_sha256": calculated_sha256,
@@ -371,8 +386,8 @@ class MergeCoordinator:
                     content = file_handle.read()
                 calculated_sha256 = hashlib.sha256(content).hexdigest()
                 if calculated_sha256 != content_sha256:
-                    self.errors.append({
-                        "error": "Content hash mismatch for temp artifact",
+                    self.conflicts.append({
+                        "type": "artifact_content_hash_mismatch",
                         "relative_path": relative_path,
                         "expected_sha256": content_sha256,
                         "actual_sha256": calculated_sha256,

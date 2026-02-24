@@ -175,7 +175,9 @@ def _validate_artifact_write(intent: Dict[str, Any]) -> None:
         )
 
 
-def validate_path_safety(relative_path: str, base_dir: str) -> None:
+def validate_path_safety(relative_path: str,
+                         base_dir: str,
+                         resolve_symlinks: bool = True) -> None:
     """Validate that a relative path is safe to write within a base directory."""
     # Check for path traversal attempts
     if ".." in relative_path:
@@ -185,11 +187,19 @@ def validate_path_safety(relative_path: str, base_dir: str) -> None:
     if os.path.isabs(relative_path):
         raise PathSafetyError(f"Absolute path not allowed: {relative_path}")
 
-    # Check for symlink escapes
+    # Check for path escapes (including symlink traversal)
+    base_norm = os.path.normpath(base_dir)
     full_path = os.path.normpath(os.path.join(base_dir, relative_path))
-    if not full_path.startswith(os.path.normpath(base_dir) + os.sep):
+    if not full_path.startswith(base_norm + os.sep):
         raise PathSafetyError(
             f"Path escapes base directory: {relative_path} -> {full_path}")
+
+    if resolve_symlinks:
+        base_real = os.path.realpath(base_dir)
+        full_real = os.path.realpath(full_path)
+        if not full_real.startswith(base_real + os.sep):
+            raise PathSafetyError("Path escapes base directory via symlink: "
+                                  f"{relative_path} -> {full_real}")
 
     # Check for null bytes
     if "\0" in relative_path:
@@ -227,7 +237,7 @@ def create_artifact_write_intent(relative_path: str, content: Union[str,
     content_sha256 = calculate_sha256(content)
 
     # Validate path safety
-    validate_path_safety(relative_path, base_dir)
+    validate_path_safety(relative_path, base_dir, resolve_symlinks=False)
 
     intent = {
         "type":
@@ -260,7 +270,7 @@ def create_artifact_write_intent_from_file(relative_path: str,
     content_sha256 = calculate_sha256(content)
 
     # Validate path safety
-    validate_path_safety(relative_path, base_dir)
+    validate_path_safety(relative_path, base_dir, resolve_symlinks=False)
 
     intent = {
         "type": "artifact_write",
