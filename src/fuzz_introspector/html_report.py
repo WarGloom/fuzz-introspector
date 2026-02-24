@@ -35,9 +35,11 @@ from fuzz_introspector import (
     html_constants,
     html_helpers,
     json_report,
+    merge_coordinator,
     styling,
     utils,
 )
+from fuzz_introspector.exceptions import FuzzIntrospectorError
 
 from fuzz_introspector.datatypes import project_profile, fuzzer_profile
 
@@ -787,6 +789,9 @@ def create_section_optional_analyses(
     combined_analyses = analyses_to_run + [
         x for x in output_json if x not in analyses_to_run
     ]
+
+    # Serial compatibility mode - process one analysis at a time
+    coordinator = merge_coordinator.MergeCoordinator(out_dir)
     for analysis_interface in analysis.get_all_analyses():
         analysis_name = analysis_interface.get_name()
         if analysis_name in combined_analyses:
@@ -800,6 +805,7 @@ def create_section_optional_analyses(
 
             introspection_proj.optional_analyses.append(analysis_instance)
 
+            # Process analysis in serial mode (worker count = 1)
             html_string = analysis_instance.analysis_func(
                 table_of_contents,
                 tables,
@@ -811,10 +817,28 @@ def create_section_optional_analyses(
                 out_dir,
             )
 
-            # Only add the HTML content if it's an analysis that we want
-            # the non-json output from.
-            if analysis_name in analyses_to_run:
-                html_report_core += html_string
+            worker_result = merge_coordinator.AnalysisWorkerResult(
+                analysis_name=analysis_name,
+                status="success",
+                display_html=analysis_name in analyses_to_run,
+                html_fragment=html_string,
+                conclusions=[],
+                table_specs=[],
+                merge_intents=[],
+                diagnostics=[],
+            )
+            coordinator.add_analysis_result(analysis_name,
+                                            worker_result.to_envelope())
+
+    success, merged = coordinator.merge_results()
+    if not success:
+        logger.error("Serial compatibility merge failed: %s", merged)
+        raise FuzzIntrospectorError(
+            "Serial compatibility merge failed; see logs for details")
+
+    for fragment in merged.get("html_fragments", []):
+        html_report_core += fragment["html"]
+
     html_report_core += "</div>"  # .collapsible
     html_report_core += "</div>"  # report box
     return html_report_core
