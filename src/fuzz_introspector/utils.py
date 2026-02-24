@@ -449,10 +449,10 @@ def _load_go_coverage_options(report_path: str) -> list[tuple[str, str]]:
 
     for option in select_element.find_all("option"):
         file_key = option.get("value")
-        file_name = option.text.strip().split(" ")[0]
+        file_name = str(option.text).strip().split(" ")[0]
         if file_key is None:
             continue
-        options.append((file_name, file_key))
+        options.append((file_name, str(file_key)))
 
     _GO_COVERAGE_OPTIONS_CACHE[report_path] = {
         "cache_key": cache_key,
