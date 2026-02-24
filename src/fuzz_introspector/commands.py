@@ -33,7 +33,8 @@ logger = logging.getLogger(name=__name__)
 
 
 def load_report_exclude_patterns_from_config(
-    config_path: str | None = None, ) -> list[str]:
+    config_path: str | None = None,
+) -> list[str]:
     """Loads FILES_TO_AVOID patterns for report extraction.
 
     Returns an empty list if no config path is set or the config file
@@ -64,12 +65,12 @@ def load_report_exclude_patterns_from_config(
                 if in_files_to_avoid:
                     patterns.append(line)
     except OSError as err:
-        logger.warning("Could not read FUZZ_INTROSPECTOR_CONFIG '%s': %s",
-                       config_path, err)
+        logger.warning(
+            "Could not read FUZZ_INTROSPECTOR_CONFIG '%s': %s", config_path, err
+        )
         return []
 
-    logger.info("Loaded %d report exclusion patterns from config",
-                len(patterns))
+    logger.info("Loaded %d report exclusion patterns from config", len(patterns))
     return patterns
 
 
@@ -154,8 +155,7 @@ def analyse_end_to_end(
     else:
         language = arg_language
 
-    correlation_file = os.path.join(out_dir,
-                                    "exe_to_fuzz_introspector_logs.yaml")
+    correlation_file = os.path.join(out_dir, "exe_to_fuzz_introspector_logs.yaml")
     if not os.path.isfile(correlation_file):
         correlation_file = ""
 
@@ -209,10 +209,12 @@ def run_analysis_on_dir(
             if analysis_interface.get_name() not in analyses_to_run:
                 analyses_to_run.append(analysis_interface.get_name())
 
-    introspection_proj = analysis.IntrospectionProject(language, target_folder,
-                                                       coverage_url)
-    introspection_proj.load_data_files(parallelise, correlation_file, out_dir,
-                                       harness_lists)
+    introspection_proj = analysis.IntrospectionProject(
+        language, target_folder, coverage_url
+    )
+    introspection_proj.load_data_files(
+        parallelise, correlation_file, out_dir, harness_lists
+    )
 
     logger.info("Analyses to run: %s", str(analyses_to_run))
     logger.info("[+] Creating HTML report")
@@ -243,9 +245,9 @@ def light_analysis(args) -> int:
     if not os.path.isdir(light_dir):
         os.makedirs(light_dir, exist_ok=True)
 
-    all_tests = analysis.extract_tests_from_directories({src_dir},
-                                                        args.language,
-                                                        inspector_dir)
+    all_tests = analysis.extract_tests_from_directories(
+        {src_dir}, args.language, inspector_dir
+    )
 
     with open(os.path.join(light_dir, "all_tests.json"), "w") as f:
         f.write(json.dumps(list(all_tests)))
@@ -331,7 +333,6 @@ def analyse(args) -> int:
         only_interesting_functions = args.only_interesting_functions
         only_easy_fuzz_params = args.only_easy_fuzz_params
         max_functions = args.max_functions
-        min_complexity = args.min_complexity
 
         target_analyser.set_flags(
             exclude_static_functions,
@@ -341,13 +342,12 @@ def analyse(args) -> int:
             only_easy_fuzz_params,
         )
         target_analyser.set_max_functions(max_functions)
-        target_analyser.set_min_complexity(min_complexity)
-        target_analyser.set_introspection_project(introspection_proj)
     elif target_analyser.get_name() == "FrontendAnalyser":
         target_analyser.set_base_information(args.target_dir, language)
 
     # Run the analyser
-    target_analyser.standalone_analysis(introspection_proj.proj_profile,
-                                        introspection_proj.profiles, out_dir)
+    target_analyser.standalone_analysis(
+        introspection_proj.proj_profile, introspection_proj.profiles, out_dir
+    )
 
     return constants.APP_EXIT_SUCCESS
