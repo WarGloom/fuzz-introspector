@@ -14,12 +14,16 @@
 """Merge coordinator for analysis parallelization."""
 
 import hashlib
+import json
 import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
+from fuzz_introspector import constants
 from fuzz_introspector.merge_intents import (
     MergeIntentValidationError,
+    PathSafetyError,
+    validate_path_safety,
     validate_merge_intent,
 )
 
@@ -31,11 +35,12 @@ class MergeCoordinator:
 
     def __init__(self, out_dir: str):
         self.out_dir = out_dir
-        self.merged_content = {}
-        self.merged_artifacts = {}
-        self.analysis_results = {}
-        self.conflicts = []
-        self.errors = []
+        self.merged_content: Dict[str, Any] = {}
+        self.merged_json_report: Dict[str, Any] = {}
+        self.merged_artifacts: Dict[str, str] = {}
+        self.analysis_results: Dict[str, Dict[str, Any]] = {}
+        self.conflicts: List[Dict[str, Any]] = []
+        self.errors: List[Dict[str, Any]] = []
 
     def add_analysis_result(self, analysis_name: str,
                             result: Dict[str, Any]) -> None:
@@ -125,6 +130,18 @@ class MergeCoordinator:
         # Write merged artifacts
         self._write_merged_artifacts()
 
+        if self.conflicts:
+            return False, {"conflicts": self.conflicts, "errors": self.errors}
+
+        # Write merged summary.json updates
+        self._write_merged_summary_report()
+
+        if self.errors:
+            return False, {"errors": self.errors}
+
+        if self.conflicts:
+            return False, {"conflicts": self.conflicts, "errors": self.errors}
+
         return True, self.merged_content
 
     def _get_canonical_order(self) -> List[str]:
@@ -173,7 +190,7 @@ class MergeCoordinator:
         value = intent["value"]
 
         # Navigate to target location
-        current = self.merged_content
+        current = self.merged_json_report
         parts = target_path.split(".")
 
         for i, part in enumerate(parts):
@@ -202,6 +219,65 @@ class MergeCoordinator:
         for intent in self._get_all_artifact_intents():
             self._write_artifact(intent)
 
+    def _write_merged_summary_report(self) -> None:
+        """Apply merged json_upsert intents to summary.json."""
+        if not self.merged_json_report:
+            return
+
+        if not constants.should_dump_files:
+            return
+
+        summary_path = os.path.join(self.out_dir, constants.SUMMARY_FILE)
+        if os.path.isfile(summary_path):
+            try:
+                with open(summary_path, "r") as summary_fd:
+                    summary_contents = json.load(summary_fd)
+            except Exception as exc:
+                self.errors.append({
+                    "error": f"Failed to read summary.json: {exc}",
+                    "path": summary_path,
+                })
+                return
+        else:
+            summary_contents = {}
+
+        analyses_updates = self.merged_json_report.get("analyses")
+        if analyses_updates:
+            summary_contents.setdefault("analyses", {})
+            self._merge_nested_dict(summary_contents["analyses"],
+                                    analyses_updates)
+
+        project_updates = self.merged_json_report.get("project")
+        if project_updates:
+            summary_contents.setdefault(constants.JSON_REPORT_KEY_PROJECT, {})
+            self._merge_nested_dict(
+                summary_contents[constants.JSON_REPORT_KEY_PROJECT],
+                project_updates)
+
+        fuzzer_updates = self.merged_json_report.get("fuzzers")
+        if fuzzer_updates:
+            for fuzzer_name, updates in fuzzer_updates.items():
+                summary_contents.setdefault(fuzzer_name, {})
+                self._merge_nested_dict(summary_contents[fuzzer_name], updates)
+
+        try:
+            with open(summary_path, "w") as summary_fd:
+                json.dump(summary_contents, summary_fd)
+        except Exception as exc:
+            self.errors.append({
+                "error": f"Failed to write summary.json: {exc}",
+                "path": summary_path,
+            })
+
+    def _merge_nested_dict(self, target: Dict[str, Any],
+                           updates: Dict[str, Any]) -> None:
+        """Recursively merge updates into target dict."""
+        for key, value in updates.items():
+            if isinstance(value, dict) and isinstance(target.get(key), dict):
+                self._merge_nested_dict(target[key], value)
+            else:
+                target[key] = value
+
     def _get_all_artifact_intents(self) -> List[Dict[str, Any]]:
         """Get all artifact intents from all analysis results."""
         artifact_intents = []
@@ -216,6 +292,16 @@ class MergeCoordinator:
         relative_path = intent["relative_path"]
         content_sha256 = intent["content_sha256"]
 
+        try:
+            validate_path_safety(relative_path, self.out_dir)
+        except PathSafetyError as exc:
+            self.conflicts.append({
+                "type": "artifact_path_unsafe",
+                "relative_path": relative_path,
+                "error": str(exc),
+            })
+            return
+
         # Check for conflicts
         if relative_path in self.merged_artifacts:
             existing_sha256 = self.merged_artifacts[relative_path]
@@ -228,8 +314,19 @@ class MergeCoordinator:
                 })
                 return
 
-        # Write the artifact
         full_path = os.path.join(self.out_dir, relative_path)
+        if os.path.isfile(full_path):
+            existing_sha256 = self._hash_existing_file(full_path)
+            if existing_sha256 != content_sha256:
+                self.conflicts.append({
+                    "type": "artifact_conflict",
+                    "relative_path": relative_path,
+                    "existing_sha256": existing_sha256,
+                    "new_sha256": content_sha256,
+                })
+                return
+
+        # Write the artifact
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
 
         if "content_b64" in intent:
@@ -259,6 +356,11 @@ class MergeCoordinator:
         # Record the artifact
         self.merged_artifacts[relative_path] = content_sha256
 
+    def _hash_existing_file(self, file_path: str) -> str:
+        """Calculate SHA256 hash for existing file content."""
+        with open(file_path, "rb") as file_handle:
+            return hashlib.sha256(file_handle.read()).hexdigest()
+
 
 class AnalysisWorkerResult:
     """Dataclass for analysis worker results."""
@@ -269,10 +371,10 @@ class AnalysisWorkerResult:
         status: str,
         display_html: bool,
         html_fragment: str = "",
-        conclusions: List[Dict[str, Any]] = None,
-        table_specs: List[Dict[str, Any]] = None,
-        merge_intents: List[Dict[str, Any]] = None,
-        diagnostics: List[str] = None,
+        conclusions: Optional[List[Dict[str, Any]]] = None,
+        table_specs: Optional[List[Dict[str, Any]]] = None,
+        merge_intents: Optional[List[Dict[str, Any]]] = None,
+        diagnostics: Optional[List[str]] = None,
         duration_ms: Optional[int] = None,
         worker_pid: Optional[int] = None,
         retry_count: Optional[int] = None,

@@ -36,6 +36,7 @@ from fuzz_introspector import (
     html_helpers,
     json_report,
     merge_coordinator,
+    merge_intents,
     styling,
     utils,
 )
@@ -806,16 +807,18 @@ def create_section_optional_analyses(
             introspection_proj.optional_analyses.append(analysis_instance)
 
             # Process analysis in serial mode (worker count = 1)
-            html_string = analysis_instance.analysis_func(
-                table_of_contents,
-                tables,
-                introspection_proj.proj_profile,
-                introspection_proj.profiles,
-                basefolder,
-                coverage_url,
-                conclusions,
-                out_dir,
-            )
+            intent_collector = merge_intents.MergeIntentCollector()
+            with merge_intents.merge_intent_context(intent_collector):
+                html_string = analysis_instance.analysis_func(
+                    table_of_contents,
+                    tables,
+                    introspection_proj.proj_profile,
+                    introspection_proj.profiles,
+                    basefolder,
+                    coverage_url,
+                    conclusions,
+                    out_dir,
+                )
 
             worker_result = merge_coordinator.AnalysisWorkerResult(
                 analysis_name=analysis_name,
@@ -824,7 +827,7 @@ def create_section_optional_analyses(
                 html_fragment=html_string,
                 conclusions=[],
                 table_specs=[],
-                merge_intents=[],
+                merge_intents=intent_collector.get_intents(),
                 diagnostics=[],
             )
             coordinator.add_analysis_result(analysis_name,

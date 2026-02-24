@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Module for creating JSON reports"""
+
 import os
 import json
 import logging
 
-from typing import (Any, Dict)
+from typing import Any, Dict
 
-from fuzz_introspector import constants
+from fuzz_introspector import constants, merge_intents
 
 logger = logging.getLogger(name=__name__)
 
@@ -43,7 +44,7 @@ def _overwrite_report_with_dict(new_dict: Dict[Any, Any], out_dir) -> None:
         return
 
     # Write back the json file
-    with open(os.path.join(out_dir, constants.SUMMARY_FILE), 'w') as report_fd:
+    with open(os.path.join(out_dir, constants.SUMMARY_FILE), "w") as report_fd:
         json.dump(dict(new_dict), report_fd)
 
 
@@ -55,10 +56,20 @@ def add_analysis_dict_to_json_report(analysis_name: str,
     Will overwrite the existing key/value pair for the analysis if it already
     exists as an analysis in the report.
     """
+    if not constants.should_dump_files:
+        return
+
+    collector = merge_intents.get_active_merge_intent_collector()
+    if collector is not None:
+        intent = merge_intents.create_json_upsert_intent(
+            f"analyses.{analysis_name}", dict_to_add)
+        collector.add_intent(intent)
+        return
+
     contents = _get_summary_dict(out_dir)
-    if 'analyses' not in contents:
-        contents['analyses'] = {}
-    contents['analyses'][analysis_name] = dict_to_add
+    if "analyses" not in contents:
+        contents["analyses"] = {}
+    contents["analyses"][analysis_name] = dict_to_add
 
     _overwrite_report_with_dict(contents, out_dir)
 
@@ -80,6 +91,16 @@ def add_fuzzer_key_value_to_report(fuzzer_name: str, key: str, value: Any,
     Will overwrite the existing key/value pair under the fuzzer if it already
     exists in the report.
     """
+    if not constants.should_dump_files:
+        return
+
+    collector = merge_intents.get_active_merge_intent_collector()
+    if collector is not None:
+        intent = merge_intents.create_json_upsert_intent(
+            f"fuzzers.{fuzzer_name}.{key}", value)
+        collector.add_intent(intent)
+        return
+
     contents = _get_summary_dict(out_dir)
 
     # Update the report accordingly
@@ -96,6 +117,16 @@ def add_project_key_value_to_report(key: str, value: Any, out_dir) -> None:
     Will overwrite the existing key/value pair if the key already exists in
     the report.
     """
+    if not constants.should_dump_files:
+        return
+
+    collector = merge_intents.get_active_merge_intent_collector()
+    if collector is not None:
+        intent = merge_intents.create_json_upsert_intent(
+            f"project.{key}", value)
+        collector.add_intent(intent)
+        return
+
     contents = _get_summary_dict(out_dir)
 
     # Update the report accordingly
@@ -107,13 +138,39 @@ def add_project_key_value_to_report(key: str, value: Any, out_dir) -> None:
 
 
 def create_all_fi_functions_json(functions_dict, out_dir) -> None:
-    with open(os.path.join(out_dir, constants.ALL_FUNCTIONS_JSON), 'w') as f:
+    if not constants.should_dump_files:
+        return
+
+    collector = merge_intents.get_active_merge_intent_collector()
+    if collector is not None:
+        intent = merge_intents.create_artifact_write_intent(
+            constants.ALL_FUNCTIONS_JSON,
+            json.dumps(functions_dict),
+            out_dir,
+        )
+        collector.add_intent(intent)
+        return
+
+    with open(os.path.join(out_dir, constants.ALL_FUNCTIONS_JSON), "w") as f:
         json.dump(functions_dict, f)
 
 
 def create_all_jvm_constructor_json(functions_dict, out_dir) -> None:
+    if not constants.should_dump_files:
+        return
+
+    collector = merge_intents.get_active_merge_intent_collector()
+    if collector is not None:
+        intent = merge_intents.create_artifact_write_intent(
+            constants.ALL_JVM_CONSTRUCTOR_JSON,
+            json.dumps(functions_dict),
+            out_dir,
+        )
+        collector.add_intent(intent)
+        return
+
     with open(os.path.join(out_dir, constants.ALL_JVM_CONSTRUCTOR_JSON),
-              'w') as f:
+              "w") as f:
         json.dump(functions_dict, f)
 
 
@@ -130,5 +187,5 @@ def add_branch_blocker_key_value_to_report(profile_identifier, key,
 
     existing_contents[profile_identifier] = branch_blockers_list
     with open(os.path.join(out_dir, constants.BRANCH_BLOCKERS_FILE),
-              'w') as branch_fd:
+              "w") as branch_fd:
         json.dump(existing_contents, branch_fd)

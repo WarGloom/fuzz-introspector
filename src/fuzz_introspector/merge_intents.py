@@ -13,13 +13,12 @@
 # limitations under the License.
 """Merge intent types and path safety utilities for analysis parallelization."""
 
-import json
+import contextlib
+import contextvars
+import hashlib
 import os
 import re
-import hashlib
-from typing import Any, Dict, List, Literal, Union
-
-from fuzz_introspector import constants
+from typing import Any, Dict, List, Optional, Union
 
 
 class MergeIntentValidationError(Exception):
@@ -32,6 +31,42 @@ class PathSafetyError(Exception):
     """Raised when a path safety check fails."""
 
     pass
+
+
+class MergeIntentCollector:
+    """Collects merge intents produced during analysis execution."""
+
+    def __init__(self) -> None:
+        self._intents: List[Dict[str, Any]] = []
+
+    def add_intent(self, intent: Dict[str, Any]) -> None:
+        """Validate and store a merge intent."""
+        validate_merge_intent(intent)
+        self._intents.append(intent)
+
+    def get_intents(self) -> List[Dict[str, Any]]:
+        """Return collected intents."""
+        return list(self._intents)
+
+
+_MERGE_INTENT_COLLECTOR: contextvars.ContextVar[
+    Optional[MergeIntentCollector]] = (contextvars.ContextVar(
+        "merge_intent_collector", default=None))
+
+
+def get_active_merge_intent_collector() -> Optional[MergeIntentCollector]:
+    """Return the active merge intent collector, if set."""
+    return _MERGE_INTENT_COLLECTOR.get()
+
+
+@contextlib.contextmanager
+def merge_intent_context(collector: MergeIntentCollector):
+    """Context manager that activates a merge intent collector."""
+    token = _MERGE_INTENT_COLLECTOR.set(collector)
+    try:
+        yield collector
+    finally:
+        _MERGE_INTENT_COLLECTOR.reset(token)
 
 
 def validate_merge_intent(intent: Dict[str, Any]) -> None:
@@ -150,7 +185,7 @@ def validate_path_safety(relative_path: str, base_dir: str) -> None:
         raise PathSafetyError(f"Null byte detected in path: {relative_path}")
 
     # Check for suspicious characters
-    if re.search(r"[<>:\"/\\|?*]", relative_path):
+    if re.search(r"[<>:\"\\|?*]", relative_path):
         raise PathSafetyError(f"Invalid characters in path: {relative_path}")
 
 
