@@ -181,8 +181,18 @@ class MergeCoordinator:
                 "analysis_name":
                 analysis_name,
                 "html":
-                result["html_fragment"]
+                result["html_fragment"],
             })
+
+        if "toc_entries" in result:
+            if "toc_entries" not in self.merged_content:
+                self.merged_content["toc_entries"] = []
+            self.merged_content["toc_entries"].extend(result["toc_entries"])
+
+        if "table_ids" in result:
+            if "table_ids" not in self.merged_content:
+                self.merged_content["table_ids"] = []
+            self.merged_content["table_ids"].extend(result["table_ids"])
 
     def _merge_json_upsert(self, intent: Dict[str, Any]) -> None:
         """Merge a JSON upsert intent."""
@@ -371,7 +381,7 @@ class AnalysisWorkerResult:
         status: str,
         display_html: bool,
         html_fragment: str = "",
-        conclusions: Optional[List[Dict[str, Any]]] = None,
+        conclusions: Optional[List[Any]] = None,
         table_specs: Optional[List[Dict[str, Any]]] = None,
         merge_intents: Optional[List[Dict[str, Any]]] = None,
         diagnostics: Optional[List[str]] = None,

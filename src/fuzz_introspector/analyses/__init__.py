@@ -48,6 +48,17 @@ all_analyses: list[type[analysis.AnalysisInterface]] = [
     frontend_analyser.FrontendAnalyser,
 ]
 
+# Analyses vetted for PR6 parallel worker execution.
+parallel_safe_analyses: list[type[analysis.AnalysisInterface]] = [
+    runtime_coverage_analysis.RuntimeCoverageAnalysis,
+    driver_synthesizer.DriverSynthesizer,
+    bug_digestor.BugDigestor,
+    filepath_analyser.FilePathAnalysis,
+    function_call_analyser.ThirdPartyAPICoverageAnalyser,
+    metadata.MetadataAnalysis,
+    annotated_cfg.FuzzAnnotatedCFG,
+]
+
 # This is the list of analyses that are meant to run
 # directly from CLI without the need to generate HTML reports
 standalone_analyses: list[type[analysis.AnalysisInterface]] = [

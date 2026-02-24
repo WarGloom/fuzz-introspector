@@ -7,16 +7,133 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, List
 
 import pytest
 
 from fuzz_introspector import analysis
+from fuzz_introspector import analyses as analyses_registry
 from fuzz_introspector import constants
 from fuzz_introspector import html_helpers
+from fuzz_introspector import json_report
 from fuzz_introspector import merge_coordinator
 from fuzz_introspector import merge_intents
 from fuzz_introspector.html_report import create_section_optional_analyses
+
+PARALLEL_EXECUTION_LOG: List[tuple[str, int]] = []
+
+
+class StubParallelAnalysisOne(analysis.AnalysisInterface):
+    name = "StubParallelAnalysisOne"
+
+    def __init__(self) -> None:
+        self.json_string_result = "{}"
+
+    @classmethod
+    def get_name(cls):
+        return cls.name
+
+    def get_json_string_result(self):
+        return self.json_string_result
+
+    def set_json_string_result(self, json_string):
+        self.json_string_result = json_string
+
+    def analysis_func(
+        self,
+        table_of_contents: html_helpers.HtmlTableOfContents,
+        tables: List[str],
+        proj_profile: Any,
+        profiles: List[Any],
+        basefolder: str,
+        coverage_url: str,
+        conclusions: List[html_helpers.HTMLConclusion],
+        out_dir: str,
+    ) -> str:
+        table_of_contents.add_entry("Stub One", "stub-one",
+                                    html_helpers.HTML_HEADING.H2)
+        tables.append(f"stubTable{len(tables)}")
+        conclusions.append(
+            html_helpers.HTMLConclusion(9, "Stub One", "Parallel stub one"))
+        json_report.add_analysis_dict_to_json_report(self.get_name(),
+                                                     {"value": "one"}, out_dir)
+        return "<div>Stub One</div>"
+
+
+class StubParallelAnalysisTwo(analysis.AnalysisInterface):
+    name = "StubParallelAnalysisTwo"
+
+    def __init__(self) -> None:
+        self.json_string_result = "{}"
+
+    @classmethod
+    def get_name(cls):
+        return cls.name
+
+    def get_json_string_result(self):
+        return self.json_string_result
+
+    def set_json_string_result(self, json_string):
+        self.json_string_result = json_string
+
+    def analysis_func(
+        self,
+        table_of_contents: html_helpers.HtmlTableOfContents,
+        tables: List[str],
+        proj_profile: Any,
+        profiles: List[Any],
+        basefolder: str,
+        coverage_url: str,
+        conclusions: List[html_helpers.HTMLConclusion],
+        out_dir: str,
+    ) -> str:
+        table_of_contents.add_entry("Stub Two", "stub-two",
+                                    html_helpers.HTML_HEADING.H2)
+        tables.append(f"stubTable{len(tables)}")
+        conclusions.append(
+            html_helpers.HTMLConclusion(8, "Stub Two", "Parallel stub two"))
+        json_report.add_analysis_dict_to_json_report(self.get_name(),
+                                                     {"value": "two"}, out_dir)
+        return "<div>Stub Two</div>"
+
+
+class StubSerialOnlyAnalysis(analysis.AnalysisInterface):
+    name = "StubSerialOnlyAnalysis"
+
+    def __init__(self) -> None:
+        self.json_string_result = "{}"
+
+    @classmethod
+    def get_name(cls):
+        return cls.name
+
+    def get_json_string_result(self):
+        return self.json_string_result
+
+    def set_json_string_result(self, json_string):
+        self.json_string_result = json_string
+
+    def analysis_func(
+        self,
+        table_of_contents: html_helpers.HtmlTableOfContents,
+        tables: List[str],
+        proj_profile: Any,
+        profiles: List[Any],
+        basefolder: str,
+        coverage_url: str,
+        conclusions: List[html_helpers.HTMLConclusion],
+        out_dir: str,
+    ) -> str:
+        PARALLEL_EXECUTION_LOG.append((self.get_name(), os.getpid()))
+        table_of_contents.add_entry("Stub Serial", "stub-serial",
+                                    html_helpers.HTML_HEADING.H2)
+        tables.append(f"stubTable{len(tables)}")
+        conclusions.append(
+            html_helpers.HTMLConclusion(7, "Stub Serial", "Serial stub"))
+        json_report.add_analysis_dict_to_json_report(self.get_name(),
+                                                     {"value": "serial"},
+                                                     out_dir)
+        return "<div>Stub Serial</div>"
 
 
 class TestPR6SerialCompatibility:
@@ -203,6 +320,113 @@ class TestPR6JSONDeterminism:
         assert json_str1 == json_str3, (
             "JSON serialization must be deterministic within same Python version"
         )
+
+
+class TestPR6ParallelExecution:
+    """Tests for limited PR6 parallel execution behind feature flag."""
+
+    @pytest.fixture
+    def parallel_test_data(self, tmp_path: Path) -> Dict[str, Any]:
+        proj = analysis.IntrospectionProject(constants.LANGUAGES.CPP,
+                                             str(tmp_path), "")
+        proj.proj_profile = {
+            "project_name": "parallel-test",
+            "fuzzers": [{
+                "id": "fuzzer1"
+            }],
+        }
+        proj.profiles = []
+        proj.optional_analyses = []
+
+        out_dir = tmp_path / "output"
+        os.makedirs(out_dir, exist_ok=True)
+        return {
+            "table_of_contents": html_helpers.HtmlTableOfContents(),
+            "tables": [],
+            "introspection_proj": proj,
+            "basefolder": str(tmp_path),
+            "coverage_url": "",
+            "conclusions": [],
+            "dump_files": True,
+            "out_dir": str(out_dir),
+        }
+
+    def test_parallel_workers_vetted_only(
+        self,
+        parallel_test_data: Dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        PARALLEL_EXECUTION_LOG.clear()
+        monkeypatch.setenv("FI_PR6_PARALLEL_ANALYSIS", "1")
+        monkeypatch.setenv("FI_PR6_ANALYSIS_WORKERS", "2")
+        monkeypatch.setattr(
+            analysis,
+            "get_all_analyses",
+            lambda: [
+                StubParallelAnalysisOne,
+                StubSerialOnlyAnalysis,
+                StubParallelAnalysisTwo,
+            ],
+        )
+        monkeypatch.setattr(
+            analyses_registry,
+            "all_analyses",
+            [
+                StubParallelAnalysisOne,
+                StubSerialOnlyAnalysis,
+                StubParallelAnalysisTwo,
+            ],
+        )
+        monkeypatch.setattr(
+            analyses_registry,
+            "parallel_safe_analyses",
+            [StubParallelAnalysisOne, StubParallelAnalysisTwo],
+        )
+
+        html_output = create_section_optional_analyses(
+            parallel_test_data["table_of_contents"],
+            [
+                StubParallelAnalysisOne.get_name(),
+                StubSerialOnlyAnalysis.get_name(),
+                StubParallelAnalysisTwo.get_name(),
+            ],
+            [],
+            parallel_test_data["tables"],
+            parallel_test_data["introspection_proj"],
+            parallel_test_data["basefolder"],
+            parallel_test_data["coverage_url"],
+            parallel_test_data["conclusions"],
+            parallel_test_data["dump_files"],
+            parallel_test_data["out_dir"],
+        )
+
+        assert "Stub One" in html_output
+        assert "Stub Two" in html_output
+        assert "Stub Serial" in html_output
+
+        toc_titles = [
+            entry.entry_title
+            for entry in parallel_test_data["table_of_contents"].entries
+        ]
+        assert "Stub One" in toc_titles
+        assert "Stub Two" in toc_titles
+        assert "Stub Serial" in toc_titles
+        assert len(parallel_test_data["tables"]) == 3
+
+        assert PARALLEL_EXECUTION_LOG == [(StubSerialOnlyAnalysis.get_name(),
+                                           os.getpid())]
+
+        summary_path = os.path.join(parallel_test_data["out_dir"],
+                                    constants.SUMMARY_FILE)
+        with open(summary_path, "r") as summary_file:
+            summary_contents = json.load(summary_file)
+        assert "analyses" in summary_contents
+        assert StubParallelAnalysisOne.get_name(
+        ) in summary_contents["analyses"]
+        assert StubParallelAnalysisTwo.get_name(
+        ) in summary_contents["analyses"]
+        assert StubSerialOnlyAnalysis.get_name(
+        ) in summary_contents["analyses"]
 
 
 class TestPR6RetryConflictPathSafety:
