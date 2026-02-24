@@ -115,30 +115,32 @@ fi
 # Step 7: Build the base-builder image
 echo "Building base-builder:${IMAGE_TAG} image..."
 cd "$OSS_FUZZ_DIR"
-$CONTAINER_RUNTIME build --no-cache -t "gcr.io/oss-fuzz-base/base-builder:${IMAGE_TAG}" infra/base-images/base-builder
+# $CONTAINER_RUNTIME build --no-cache -t "gcr.io/oss-fuzz-base/base-builder:${IMAGE_TAG}" infra/base-images/base-builder
+$CONTAINER_RUNTIME build -t "gcr.io/oss-fuzz-base/base-builder:${IMAGE_TAG}" infra/base-images/base-builder
 
 # Also tag as latest
 $CONTAINER_RUNTIME tag "gcr.io/oss-fuzz-base/base-builder:${IMAGE_TAG}" "gcr.io/oss-fuzz-base/base-builder:latest"
 
 # Step 8: Build other base-builder images (optional, for other languages)
-read -p "Build additional language images? (y/N) " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-	echo "Building base-builder-python image..."
-	$CONTAINER_RUNTIME build --no-cache -t "gcr.io/oss-fuzz-base/base-builder-python:${IMAGE_TAG}" infra/base-images/base-builder-python
+# read -p "Build additional language images? (y/N) " -n 1 -r
+# echo
+# if [[ $REPLY =~ ^[Yy]$ ]]; then
+# 	echo "Building base-builder-python image..."
+# 	$CONTAINER_RUNTIME build --no-cache -t "gcr.io/oss-fuzz-base/base-builder-python:${IMAGE_TAG}" infra/base-images/base-builder-python
 
-	echo "Building base-builder-jvm image..."
-	$CONTAINER_RUNTIME build --no-cache -t "gcr.io/oss-fuzz-base/base-builder-jvm:${IMAGE_TAG}" infra/base-images/base-builder-jvm
+# 	echo "Building base-builder-jvm image..."
+# 	$CONTAINER_RUNTIME build --no-cache -t "gcr.io/oss-fuzz-base/base-builder-jvm:${IMAGE_TAG}" infra/base-images/base-builder-jvm
 
-	echo "Building base-builder-rust image..."
-	$CONTAINER_RUNTIME build --no-cache -t "gcr.io/oss-fuzz-base/base-builder-rust:${IMAGE_TAG}" infra/base-images/base-builder-rust
+# 	echo "Building base-builder-rust image..."
+# 	$CONTAINER_RUNTIME build --no-cache -t "gcr.io/oss-fuzz-base/base-builder-rust:${IMAGE_TAG}" infra/base-images/base-builder-rust
 
-	echo "Building base-builder-go image..."
-	$CONTAINER_RUNTIME build --no-cache -t "gcr.io/oss-fuzz-base/base-builder-go:${IMAGE_TAG}" infra/base-images/base-builder-go
-fi
+# 	echo "Building base-builder-go image..."
+# 	$CONTAINER_RUNTIME build --no-cache -t "gcr.io/oss-fuzz-base/base-builder-go:${IMAGE_TAG}" infra/base-images/base-builder-go
+# fi
 
 echo "Building base-runner image..."
-$CONTAINER_RUNTIME build --no-cache -t "gcr.io/oss-fuzz-base/base-runner:${IMAGE_TAG}" infra/base-images/base-runner
+# $CONTAINER_RUNTIME build --no-cache -t "gcr.io/oss-fuzz-base/base-runner:${IMAGE_TAG}" infra/base-images/base-runner
+$CONTAINER_RUNTIME build -t "gcr.io/oss-fuzz-base/base-runner:${IMAGE_TAG}" infra/base-images/base-runner
 $CONTAINER_RUNTIME tag "gcr.io/oss-fuzz-base/base-runner:${IMAGE_TAG}" "gcr.io/oss-fuzz-base/base-runner:latest"
 
 echo ""
