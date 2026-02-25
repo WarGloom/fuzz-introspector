@@ -18,9 +18,24 @@ from fuzz_introspector import html_helpers
 from fuzz_introspector import json_report
 from fuzz_introspector import merge_coordinator
 from fuzz_introspector import merge_intents
+from fuzz_introspector import html_report
 from fuzz_introspector.html_report import create_section_optional_analyses
 
 PARALLEL_EXECUTION_LOG: List[tuple[str, int]] = []
+
+
+def test_parse_parallel_worker_count_defaults_to_cpu_count(monkeypatch):
+    monkeypatch.setenv("FI_PR6_PARALLEL_ANALYSIS", "0")
+    monkeypatch.delenv("FI_PR6_ANALYSIS_WORKERS", raising=False)
+    monkeypatch.setattr(html_report.os, "cpu_count", lambda: 12)
+    assert html_report._parse_parallel_worker_count() == 1
+
+    monkeypatch.setenv("FI_PR6_PARALLEL_ANALYSIS", "1")
+    assert html_report._parse_parallel_worker_count() == 12
+
+    monkeypatch.setenv("FI_PR6_ANALYSIS_WORKERS", "7")
+    monkeypatch.setattr(html_report.os, "cpu_count", lambda: 4)
+    assert html_report._parse_parallel_worker_count() == 4
 
 
 def _write_pid_marker(out_dir: str, analysis_name: str) -> None:
