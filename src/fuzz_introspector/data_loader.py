@@ -13,13 +13,11 @@
 # limitations under the License.
 """Reads the data output from the fuzz introspector LLVM plugin."""
 
-import os
+import concurrent.futures
 import json
 import logging
-import multiprocessing
-
+import os
 from typing import (
-    Any,
     Dict,
     List,
     Optional,
@@ -83,18 +81,9 @@ def read_fuzzer_data_file_to_profile(
     return profile
 
 
-def _load_profile(data_file: str, language: str, manager, semaphore=None):
-    """Internal function used for multithreaded profile loading"""
-    if semaphore is not None:
-        semaphore.acquire()
-
-    profile = read_fuzzer_data_file_to_profile(data_file, language)
-    if profile is not None:
-        manager[data_file] = profile
-    else:
-        logger.error("profile is none")
-    if semaphore is not None:
-        semaphore.release()
+def _load_profile(data_file: str, language: str):
+    """Internal function used for parallel profile loading."""
+    return data_file, read_fuzzer_data_file_to_profile(data_file, language)
 
 
 def load_all_debug_files(target_folder: str):
@@ -133,9 +122,9 @@ def load_all_profiles(
     if language == "jvm":
         # Java targets tend to be quite large, so we try to avoid memory
         # exhaustion here.
-        semaphore_count = 3
+        worker_count = 3
     else:
-        semaphore_count = 6
+        worker_count = 6
 
     profiles = []
     data_files = utils.get_all_files_in_tree_with_regex(
@@ -150,27 +139,47 @@ def load_all_profiles(
 
     logger.info(" - found %d profiles to load", len(data_files))
     if parallelise:
-        manager = multiprocessing.Manager()
-        semaphore = multiprocessing.Semaphore(semaphore_count)
-        return_dict = manager.dict()
-        jobs = []
-        for data_file in data_files:
-            p = multiprocessing.Process(target=_load_profile,
-                                        args=(data_file, language, return_dict,
-                                              semaphore))
-            jobs.append(p)
-            p.start()
-        for proc in jobs:
-            proc.join()
+        worker_count = max(1, min(worker_count, len(data_files)))
+        try:
+            indexed_profiles: Dict[
+                int, Optional[fuzzer_profile.FuzzerProfile]] = {}
+            with concurrent.futures.ProcessPoolExecutor(
+                    max_workers=worker_count) as executor:
+                future_to_idx = {
+                    executor.submit(_load_profile, data_file, language): idx
+                    for idx, data_file in enumerate(data_files)
+                }
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        _, loaded_profile = future.result()
+                    except Exception as err:
+                        logger.error("Failed to load profile at index %d: %s",
+                                     idx, err)
+                        continue
+                    if loaded_profile is None:
+                        logger.error("Profile is none")
+                        continue
+                    indexed_profiles[idx] = loaded_profile
 
-        for v in return_dict.values():
-            profiles.append(v)
+            for idx in range(len(data_files)):
+                profile = indexed_profiles.get(idx)
+                if profile is not None:
+                    profiles.append(profile)
+        except (OSError, RuntimeError, ValueError) as err:
+            logger.warning(
+                "Falling back to serial profile loading after parallel failure: %s",
+                err,
+            )
+            for data_file in data_files:
+                _, loaded_profile = _load_profile(data_file, language)
+                if loaded_profile is not None:
+                    profiles.append(loaded_profile)
     else:
-        return_dict_gen: Dict[Any, Any] = {}
         for data_file in data_files:
-            _load_profile(data_file, language, return_dict_gen, None)
-        for v in return_dict_gen.values():
-            profiles.append(v)
+            _, loaded_profile = _load_profile(data_file, language)
+            if loaded_profile is not None:
+                profiles.append(loaded_profile)
 
     return profiles
 

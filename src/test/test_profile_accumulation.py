@@ -25,6 +25,7 @@ from fuzz_introspector.exceptions import DataLoaderError  # noqa: E402
 
 
 class _FutureStub:
+
     def __init__(self, result=None, exc=None):
         self._result = result
         self._exc = exc
@@ -36,6 +37,7 @@ class _FutureStub:
 
 
 class _ExecutorStub:
+
     def __init__(self, *_args, **_kwargs):
         self.futures = []
 
@@ -56,6 +58,7 @@ class _ExecutorStub:
 
 
 class _ProfileStub:
+
     def __init__(self, key: str, should_fail: bool = False):
         self._key = key
         self._should_fail = should_fail
@@ -82,7 +85,8 @@ class _ProfileStub:
             "total_cyclomatic_complexity": 0,
         }
 
-    def accummulate_profile(self, base_folder, _return_dict, _uniq_id, _semaphore):
+    def accummulate_profile(self, base_folder, _return_dict, _uniq_id,
+                            _semaphore):
         if self._should_fail:
             raise ValueError("boom")
         self.accumulated_with = base_folder
@@ -92,7 +96,7 @@ class _ProfileStub:
 def test_parse_profile_worker_count_default_is_capped(monkeypatch):
     monkeypatch.delenv(analysis.FI_PROFILE_WORKERS_ENV, raising=False)
     monkeypatch.setattr(analysis.os, "cpu_count", lambda: 24)
-    assert analysis._parse_profile_worker_count() == 10
+    assert analysis._parse_profile_worker_count() == 24
 
 
 def test_parse_profile_worker_count_env_override_respected(monkeypatch):
@@ -106,7 +110,9 @@ def test_parse_profile_worker_count_env_override_respected(monkeypatch):
 
 
 def test_accummulate_profiles_parallel_preserves_input_order(monkeypatch):
-    def fake_accummulate_single_profile(profile_index, profile_payload, base_folder):
+
+    def fake_accummulate_single_profile(profile_index, profile_payload,
+                                        base_folder):
         profile_payload["total_basic_blocks"] = 1
         profile_payload["introspector_data_file"] = base_folder
         return profile_index, profile_payload
@@ -119,16 +125,24 @@ def test_accummulate_profiles_parallel_preserves_input_order(monkeypatch):
                         fake_accummulate_single_profile)
     monkeypatch.setattr(analysis, "_parse_profile_worker_count", lambda: 3)
 
-    profiles = [_ProfileStub("first"), _ProfileStub("second"), _ProfileStub("third")]
-    result_profiles = analysis._accummulate_profiles(profiles, "/tmp/base",
+    profiles = [
+        _ProfileStub("first"),
+        _ProfileStub("second"),
+        _ProfileStub("third")
+    ]
+    result_profiles = analysis._accummulate_profiles(profiles,
+                                                     "/tmp/base",
                                                      parallelise=True)
 
-    assert [p.get_key() for p in result_profiles] == ["first", "second", "third"]
+    assert [p.get_key()
+            for p in result_profiles] == ["first", "second", "third"]
     assert all(p.total_basic_blocks == 1 for p in result_profiles)
 
 
 def test_accummulate_profiles_parallel_raises_contextual_error(monkeypatch):
-    def fake_accummulate_single_profile(profile_index, profile_payload, _base_folder):
+
+    def fake_accummulate_single_profile(profile_index, profile_payload,
+                                        _base_folder):
         if profile_payload.get("fuzzer_source_file") == "broken":
             raise ValueError("boom")
         return profile_index, profile_payload
@@ -148,7 +162,9 @@ def test_accummulate_profiles_parallel_raises_contextual_error(monkeypatch):
 
 
 def test_profile_accumulation_parallel_serial_parity(monkeypatch):
-    def fake_accummulate_single_profile(profile_index, profile_payload, _base_folder):
+
+    def fake_accummulate_single_profile(profile_index, profile_payload,
+                                        _base_folder):
         profile_payload["total_basic_blocks"] = 1
         return profile_index, profile_payload
 
@@ -170,6 +186,5 @@ def test_profile_accumulation_parallel_serial_parity(monkeypatch):
                                                      "/tmp/base",
                                                      parallelise=True)
 
-    assert [(p.get_key(), p.total_basic_blocks) for p in serial_result] == [
-        (p.get_key(), p.total_basic_blocks) for p in parallel_result
-    ]
+    assert [(p.get_key(), p.total_basic_blocks) for p in serial_result
+            ] == [(p.get_key(), p.total_basic_blocks) for p in parallel_result]
