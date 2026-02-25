@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import shutil
+import time
 
 from typing import Any, Dict, List, Optional, Type, Set, Union
 
@@ -43,7 +44,7 @@ from fuzz_introspector.exceptions import DataLoaderError
 
 logger = logging.getLogger(name=__name__)
 FI_PROFILE_WORKERS_ENV = "FI_PROFILE_WORKERS"
-FI_PROFILE_WORKERS_DEFAULT_CAP = 10
+FI_PROFILE_WORKERS_DEFAULT_CAP = 0
 
 
 def _parse_profile_worker_count() -> int:
@@ -51,19 +52,21 @@ def _parse_profile_worker_count() -> int:
     cpu_count = os.cpu_count() or 1
     raw_worker_count = os.environ.get(FI_PROFILE_WORKERS_ENV, "")
     if not raw_worker_count:
-        return max(1, min(cpu_count, FI_PROFILE_WORKERS_DEFAULT_CAP))
+        if FI_PROFILE_WORKERS_DEFAULT_CAP > 0:
+            return max(1, min(cpu_count, FI_PROFILE_WORKERS_DEFAULT_CAP))
+        return cpu_count
 
     try:
         worker_count = int(raw_worker_count)
     except ValueError:
-        logger.warning("Invalid %s=%r; defaulting to capped cpu count",
+        logger.warning("Invalid %s=%r; defaulting to cpu count",
                        FI_PROFILE_WORKERS_ENV, raw_worker_count)
-        return max(1, min(cpu_count, FI_PROFILE_WORKERS_DEFAULT_CAP))
+        return cpu_count
 
     if worker_count < 1:
-        logger.warning("Invalid %s=%r; defaulting to capped cpu count",
+        logger.warning("Invalid %s=%r; defaulting to cpu count",
                        FI_PROFILE_WORKERS_ENV, raw_worker_count)
-        return max(1, min(cpu_count, FI_PROFILE_WORKERS_DEFAULT_CAP))
+        return cpu_count
 
     return min(worker_count, cpu_count)
 
@@ -98,8 +101,9 @@ def _accummulate_profiles(
             profile.accummulate_profile(base_folder, None, None, None)
         return profiles
 
-    logger.info("Accummulating profiles using ProcessPoolExecutor (%d workers)",
-                worker_count)
+    logger.info(
+        "Accummulating profiles using ProcessPoolExecutor (%d workers)",
+        worker_count)
     indexed_profiles: List[Optional[fuzzer_profile.FuzzerProfile]] = [
         None for _ in profiles
     ]
@@ -139,7 +143,8 @@ def _accummulate_profiles(
     for idx, profile in enumerate(indexed_profiles):
         if profile is None:
             raise DataLoaderError(
-                f"Profile accumulation failed to return result for index {idx}")
+                f"Profile accumulation failed to return result for index {idx}"
+            )
 
     return [profile for profile in indexed_profiles if profile is not None]
 
@@ -177,8 +182,8 @@ class IntrospectionProject:
         before any real use of `IntrospectionProject` can happen.
         """
         self.exclude_patterns = exclude_patterns if exclude_patterns else []
-        self.exclude_function_patterns = (
-            exclude_function_patterns if exclude_function_patterns else [])
+        self.exclude_function_patterns = (exclude_function_patterns
+                                          if exclude_function_patterns else [])
 
         if harness_lists:
             logger.info("Loading profiles using harness list")
@@ -191,7 +196,8 @@ class IntrospectionProject:
                         self.language,
                         cfg_content=calltree_text,
                         exclude_patterns=self.exclude_patterns,
-                        exclude_function_patterns=self.exclude_function_patterns,
+                        exclude_function_patterns=self.
+                        exclude_function_patterns,
                     ))
         else:
             logger.info("Loading profiles using files")
@@ -271,21 +277,46 @@ class IntrospectionProject:
 
     def load_debug_report(self, out_dir, dump_files=True):
         """Load and digest debug information."""
+        load_started = time.perf_counter()
         self.debug_report = debug_info.load_debug_report(self.debug_files)
+        logger.info(
+            "[debug-load] stage=debug_report elapsed=%.3fs files=%d",
+            time.perf_counter() - load_started,
+            len(self.debug_files),
+        )
 
         # Load the yaml  content of debug files holding type information and
         # function information.
+        type_load_started = time.perf_counter()
         self.debug_all_types = debug_info.load_debug_all_yaml_files(
             self.debug_type_files)
+        logger.info(
+            ("[debug-load] stage=debug_types_yaml elapsed=%.3fs "
+             "files=%d types=%d"),
+            time.perf_counter() - type_load_started,
+            len(self.debug_type_files),
+            len(self.debug_all_types),
+        )
+
+        function_load_started = time.perf_counter()
         self.debug_all_functions = debug_info.load_debug_all_yaml_files(
             self.debug_function_files)
+        logger.info(
+            ("[debug-load] stage=debug_functions_yaml elapsed=%.3fs "
+             "files=%d functions=%d"),
+            time.perf_counter() - function_load_started,
+            len(self.debug_function_files),
+            len(self.debug_all_functions),
+        )
 
         # Index the functions based on file locations. This is useful for
         # quickly looking up debug function details based on their file
         # locations, which we can get from the function data collected by
         # the LLVM module.
+        dedupe_rewrite_started = time.perf_counter()
         tmp_debug_functions = {}
         no_path_debug_funcs = []
+        original_function_count = len(self.debug_all_functions)
         for func in self.debug_all_functions:
             if func["file_location"].strip() == "":
                 no_path_debug_funcs.append(func)
@@ -300,14 +331,30 @@ class IntrospectionProject:
 
         self.debug_all_functions = no_path_debug_funcs + list(
             tmp_debug_functions.values())
+        logger.info(
+            ("[debug-load] stage=dedupe_rewrite elapsed=%.3fs "
+             "types=%d functions_before=%d functions_after=%d"),
+            time.perf_counter() - dedupe_rewrite_started,
+            len(self.debug_all_types),
+            original_function_count,
+            len(self.debug_all_functions),
+        )
 
         # Extract the raw function signature. This propagates types into all of
         # the debug functions.
+        type_correlation_started = time.perf_counter()
         debug_info.correlate_debugged_function_to_debug_types(
             self.debug_all_types,
             self.debug_all_functions,
             out_dir,
             dump_files=dump_files,
+        )
+        logger.info(
+            ("[debug-load] stage=type_correlation elapsed=%.3fs "
+             "types=%d functions=%d"),
+            time.perf_counter() - type_correlation_started,
+            len(self.debug_all_types),
+            len(self.debug_all_functions),
         )
 
     def dump_debug_report(self, out_dir):
@@ -1326,6 +1373,7 @@ def extract_all_sources(
     language: str,
     exclude_patterns: list[str] | None = None,
 ) -> set[str]:
+    """List all source files in /src with project language filters."""
     # Compile regex patterns once and ignore invalid entries consistently.
     compiled_exclude_patterns = []
     for pattern in exclude_patterns or []:
@@ -1334,18 +1382,27 @@ def extract_all_sources(
         except re.error as err:
             logger.warning("Invalid exclude pattern %s: %s", pattern, err)
 
-    interesting_source_files = set()
+    return _scan_source_tree(language, compiled_exclude_patterns)
+
+
+def _scan_source_tree(
+    language: str,
+    compiled_exclude_patterns: list[re.Pattern[str]],
+) -> set[str]:
+    interesting_source_files: set[str] = set()
 
     if language == "jvm":
-        test_extensions = [".java", ".scala", ".sc", ".groovy", ".kt", ".kts"]
+        source_extensions = [
+            ".java", ".scala", ".sc", ".groovy", ".kt", ".kts"
+        ]
     elif language == "python":
-        test_extensions = [".py"]
+        source_extensions = [".py"]
     elif language == "rust":
-        test_extensions = [".rs"]
+        source_extensions = [".rs"]
     elif language == "go":
-        test_extensions = [".go", ".cgo"]
+        source_extensions = [".go", ".cgo"]
     else:
-        test_extensions = [".cc", ".cpp", ".cxx", ".c++", ".c", ".h", ".hpp"]
+        source_extensions = [".cc", ".cpp", ".cxx", ".c++", ".c", ".h", ".hpp"]
 
     to_avoid = [
         "fuzztest",
@@ -1372,7 +1429,7 @@ def extract_all_sources(
         return False
 
     def is_interesting_source_file(path):
-        if not any(path.endswith(ext) for ext in test_extensions):
+        if not any(path.endswith(ext) for ext in source_extensions):
             return False
         if is_excluded_by_pattern(path):
             return False
@@ -1387,8 +1444,7 @@ def extract_all_sources(
     for root, dirs, files in os.walk("/src/"):
         dirs[:] = [
             d for d in dirs
-            if not is_excluded_by_pattern(os.path.join(root, d))
-            and not any(
+            if not is_excluded_by_pattern(os.path.join(root, d)) and not any(
                 avoid in os.path.join(root, d) for avoid in to_avoid)
         ]
         for f in files:
@@ -1404,14 +1460,18 @@ def extract_all_sources(
 def extract_test_information(report_dict=None,
                              language="c-cpp",
                              out_dir="/",
-                             exclude_patterns=None):
+                             exclude_patterns=None,
+                             source_files: set[str] | None = None):
     """Extract test information for different project language."""
     if not report_dict:
         report_dict = {}
     if language == "c-cpp":
-        return _extract_test_information_cpp(report_dict,
-                                             out_dir,
-                                             exclude_patterns=exclude_patterns)
+        return _extract_test_information_cpp(
+            report_dict,
+            out_dir,
+            exclude_patterns=exclude_patterns,
+            source_files=source_files,
+        )
     elif language == "jvm":
         return _extract_test_information_jvm()
     else:
@@ -1419,7 +1479,12 @@ def extract_test_information(report_dict=None,
         return set()
 
 
-def _extract_test_information_cpp(report_dict, out_dir, exclude_patterns=None):
+def _extract_test_information_cpp(
+    report_dict,
+    out_dir,
+    exclude_patterns=None,
+    source_files: set[str] | None = None,
+):
     """Correlates function data collected by debug information to function
     data collected by LLVMs module, and uses the correlated data to generate
     function signatures for each function based on debug information."""
@@ -1431,10 +1496,6 @@ def _extract_test_information_cpp(report_dict, out_dir, exclude_patterns=None):
 
     directories = set()
 
-    # If this is run locally and not in OSS-Fuzz, let's skip for now.
-    if not os.path.isdir("/src/"):
-        return directories
-
     # All directories added
     for path in normalized_paths:
         if path.startswith("/usr/"):
@@ -1442,17 +1503,23 @@ def _extract_test_information_cpp(report_dict, out_dir, exclude_patterns=None):
         if path.startswith("/tmp/inspector-saved/"):
             continue
         directories.add("/".join(path.split("/")[:-1]))
-    return extract_tests_from_directories(directories,
-                                          "c-cpp",
-                                          out_dir,
-                                          exclude_patterns=exclude_patterns)
+    return extract_tests_from_directories(
+        directories,
+        "c-cpp",
+        out_dir,
+        pre_scanned_files=source_files,
+        exclude_patterns=exclude_patterns,
+    )
 
 
-def extract_tests_from_directories(directories,
-                                   language,
-                                   out_dir,
-                                   need_copy=True,
-                                   exclude_patterns=None) -> Set[str]:
+def extract_tests_from_directories(
+    directories,
+    language,
+    out_dir,
+    need_copy=True,
+    exclude_patterns=None,
+    pre_scanned_files: set[str] | None = None,
+) -> Set[str]:
     """Extracts test files from a given collection of directory paths and also
     copies them to the `constants.SAVED_SOURCE_FOLDER` folder with the same
     absolute path appended."""
@@ -1557,36 +1624,72 @@ def extract_tests_from_directories(directories,
             return False
         return True
 
-    # Traverse each seed directory once and apply both matching heuristics.
-    for directory in seed_directories:
-        for root, dirs, files in os.walk(directory):
-            dirs[:] = [
-                d for d in dirs if not d.startswith(".")
-                and is_candidate_source(os.path.join(root, d))
-            ]
+    file_extensions = tuple(test_extensions)
 
-            # Progress logging for long scans
-            file_count += len(files)
-            if file_count % 5000 == 0:
-                logger.info(
-                    "extract_tests_from_directories: scanned %d files...",
-                    file_count)
+    def _is_in_seed_directory(path: str) -> bool:
+        if not path:
+            return False
+        for directory in seed_directories:
+            normalized_directory = os.path.normpath(directory)
+            directory_prefix = (normalized_directory
+                                if normalized_directory.endswith(os.sep) else
+                                normalized_directory + os.sep)
+            if path == normalized_directory or path.startswith(
+                    directory_prefix):
+                return True
+        return False
 
-            is_inspiration_root = any(ins in root for ins in inspirations)
-            for f in files:
-                if not f.endswith(tuple(test_extensions)):
-                    continue
-                # Absolute path
-                absolute_path = os.path.join(root, f)
-                if not is_candidate_source(absolute_path):
-                    continue
+    if pre_scanned_files is not None:
+        for absolute_path in pre_scanned_files:
+            normalized_path = os.path.normpath(absolute_path)
+            if not _is_in_seed_directory(normalized_path):
+                continue
+            if not normalized_path.endswith(file_extensions):
+                continue
+            if not is_candidate_source(normalized_path):
+                continue
 
-                if "test" in f:
-                    all_test_files.add(absolute_path)
-                    continue
+            file_name = os.path.basename(normalized_path)
+            if "test" in file_name:
+                all_test_files.add(normalized_path)
+                continue
 
-                if is_inspiration_root and is_non_fuzz_harness(absolute_path):
-                    all_test_files.add(absolute_path)
+            root = os.path.dirname(normalized_path)
+            if any(ins in root for ins in
+                   inspirations) and is_non_fuzz_harness(normalized_path):
+                all_test_files.add(normalized_path)
+    else:
+        # Traverse each seed directory once and apply both matching heuristics.
+        for directory in seed_directories:
+            for root, dirs, files in os.walk(directory):
+                dirs[:] = [
+                    d for d in dirs if not d.startswith(".")
+                    and is_candidate_source(os.path.join(root, d))
+                ]
+
+                # Progress logging for long scans
+                file_count += len(files)
+                if file_count % 5000 == 0:
+                    logger.info(
+                        "extract_tests_from_directories: scanned %d files...",
+                        file_count)
+
+                is_inspiration_root = any(ins in root for ins in inspirations)
+                for f in files:
+                    if not f.endswith(file_extensions):
+                        continue
+                    # Absolute path
+                    absolute_path = os.path.join(root, f)
+                    if not is_candidate_source(absolute_path):
+                        continue
+
+                    if "test" in f:
+                        all_test_files.add(absolute_path)
+                        continue
+
+                    if is_inspiration_root and is_non_fuzz_harness(
+                            absolute_path):
+                        all_test_files.add(absolute_path)
     new_test_files = set()
     for test_file in all_test_files:
         if test_file.startswith("//"):

@@ -40,6 +40,54 @@ Additionally, there is more information:
   - [Use with OSS-Fuzz](oss_fuzz_integration#build-fuzz-introspector-with-oss-fuzz) (Recommended)
   - [Use without OSS-Fuzz](doc/LocalBuild.md)
 
+## Debug YAML telemetry and tuning
+
+The debug-info YAML loading/correlation pipeline supports `FI_DEBUG_*` tuning
+variables:
+
+- `FI_DEBUG_PARALLEL` (default: `true`): enable parallel YAML shard loading.
+- `FI_DEBUG_MAX_WORKERS` (default: `min(cpu_count, 8)`): worker cap for YAML
+  loading.
+- `FI_DEBUG_SHARD_FILES` (default: `4`): number of YAML files per shard.
+- `FI_DEBUG_SPILL_MB` (default: `0`): in-memory shard spill threshold in MB.
+  `0` disables spill-to-disk.
+- `FI_DEBUG_CORRELATE_PARALLEL` (default: `true`): enable parallel function
+  type-correlation.
+- `FI_DEBUG_CORRELATE_WORKERS` (default: `min(cpu_count, 8)`): worker cap for
+  type-correlation.
+
+Presets:
+
+- Small/local (favor low overhead)
+```bash
+export FI_DEBUG_PARALLEL=true
+export FI_DEBUG_MAX_WORKERS=2
+export FI_DEBUG_SHARD_FILES=4
+export FI_DEBUG_SPILL_MB=0
+export FI_DEBUG_CORRELATE_PARALLEL=true
+export FI_DEBUG_CORRELATE_WORKERS=2
+```
+
+- Large host (favor throughput)
+```bash
+export FI_DEBUG_PARALLEL=true
+export FI_DEBUG_MAX_WORKERS=8
+export FI_DEBUG_SHARD_FILES=8
+export FI_DEBUG_SPILL_MB=0
+export FI_DEBUG_CORRELATE_PARALLEL=true
+export FI_DEBUG_CORRELATE_WORKERS=8
+```
+
+- Low-memory CI (favor stability)
+```bash
+export FI_DEBUG_PARALLEL=true
+export FI_DEBUG_MAX_WORKERS=2
+export FI_DEBUG_SHARD_FILES=2
+export FI_DEBUG_SPILL_MB=128
+export FI_DEBUG_CORRELATE_PARALLEL=false
+export FI_DEBUG_CORRELATE_WORKERS=1
+```
+
 ## Architecture
 The workflow of fuzz-introspector can be visualised as follows:
 ![Functions table](/doc/img/fuzz-introspector-architecture.png)
@@ -58,6 +106,23 @@ not done by the script to allow more flexibility for the local dev setup.
 To lint the Python frontend directly, run
 `flake8 --ignore E125,W503,W504,W605 --max-line-length 100 ./frontends/python/*.py`
 from the repo root.
+
+### Local Hook for Changed Files
+
+To automatically run lint/format checks on changed Python files, enable the
+`pre-commit` hook and use the included script:
+
+```bash
+git config core.hooksPath .githooks
+./scripts/lint_changed_code.sh
+```
+
+The hook will run on staged and unstaged changed Python files and execute:
+
+- `flake8 --ignore E125,W503,W504,W605 --max-line-length 100`
+- `yapf -d`
+
+Set `SKIP_CHANGED_HOOK=1` to bypass the hook for a single commit.
 
 The commit message **needs** to contain a signoff line with your data, this is
 supported by Git see [here](https://git-scm.com/docs/git-commit#Documentation/git-commit.txt---signoff).
