@@ -19,6 +19,7 @@ This module provides functions to parse and extract debug information
 from various sources, including DWARF debug info and other debug formats.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -300,12 +301,20 @@ def load_debug_report(debug_files, base_dir=None):
     all_types = dict()
     path_mapping = {}
     original_base_dir = None
+    seen_hashes = set()  # Track processed content
 
     # Extract all of the details
     for debug_file in debug_files:
         try:
             with open(debug_file, "r") as debug_f:
                 raw_content = debug_f.read()
+
+            # Hash the content to avoid parsing identical debug info files
+            content_hash = hashlib.md5(raw_content.encode("utf-8")).hexdigest()
+            if content_hash in seen_hashes:
+                logger.debug("Skipping identical debug file: %s", debug_file)
+                continue
+            seen_hashes.add(content_hash)
 
             # Try to extract path mapping from the debug file
             if not path_mapping:

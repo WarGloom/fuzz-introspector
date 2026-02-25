@@ -93,15 +93,32 @@ class IntrospectionProject:
             self.profiles = data_loader.load_all_profiles(
                 self.base_folder, self.language, parallelise)
 
-        # Apply exclude patterns to filter functions from loaded profiles
+        # Apply exclude patterns to filter out entire profiles and their functions
         if self.exclude_patterns:
+            filtered_profiles = []
             for profile in self.profiles:
+                # Set the exclude patterns on the profile so the matching logic works
+                profile.exclude_patterns = self.exclude_patterns
+
+                # Drop the entire profile if the fuzzer itself is a system path
+                if profile._matches_exclude_pattern(
+                        profile.fuzzer_source_file):
+                    logger.info(
+                        "Skipping profile for excluded fuzzer source: %s",
+                        profile.fuzzer_source_file,
+                    )
+                    continue
+
+                # Filter functions within the profile
                 profile.all_class_functions = {
                     name: func
                     for name, func in profile.all_class_functions.items()
                     if not profile._matches_exclude_pattern(
                         func.function_source_file)
                 }
+                filtered_profiles.append(profile)
+
+            self.profiles = filtered_profiles
 
         logger.info("Found %d profiles", len(self.profiles))
         if len(self.profiles) == 0:
