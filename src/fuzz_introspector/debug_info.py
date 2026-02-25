@@ -25,9 +25,13 @@ import logging
 import os
 import re
 import shutil
+import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, TypeVar
 import yaml
 
 logger = logging.getLogger(name=__name__)
+_T = TypeVar("_T")
 
 # Pre-compiled regex patterns for debug info parsing (performance optimization)
 # These patterns are used in extract_all_functions_in_debug_info
@@ -474,18 +478,185 @@ def dump_debug_report(report_dict, out_dir, base_dir=None):
 
 
 def load_debug_all_yaml_files(debug_all_types_files):
-    elem_list = []
+    return _load_yaml_collections(debug_all_types_files, "debug-info")
+
+
+# ------------------------------------------------------------
+# YAML loading and correlation helpers (streamed + sharded)
+# ------------------------------------------------------------
+
+
+def _parse_bool_env(var_name: str, default: bool) -> bool:
+    raw = os.environ.get(var_name, "")
+    if raw == "":
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _parse_int_env(var_name: str,
+                   default: int,
+                   minimum: int = 1,
+                   maximum: int | None = None) -> int:
+    raw = os.environ.get(var_name, "")
+    if raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r; using default %d", var_name, raw,
+                       default)
+        return default
+    if value < minimum:
+        logger.warning("Invalid %s=%r; using minimum %d", var_name, raw,
+                       minimum)
+        return minimum
+    if maximum is not None and value > maximum:
+        return maximum
+    return value
+
+
+def _chunked(iterable: list[_T], size: int) -> list[list[_T]]:
+    if size <= 0:
+        return [iterable]
+    return [iterable[i:i + size] for i in range(0, len(iterable), size)]
+
+
+def _load_yaml_file(path: str) -> Any:
+    with open(path, "r") as yaml_f:
+        return yaml.safe_load(yaml_f)
+
+
+def _load_yaml_shard(paths: list[str]) -> list[Any]:
+    shard_items = []
+    for path in paths:
+        try:
+            parsed = _load_yaml_file(path)
+            if parsed:
+                shard_items.extend(parsed)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to load yaml file %s: %s", path, exc)
+    return shard_items
+
+
+def _write_spill(items: list[Any], category: str) -> tuple[str, int]:
+    fd, spill_path = tempfile.mkstemp(prefix=f"fi-{category}-",
+                                      suffix=".jsonl")
+    os.close(fd)
+    with open(spill_path, "w") as spill_fp:
+        json.dump(items, spill_fp)
+    return spill_path, len(items)
+
+
+def _estimate_list_bytes(items: list[Any]) -> int:
+    return len(json.dumps(items))
+
+
+def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
     try:
         yaml.SafeLoader = yaml.CSafeLoader  # type: ignore[assignment, misc]
         logger.info("Set base loader to use CSafeLoader")
     except Exception:
         logger.info("Could not set the CSafeLoader as base loader")
 
-    for filename in debug_all_types_files:
-        with open(filename, "r") as yaml_f:
-            file_list = yaml.safe_load(yaml_f.read())
-            elem_list += file_list
-    return elem_list
+    if not paths:
+        return []
+
+    parallel_enabled = _parse_bool_env("FI_DEBUG_PARALLEL", True)
+    max_workers_default = min(os.cpu_count() or 1, 8)
+    worker_count = _parse_int_env("FI_DEBUG_MAX_WORKERS", max_workers_default,
+                                  1)
+    shard_size = _parse_int_env("FI_DEBUG_SHARD_FILES", 4, 1)
+    spill_mb = _parse_int_env("FI_DEBUG_SPILL_MB", 0, 0)
+    shards = _chunked(list(paths), shard_size)
+    shard_count = len(shards)
+    shard_items_by_idx: dict[int, list[Any]] = {}
+    spilled_by_idx: dict[int, str] = {}
+    spill_threshold_bytes = spill_mb * 1024 * 1024
+    current_mem_bytes = 0
+
+    def _record_shard_items(shard_idx: int, items: list[Any]) -> None:
+        nonlocal current_mem_bytes
+        shard_items_by_idx[shard_idx] = items
+        if spill_threshold_bytes <= 0:
+            return
+
+        current_mem_bytes += _estimate_list_bytes(items)
+        while current_mem_bytes >= spill_threshold_bytes and shard_items_by_idx:
+            spill_idx = min(shard_items_by_idx)
+            spill_items = shard_items_by_idx.pop(spill_idx)
+            current_mem_bytes -= _estimate_list_bytes(spill_items)
+            spill_path, _ = _write_spill(spill_items, category)
+            spilled_by_idx[spill_idx] = spill_path
+            logger.info("Spilled shard %d/%d to %s", spill_idx + 1,
+                        shard_count, spill_path)
+
+    def _load_serial_shards() -> None:
+        for shard_idx, shard in enumerate(shards):
+            logger.info("Loading shard %d/%d (%d files)", shard_idx + 1,
+                        shard_count, len(shard))
+            _record_shard_items(shard_idx, _load_yaml_shard(shard))
+
+    if parallel_enabled and worker_count > 1 and len(shards) > 1:
+        logger.info("Loading %d %s shards with %d workers", len(shards),
+                    category, worker_count)
+        fallback_to_serial = False
+        with ThreadPoolExecutor(
+                max_workers=min(worker_count, len(shards))) as ex:
+            future_to_idx = {
+                ex.submit(_load_yaml_shard, shard): idx
+                for idx, shard in enumerate(shards)
+            }
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    items = future.result()
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning(
+                        "Parallel shard %d failed: %s; falling back serial",
+                        idx, exc)
+                    fallback_to_serial = True
+                    break
+                else:
+                    logger.info("Loaded shard %d/%d (%d files)", idx + 1,
+                                shard_count, len(shards[idx]))
+                    _record_shard_items(idx, items)
+        if fallback_to_serial:
+            shard_items_by_idx.clear()
+            for spill_path in spilled_by_idx.values():
+                try:
+                    os.remove(spill_path)
+                except OSError:
+                    pass
+            spilled_by_idx.clear()
+            current_mem_bytes = 0
+            _load_serial_shards()
+    else:
+        logger.info("Loading %d %s files serially (shard size %d)", len(paths),
+                    category, shard_size)
+        _load_serial_shards()
+
+    results: list[Any] = []
+    if spilled_by_idx:
+        logger.info("Merging %d spilled shards for %s", len(spilled_by_idx),
+                    category)
+    for idx in range(shard_count):
+        spill_path = spilled_by_idx.get(idx)
+        if spill_path is not None:
+            try:
+                with open(spill_path, "r") as spill_fp:
+                    items = json.load(spill_fp)
+                    results.extend(items)
+            finally:
+                try:
+                    os.remove(spill_path)
+                except OSError:
+                    pass
+            continue
+        results.extend(shard_items_by_idx.get(idx, []))
+    return results
+
+
+# ------------------------------------------------------------
 
 
 def extract_func_sig_friendly_type_tags(target_type, debug_type_dictionary):
@@ -686,12 +857,52 @@ def correlate_debugged_function_to_debug_types(all_debug_types,
                                 dump_files=dump_files)
     logger.info("Finished creating dictionary")
 
-    for dfunc in all_debug_functions:
-        func_signature_elems, source_location = extract_debugged_function_signature(
-            dfunc, debug_type_dictionary)
+    parallel_enabled = _parse_bool_env("FI_DEBUG_CORRELATE_PARALLEL", True)
+    max_workers_default = min(os.cpu_count() or 1, 8)
+    worker_count = _parse_int_env("FI_DEBUG_CORRELATE_WORKERS",
+                                  max_workers_default, 1)
+    total_funcs = len(all_debug_functions)
+    chunk_size = max(1, total_funcs // worker_count) if worker_count > 0 else 1
 
-        dfunc["func_signature_elems"] = func_signature_elems
-        dfunc["source"] = source_location
+    def _process_slice(func_slice):
+        for dfunc in func_slice:
+            func_sig, source_location = extract_debugged_function_signature(
+                dfunc, debug_type_dictionary)
+            dfunc["func_signature_elems"] = func_sig
+            dfunc["source"] = source_location
+
+    if parallel_enabled and worker_count > 1 and total_funcs > 1:
+        logger.info("Correlating %d debug functions with %d threads",
+                    total_funcs, worker_count)
+        chunks = _chunked(all_debug_functions, chunk_size)
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(_process_slice, chunk): idx
+                for idx, chunk in enumerate(chunks)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning(
+                        "Parallel correlation chunk %d failed: %s; "
+                        "falling back to serial", idx, exc)
+                    for dfunc in all_debug_functions:
+                        func_sig, source_location = (
+                            extract_debugged_function_signature(
+                                dfunc, debug_type_dictionary))
+                        dfunc["func_signature_elems"] = func_sig
+                        dfunc["source"] = source_location
+                    break
+    else:
+        logger.info("Correlating %d debug functions serially", total_funcs)
+        for dfunc in all_debug_functions:
+            func_signature_elems, source_location = (
+                extract_debugged_function_signature(dfunc,
+                                                    debug_type_dictionary))
+            dfunc["func_signature_elems"] = func_signature_elems
+            dfunc["source"] = source_location
 
 
 def extract_syzkaller_type(param_list):
