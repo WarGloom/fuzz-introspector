@@ -13,6 +13,7 @@
 # limitations under the License.
 """Module for creating HTML reports"""
 
+import contextlib
 import json
 import logging
 import multiprocessing
@@ -56,33 +57,30 @@ TABLE_ID_STRIDE = 100000
 
 
 def _parse_parallel_worker_count() -> int:
-    raw_count = os.environ.get(PR6_PARALLEL_ANALYSIS_WORKERS_ENV, "1")
+    raw_count = os.environ.get(PR6_PARALLEL_ANALYSIS_WORKERS_ENV, "")
     try:
-        worker_count = int(raw_count)
+        if raw_count:
+            worker_count = int(raw_count)
+        else:
+            worker_count = os.cpu_count() or 1
     except ValueError:
-        logger.warning(
-            "Invalid %s=%r; defaulting to 1",
-            PR6_PARALLEL_ANALYSIS_WORKERS_ENV,
-            raw_count,
-        )
-        return 1
+        logger.warning("Invalid %s=%r; defaulting to cpu count",
+                       PR6_PARALLEL_ANALYSIS_WORKERS_ENV, raw_count)
+        return os.cpu_count() or 1
 
+    flag_value = os.environ.get(PR6_PARALLEL_ANALYSIS_FLAG_ENV,
+                                "").strip().lower()
     if worker_count < 1:
-        logger.warning(
-            "Invalid %s=%r; defaulting to 1",
-            PR6_PARALLEL_ANALYSIS_WORKERS_ENV,
-            raw_count,
-        )
+        logger.warning("Invalid %s=%r; defaulting to 1",
+                       PR6_PARALLEL_ANALYSIS_WORKERS_ENV, raw_count)
         return 1
 
-    flag_value = os.environ.get(PR6_PARALLEL_ANALYSIS_FLAG_ENV, "")
-    flag_enabled = flag_value.strip().lower() in ("1", "true", "yes", "on")
-    if worker_count > 1 and not flag_enabled:
+    if flag_value and flag_value in ("0", "false", "no", "off"):
         logger.info("PR6 parallel analyses disabled; %s not set",
                     PR6_PARALLEL_ANALYSIS_FLAG_ENV)
         return 1
 
-    return worker_count
+    return min(worker_count, os.cpu_count() or 1)
 
 
 def _get_parallel_compatibility_by_name() -> dict[str, str]:
@@ -948,7 +946,8 @@ def write_content_to_html_files(html_full_doc, all_functions_json_html,
                                       "").lower() in ("1", "true", "yes", "on")
 
     if disable_prettify:
-        logger.info("Skipping HTML prettify because FI_DISABLE_HTML_PRETTIFY is set")
+        logger.info(
+            "Skipping HTML prettify because FI_DISABLE_HTML_PRETTIFY is set")
         rendered_html = html_full_doc
     elif html_size_bytes > max_prettify_bytes:
         logger.info(
@@ -971,13 +970,13 @@ def write_content_to_html_files(html_full_doc, all_functions_json_html,
     with open(os.path.join(out_dir, constants.ALL_FUNCTION_JS),
               "w") as all_function_file:
         all_function_file.write("var all_functions_table_data = ")
-        all_function_file.write(json.dumps(all_functions_json_html))
+        json.dump(all_functions_json_html, all_function_file)
 
     # Dump table data to relevant javascript file.
     with open(os.path.join(out_dir, constants.FUZZER_TABLE_JS),
               "w") as js_file_fd:
         js_file_fd.write("var fuzzer_table_data = ")
-        js_file_fd.write(json.dumps(fuzzer_table_data))
+        json.dump(fuzzer_table_data, js_file_fd)
 
     # Copy all of the styling into the directory.
     styling.copy_style_files(out_dir)
@@ -1287,7 +1286,7 @@ def get_body_script_tags(all_functions_json, fuzzer_table_data) -> str:
 
     else:
         html_script_tags = ""
-        js_files = styling.MAIN_JS_FILES
+        js_files = list(styling.MAIN_JS_FILES)
         js_files.append(constants.ALL_FUNCTION_JS)
         js_files.append(constants.OPTIMAL_TARGETS_ALL_FUNCTIONS)
         js_files.append(constants.FUZZER_TABLE_JS)
@@ -1316,222 +1315,227 @@ def create_html_report(
     reruning those analysing process.
     """
 
-    # Main logic
-    tables: List[str] = []
-    table_of_contents: html_helpers.HtmlTableOfContents = (
-        html_helpers.HtmlTableOfContents())
-    conclusions: List[html_helpers.HTMLConclusion] = []
-
     logger.info(" - Creating HTML report")
+    # Main logic
+    # Keep summary writes immediate here because optional analyses may merge and
+    # write summary.json directly through merge coordinator.
+    with contextlib.nullcontext():
+        tables: List[str] = []
+        table_of_contents: html_helpers.HtmlTableOfContents = (
+            html_helpers.HtmlTableOfContents())
+        conclusions: List[html_helpers.HTMLConclusion] = []
 
-    # Create html header, which will be used to assemble the doc at the
-    # end of this function.
-    html_header = html_helpers.html_get_header()
+        # Create html header, which will be used to assemble the doc at the
+        # end of this function.
+        html_header = html_helpers.html_get_header()
 
-    # Create a wrapper <div> of all content
-    html_content_start = "<div class='content-wrapper report-page'>"
+        # Create a wrapper <div> of all content
+        html_content_start = "<div class='content-wrapper report-page'>"
 
-    # Start the contents section.
-    html_body_start = '<div class="content-section">'
+        # Start the contents section.
+        html_body_start = '<div class="content-section">'
 
-    # Create overview section
-    (html_overview, html_report_top,
-     html_report_core) = (create_section_project_overview(
-         table_of_contents, introspection_proj.proj_profile, conclusions,
-         report_name))
+        # Create overview section
+        (html_overview, html_report_top,
+         html_report_core) = (create_section_project_overview(
+             table_of_contents, introspection_proj.proj_profile, conclusions,
+             report_name))
 
-    # Create section with overview of all fuzzers
-    html_report_core += create_section_fuzzers_overview(
-        table_of_contents, tables, introspection_proj)
+        # Create section with overview of all fuzzers
+        html_report_core += create_section_fuzzers_overview(
+            table_of_contents, tables, introspection_proj)
 
-    # Create section with table of all functions in project.
-    (
-        all_function_table,
-        all_functions_json_html,
-        all_functions_json_report,
-        html_all_function_section,
-    ) = create_section_all_functions(
-        table_of_contents,
-        tables,
-        introspection_proj.proj_profile,
-        introspection_proj.proj_profile.coverage_url,
-        introspection_proj.proj_profile.basefolder,
-    )
-    html_report_core += html_all_function_section
+        # Create section with table of all functions in project.
+        (
+            all_function_table,
+            all_functions_json_html,
+            all_functions_json_report,
+            html_all_function_section,
+        ) = create_section_all_functions(
+            table_of_contents,
+            tables,
+            introspection_proj.proj_profile,
+            introspection_proj.proj_profile.coverage_url,
+            introspection_proj.proj_profile.basefolder,
+        )
+        html_report_core += html_all_function_section
 
-    # Section with details of each fuzzer.
-    fuzzer_table_data: Dict[str, Any] = {}
-    html_report_core += create_section_fuzzer_detailed_section(
-        table_of_contents,
-        introspection_proj,
-        tables,
-        conclusions,
-        fuzzer_table_data,
-        dump_files,
-        out_dir,
-    )
+        # Section with details of each fuzzer.
+        fuzzer_table_data: Dict[str, Any] = {}
+        html_report_core += create_section_fuzzer_detailed_section(
+            table_of_contents,
+            introspection_proj,
+            tables,
+            conclusions,
+            fuzzer_table_data,
+            dump_files,
+            out_dir,
+        )
 
-    # Generate sections for all optional analyses
-    html_report_core += create_section_optional_analyses(
-        table_of_contents,
-        analyses_to_run,
-        output_json,
-        tables,
-        introspection_proj,
-        introspection_proj.proj_profile.basefolder,
-        introspection_proj.proj_profile.coverage_url,
-        conclusions,
-        dump_files,
-        out_dir,
-    )
+        # Generate sections for all optional analyses
+        html_report_core += create_section_optional_analyses(
+            table_of_contents,
+            analyses_to_run,
+            output_json,
+            tables,
+            introspection_proj,
+            introspection_proj.proj_profile.basefolder,
+            introspection_proj.proj_profile.coverage_url,
+            conclusions,
+            dump_files,
+            out_dir,
+        )
 
-    # Create HTML showing the conclusions at the top of the report.
-    html_report_top += html_helpers.create_conclusions_box(conclusions)
+        # Create HTML showing the conclusions at the top of the report.
+        html_report_top += html_helpers.create_conclusions_box(conclusions)
 
-    # Close content-section.
-    html_body_end = "</div>\n"
-    html_body_end += get_body_script_tags(all_functions_json_html,
-                                          fuzzer_table_data)
+        # Close content-section.
+        html_body_end = "</div>\n"
+        html_body_end += get_body_script_tags(all_functions_json_html,
+                                              fuzzer_table_data)
 
-    # Make table of contents. We can first do this now because it should be
-    # done after assembling all entires in the table of contents.
-    html_toc_string = html_helpers.html_get_table_of_contents(
-        table_of_contents,
-        introspection_proj.proj_profile.coverage_url,
-        introspection_proj,
-    )
+        # Make table of contents. We can first do this now because it should be
+        # done after assembling all entires in the table of contents.
+        html_toc_string = html_helpers.html_get_table_of_contents(
+            table_of_contents,
+            introspection_proj.proj_profile.coverage_url,
+            introspection_proj,
+        )
 
-    # Close content-wrapper.
-    html_content_end = "</div>"
+        # Close content-wrapper.
+        html_content_end = "</div>"
 
-    # Create the footer
-    html_footer = create_html_footer(tables)
+        # Create the footer
+        html_footer = create_html_footer(tables)
 
-    # Assemble the final HTML report and write it to a file.
-    html_full_doc = (html_header + html_content_start + html_toc_string +
-                     html_body_start + html_overview + html_report_top +
-                     html_report_core + html_body_end + html_content_end +
-                     html_footer)
+        # Assemble the final HTML report and write it to a file.
+        html_full_doc = (html_header + html_content_start + html_toc_string +
+                         html_body_start + html_overview + html_report_top +
+                         html_report_core + html_body_end + html_content_end +
+                         html_footer)
 
-    # Load debug informaiton because it will be correlated to the introspector
-    # functions.
-    introspection_proj.load_debug_report(out_dir, dump_files=dump_files)
+        # Load debug informaiton because it will be correlated to the
+        # introspector functions.
+        introspection_proj.load_debug_report(out_dir, dump_files=dump_files)
 
-    # Correlate debug info to introspector functions
-    analysis.correlate_introspection_functions_to_debug_info(
-        all_functions_json_report,
-        introspection_proj.debug_all_functions,
-        introspection_proj.proj_profile.target_lang,
-        introspection_proj.debug_report,
-    )
+        # Correlate debug info to introspector functions
+        analysis.correlate_introspection_functions_to_debug_info(
+            all_functions_json_report,
+            introspection_proj.debug_all_functions,
+            introspection_proj.proj_profile.target_lang,
+            introspection_proj.debug_report,
+        )
 
-    all_test_files = analysis.extract_test_information(
-        introspection_proj.debug_report,
-        introspection_proj.proj_profile.target_lang,
-        out_dir,
-        exclude_patterns=exclude_patterns,
-    )
-    if dump_files:
-        with open(os.path.join(out_dir, constants.TEST_FILES_JSON),
-                  "w") as test_file_fd:
-            test_file_fd.write(json.dumps(list(all_test_files)))
+        all_source_files = analysis.extract_all_sources(
+            introspection_proj.proj_profile.target_lang, exclude_patterns)
 
-    all_source_files = analysis.extract_all_sources(
-        introspection_proj.proj_profile.target_lang, exclude_patterns)
+        all_test_files = analysis.extract_test_information(
+            introspection_proj.debug_report,
+            introspection_proj.proj_profile.target_lang,
+            out_dir,
+            exclude_patterns=exclude_patterns,
+            source_files=all_source_files,
+        )
+        if dump_files:
+            with open(os.path.join(out_dir, constants.TEST_FILES_JSON),
+                      "w") as test_file_fd:
+                test_file_fd.write(json.dumps(list(all_test_files)))
 
-    if dump_files:
-        with open(os.path.join(out_dir, constants.ALL_SOURCE_FILES),
-                  "w") as source_fd:
-            source_fd.write(json.dumps(list(all_source_files)))
+        if dump_files:
+            with open(os.path.join(out_dir, constants.ALL_SOURCE_FILES),
+                      "w") as source_fd:
+                source_fd.write(json.dumps(list(all_source_files)))
 
-    # Write various stats and all-functions data to summary.json
-    introspection_proj.proj_profile.write_stats_to_summary_file(out_dir)
+        # Write various stats and all-functions data to summary.json
+        introspection_proj.proj_profile.write_stats_to_summary_file(out_dir)
 
-    # Write all functions to all-fuzz-introspector-functions.json
-    if dump_files:
-        json_report.create_all_fi_functions_json(all_functions_json_report,
-                                                 out_dir)
+        # Write all functions to all-fuzz-introspector-functions.json
+        if dump_files:
+            json_report.create_all_fi_functions_json(all_functions_json_report,
+                                                     out_dir)
 
-    # Write jvm constructor details to all-fuzz-introspector-jvm-constructor.json
-    if (introspection_proj.proj_profile.target_lang == "jvm"
-            and all_functions_json_report):
-        jvm_constructor_json_report: List[Dict[str, Any]] = []
-        for fd in introspection_proj.proj_profile.all_constructors.values():
-            json_copy: Dict[str, Any] = {}
-            json_copy["Func name"] = fd.function_name
-            json_copy["func_url"] = "N/A"
-            json_copy["function_signature"] = fd.function_name
-            json_copy["Functions filename"] = fd.function_source_file
-            json_copy["Args"] = fd.arg_types
-            json_copy["ArgNames"] = fd.arg_names
-            json_copy["Function call depth"] = fd.function_depth
-            json_copy["Reached by Fuzzers"] = fd.reached_by_fuzzers
-            json_copy[
-                "Runtime reached by Fuzzers"] = fd.reached_by_fuzzers_runtime
-            json_copy[
-                "Combined reached by Fuzzers"] = fd.reached_by_fuzzers_combined
-            json_copy["collapsible_id"] = fd.function_name
-            json_copy["return_type"] = fd.return_type
-            json_copy["raw-function-name"] = fd.raw_function_name
-            json_copy["I Count"] = fd.i_count
-            json_copy["BB Count"] = fd.bb_count
-            json_copy["Cyclomatic complexity"] = fd.cyclomatic_complexity
-            json_copy["Undiscovered complexity"] = fd.new_unreached_complexity
-            json_copy["Functions reached"] = len(fd.functions_reached)
-            json_copy["Reached by functions"] = len(fd.incoming_references)
-            json_copy["Accumulated cyclomatic complexity"] = (
-                fd.total_cyclomatic_complexity)
-            json_copy["callsites"] = fd.callsite
-            json_copy["source_line_begin"] = fd.function_linenumber
-            json_copy["source_line_end"] = fd.function_line_number_end
-            json_copy["is_accessible"] = fd.is_accessible
-            json_copy["is_jvm_library"] = fd.is_jvm_library
-            json_copy["is_enum_class"] = fd.is_enum
-            json_copy["is_static"] = fd.is_static
-            json_copy["need_close"] = fd.need_close
-            json_copy["exceptions"] = fd.exceptions
-            json_copy["Fuzzers runtime hit"] = "no"
-            json_copy["Func lines hit %"] = "0.0%"
-            jvm_constructor_json_report.append(json_copy)
+        # Write jvm constructor details to all-fuzz-introspector-jvm-constructor.json
+        if (introspection_proj.proj_profile.target_lang == "jvm"
+                and all_functions_json_report):
+            jvm_constructor_json_report: List[Dict[str, Any]] = []
+            for fd in introspection_proj.proj_profile.all_constructors.values(
+            ):
+                json_copy: Dict[str, Any] = {}
+                json_copy["Func name"] = fd.function_name
+                json_copy["func_url"] = "N/A"
+                json_copy["function_signature"] = fd.function_name
+                json_copy["Functions filename"] = fd.function_source_file
+                json_copy["Args"] = fd.arg_types
+                json_copy["ArgNames"] = fd.arg_names
+                json_copy["Function call depth"] = fd.function_depth
+                json_copy["Reached by Fuzzers"] = fd.reached_by_fuzzers
+                json_copy[
+                    "Runtime reached by Fuzzers"] = fd.reached_by_fuzzers_runtime
+                json_copy[
+                    "Combined reached by Fuzzers"] = fd.reached_by_fuzzers_combined
+                json_copy["collapsible_id"] = fd.function_name
+                json_copy["return_type"] = fd.return_type
+                json_copy["raw-function-name"] = fd.raw_function_name
+                json_copy["I Count"] = fd.i_count
+                json_copy["BB Count"] = fd.bb_count
+                json_copy["Cyclomatic complexity"] = fd.cyclomatic_complexity
+                json_copy[
+                    "Undiscovered complexity"] = fd.new_unreached_complexity
+                json_copy["Functions reached"] = len(fd.functions_reached)
+                json_copy["Reached by functions"] = len(fd.incoming_references)
+                json_copy["Accumulated cyclomatic complexity"] = (
+                    fd.total_cyclomatic_complexity)
+                json_copy["callsites"] = fd.callsite
+                json_copy["source_line_begin"] = fd.function_linenumber
+                json_copy["source_line_end"] = fd.function_line_number_end
+                json_copy["is_accessible"] = fd.is_accessible
+                json_copy["is_jvm_library"] = fd.is_jvm_library
+                json_copy["is_enum_class"] = fd.is_enum
+                json_copy["is_static"] = fd.is_static
+                json_copy["need_close"] = fd.need_close
+                json_copy["exceptions"] = fd.exceptions
+                json_copy["Fuzzers runtime hit"] = "no"
+                json_copy["Func lines hit %"] = "0.0%"
+                jvm_constructor_json_report.append(json_copy)
 
-        if jvm_constructor_json_report and dump_files:
-            json_report.create_all_jvm_constructor_json(
-                jvm_constructor_json_report, out_dir)
+            if jvm_constructor_json_report and dump_files:
+                json_report.create_all_jvm_constructor_json(
+                    jvm_constructor_json_report, out_dir)
 
-    if dump_files:
-        write_content_to_html_files(html_full_doc, all_functions_json_html,
-                                    fuzzer_table_data, out_dir)
+        if dump_files:
+            write_content_to_html_files(html_full_doc, all_functions_json_html,
+                                        fuzzer_table_data, out_dir)
 
-        introspection_proj.dump_debug_report(out_dir)
+            introspection_proj.dump_debug_report(out_dir)
 
-        # Double check source files have been copied
-        logger.info("Verifying copied source files (%d files)",
-                    len(all_source_files))
-        for idx, elem in enumerate(all_source_files, 1):
-            if idx % 5000 == 0:
-                logger.info("Verified %d/%d source files", idx,
-                            len(all_source_files))
-            dst = os.path.join(out_dir,
-                               constants.SAVED_SOURCE_FOLDER + "/" + elem)
-            if not os.path.isfile(dst):
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                shutil.copy(elem, dst)
+            # Double check source files have been copied
+            logger.info("Verifying copied source files (%d files)",
+                        len(all_source_files))
+            for idx, elem in enumerate(all_source_files, 1):
+                if idx % 5000 == 0:
+                    logger.info("Verified %d/%d source files", idx,
+                                len(all_source_files))
+                dst = os.path.join(out_dir,
+                                   constants.SAVED_SOURCE_FOLDER + "/" + elem)
+                if not os.path.isfile(dst):
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    shutil.copy(elem, dst)
 
-    # Determine the source files required for the java project
-    source_file_list = []
-    if introspection_proj.language == "jvm":
-        source_file_list = [
-            # Extract full class name from jvm method name
-            # Sample: [Full.class.name].methodName(params)
-            func_item["Func name"].split("].", 1)[0][1:]
-            for func_item in (all_functions_json_report +
-                              jvm_constructor_json_report)
-        ]
+        # Determine the source files required for the java project
+        source_file_list = []
+        if introspection_proj.language == "jvm":
+            source_file_list = [
+                # Extract full class name from jvm method name
+                # Sample: [Full.class.name].methodName(params)
+                func_item["Func name"].split("].", 1)[0][1:]
+                for func_item in (all_functions_json_report +
+                                  jvm_constructor_json_report)
+            ]
 
-        # Also add test sources
-        source_file_list.extend(list(all_test_files))
-        logger.debug(source_file_list)
+            # Also add test sources
+            source_file_list.extend(list(all_test_files))
+            logger.debug(source_file_list)
 
-    # Copy source files (Only for Java/Python projects)
-    utils.copy_source_files(source_file_list, introspection_proj.language,
-                            out_dir)
+        # Copy source files (Only for Java/Python projects)
+        utils.copy_source_files(source_file_list, introspection_proj.language,
+                                out_dir)
