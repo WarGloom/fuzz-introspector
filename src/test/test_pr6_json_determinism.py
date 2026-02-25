@@ -17,6 +17,7 @@ import json
 import hashlib
 from pathlib import Path
 from typing import Any
+from copy import deepcopy
 
 import pytest
 
@@ -328,9 +329,9 @@ def test_json_report_no_dump_preserves_summary_state(
     monkeypatch.setattr(json_report, "_overwrite_report_with_dict",
                         capture_summary)
 
-    json_report.add_analysis_dict_to_json_report("new-analysis", {
-        "value": "active"
-    }, str(out_dir))
+    json_report.add_analysis_dict_to_json_report("new-analysis",
+                                                 {"value": "active"},
+                                                 str(out_dir))
 
     assert captured["contents"]["analyses"] == {
         "baseline": {
@@ -351,23 +352,18 @@ def test_json_report_no_dump_still_emits_merge_intents(
 
     collector = merge_intents.MergeIntentCollector()
     with merge_intents.merge_intent_context(collector):
-        json_report.add_analysis_dict_to_json_report(
-            "detached", {
-                "value": "analysis"
-            }, str(out_dir))
+        json_report.add_analysis_dict_to_json_report("detached",
+                                                     {"value": "analysis"},
+                                                     str(out_dir))
         json_report.add_fuzzer_key_value_to_report(
             "fuzzer",
             "stats",
-            {
-                "total": 1
-            },
+            {"total": 1},
             str(out_dir),
         )
         json_report.add_project_key_value_to_report(
             "stats",
-            {
-                "total": 2
-            },
+            {"total": 2},
             str(out_dir),
         )
 
@@ -377,8 +373,66 @@ def test_json_report_no_dump_still_emits_merge_intents(
         "analyses.detached",
         "fuzzers.fuzzer.stats",
         "project.stats",
-    } == {
-        intent["target_path"]
-        for intent in intents
-    }
+    } == {intent["target_path"]
+          for intent in intents}
     assert not (out_dir / constants.SUMMARY_FILE).is_file()
+
+
+def test_json_report_summary_update_batch_coalesces_updates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline_summary = {
+        constants.JSON_REPORT_KEY_PROJECT: {},
+        "fuzzers": {
+            "fuzzer": {
+                "stats": {
+                    "total": 1
+                }
+            }
+        },
+        "analyses": {
+            "baseline": {
+                "value": 1
+            }
+        },
+    }
+    summary_path = tmp_path / constants.SUMMARY_FILE
+    summary_path.write_text(json.dumps(baseline_summary), encoding="utf-8")
+
+    monkeypatch.setattr(constants, "should_dump_files", True)
+    monkeypatch.setattr(json_report, "_SUMMARY_BATCHES", {})
+    monkeypatch.setattr(json_report, "_SUMMARY_BATCH_DEPTH", {})
+    captured: dict[str, Any] = {}
+    write_calls = {"count": 0}
+
+    def capture_overwrite(contents: dict[str, Any], _out_dir: str) -> None:
+        write_calls["count"] += 1
+        captured.update(deepcopy(contents))
+
+    monkeypatch.setattr(json_report, "_overwrite_report_with_dict",
+                        capture_overwrite)
+
+    with json_report.summary_update_batch(str(tmp_path)):
+        json_report.add_analysis_dict_to_json_report("new-analysis",
+                                                     {"value": 2},
+                                                     str(tmp_path))
+        json_report.add_fuzzer_key_value_to_report("fuzzer", "metadata",
+                                                   {"value": "present"},
+                                                   str(tmp_path))
+        json_report.add_project_key_value_to_report("stats", {"coverage": 12},
+                                                    str(tmp_path))
+
+    assert write_calls["count"] == 1
+    assert captured["analyses"] == {
+        "baseline": {
+            "value": 1
+        },
+        "new-analysis": {
+            "value": 2
+        },
+    }
+    assert captured["fuzzers"]["fuzzer"]["metadata"] == {"value": "present"}
+    assert captured[constants.JSON_REPORT_KEY_PROJECT]["stats"] == {
+        "coverage": 12
+    }

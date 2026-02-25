@@ -21,11 +21,12 @@ import pytest
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../")
 
-from fuzz_introspector import constants, html_report  # noqa: E402
+from fuzz_introspector import constants, html_report, styling  # noqa: E402
 
 
 def test_write_content_to_html_files_skips_prettify_when_disabled(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+
     def fail_if_prettified(_html_doc: str) -> str:
         raise AssertionError("prettify_html should not be called")
 
@@ -70,3 +71,14 @@ def test_write_content_to_html_files_handles_invalid_prettify_env(
     assert report_path.read_text(encoding="utf-8") == "PRETTY"
     assert any("Invalid FI_PRETTIFY_MAX_DOC_MB" in record.message
                for record in caplog.records)
+
+
+def test_get_body_script_tags_does_not_mutate_main_js_list(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FI_INLINE_JS", raising=False)
+    original = list(styling.MAIN_JS_FILES)
+
+    html_report.get_body_script_tags([], {})
+    html_report.get_body_script_tags([], {})
+
+    assert styling.MAIN_JS_FILES == original
