@@ -22,10 +22,34 @@ from various sources, including DWARF debug info and other debug formats.
 import json
 import logging
 import os
+import re
 import shutil
 import yaml
 
 logger = logging.getLogger(name=__name__)
+
+# Pre-compiled regex patterns for debug info parsing (performance optimization)
+# These patterns are used in extract_all_functions_in_debug_info
+
+# Match the functions section: between "## Functions defined in module" and "## Global variables"
+FUNCTION_SECTION_RE = re.compile(
+    r"## Functions defined in module\n(.*?)## Global variables", re.DOTALL)
+
+# Match a function definition: "Subprogram: <function_name>"
+SUBPROGRAM_RE = re.compile(r"^Subprogram: (.+)$", re.MULTILINE)
+
+# Match source location line: " ... from <filepath>:<line_number>"
+# Conditions: contains " from ", contains ":", does NOT contain "- Operand" or "Elem "
+SOURCE_LOCATION_RE = re.compile(
+    r"^(?!.*- Operand)(?!.*Elem ).* from\s+([^:]+):(\d+).*$", re.MULTILINE)
+
+# Match argument type: " - Operand" lines
+# Two patterns:
+# 1. "Name: {<name>}" - named argument
+# 2. Otherwise - type information
+ARG_TYPE_RE = re.compile(r"Name: \{(.+?)\}")
+ARG_TYPE_SIMPLE_RE = re.compile(
+    r"- Operand.*?(?:Operand Type:|Type: )(.+?)(?: -|$)")
 
 
 def extract_all_compile_units(content, all_files_in_debug_info):
@@ -169,118 +193,94 @@ def extract_types(content, all_types, all_files_in_debug_info):
 
 def extract_all_functions_in_debug_info(content, all_functions_in_debug,
                                         all_files_in_debug_info):
-    function_identifier = "## Functions defined in module"
-    read_functions = False
-    current_function = None
-    global_variable_identifier = "## Global variables in module"
-    logger.info("Extracting functions")
+    """Extract function information from debug info content.
 
-    for line in content.split("\n"):
-        if function_identifier in line:
-            read_functions = True
-        if global_variable_identifier in line:
-            if current_function is not None:
-                # Adjust args such that arg0 is set to the return type
-                current_args = current_function.get("args", [])
-                if len(current_args) > 0:
-                    return_type = current_args[0]
-                    current_args = current_args[1:]
-                    current_function["args"] = current_args
-                    current_function["return_type"] = return_type
+    Optimized version using pre-compiled regex patterns for better performance.
+    """
+    # Find the functions section using regex (single pass)
+    functions_match = FUNCTION_SECTION_RE.search(content)
+    if not functions_match:
+        logger.debug("No functions section found in debug info")
+        return
 
-                try:
-                    hashkey = (current_function["source"]["source_file"] +
-                               current_function["source"]["source_line"])
-                except KeyError:
-                    hashkey = None
+    functions_section = functions_match.group(1)
 
-                if hashkey is not None:
-                    # print("Actually adding 1: %s"%(current_function['name']))
-                    all_functions_in_debug[hashkey] = current_function
-                else:
-                    # Something went wrong, abandon.
-                    current_function = None
-            read_functions = False
+    # Find all function definitions in the section
+    subprogram_matches = list(SUBPROGRAM_RE.finditer(functions_section))
 
-        if read_functions:
-            if line.startswith("Subprogram: "):
-                # print("Subprogram line: %s"%(line))
-                if current_function is not None:
-                    # Adjust args such that arg0 is set to the return type
-                    current_args = current_function.get("args", [])
-                    if len(current_args) > 0:
-                        return_type = current_args[0]
-                        current_args = current_args[1:]
-                        current_function["args"] = current_args
-                        current_function["return_type"] = return_type
-                    try:
-                        hashkey = (current_function["source"]["source_file"] +
-                                   current_function["source"]["source_line"])
-                    except KeyError:
-                        hashkey = None
+    for idx, func_match in enumerate(subprogram_matches):
+        function_name = func_match.group(1).strip()
 
-                    if hashkey is not None:
-                        # print(
-                        #  "Actually adding 2: %s :: to %s"%(current_function['name'], hashkey)
-                        # )
-                        all_functions_in_debug[hashkey] = current_function
-                    else:
-                        # Something went wrong, abandon.
-                        current_function = None
-                current_function = dict()
-                function_name = " ".join(line.split(" ")[1:])
-                # print("Adding function: %s"%(function_name))
-                current_function["name"] = function_name
-            if (" from " in line and ":" in line and "- Operand" not in line
-                    and "Elem " not in line):
-                location = line.split(" from ")[-1]
-                source_file = location.split(":")[0].strip()
-                try:
-                    source_line = line.split(":")[-1].strip()
-                    if len(source_line.split(" ")) > 0:
-                        source_line = source_line.split(" ")[0]
-                except IndexError:
-                    source_line = "-1"
-                current_function["source"] = {
+        # Get the text after this function name until the next function or end
+        start_pos = func_match.end()
+        if idx + 1 < len(subprogram_matches):
+            end_pos = subprogram_matches[idx + 1].start()
+        else:
+            end_pos = len(functions_section)
+
+        func_block = functions_section[start_pos:end_pos]
+
+        # Parse the function block
+        current_function = {"name": function_name}
+
+        # Find source location in the block
+        source_match = SOURCE_LOCATION_RE.search(func_block)
+        if source_match:
+            source_file = source_match.group(1).strip()
+            source_line = source_match.group(2).strip()
+            current_function["source"] = {
+                "source_file": source_file,
+                "source_line": source_line,
+            }
+            # Add the file to all files in project
+            if source_file not in all_files_in_debug_info:
+                all_files_in_debug_info[source_file] = {
                     "source_file": source_file,
-                    "source_line": source_line,
+                    "language": "N/A",
                 }
-                # Add the file to all files in project
-                if source_file not in all_files_in_debug_info:
-                    all_files_in_debug_info[source_file] = {
-                        "source_file": source_file,
-                        "language": "N/A",
-                    }
-            if " - Operand" in line:
-                # Decipher type
-                current_args = current_function.get("args", [])
-                if "Name: {" not in line:
+
+        # Find argument types in the block
+        args = []
+
+        # Check for "Name: {<name>}" pattern
+        for name_match in ARG_TYPE_RE.finditer(func_block):
+            args.append(name_match.group(1).strip())
+
+        # Check for type information (lines with " - Operand")
+        if len(args) == 0:
+            # No named args, look for type-only lines
+            for line in func_block.splitlines():
+                if " - Operand" in line:
+                    # Extract type info
                     l1 = (line.replace("Operand Type:",
                                        "").replace("Type: ",
                                                    "").replace("-", ""))
-                    pointer_count = 0
-                    const_count = 0
-                    for arg_type in l1.split(","):
-                        if "DW_TAG_pointer_type" in arg_type:
-                            pointer_count += 1
-                        if "DW_TAG_const_type" in arg_type:
-                            const_count += 1
-                    base_type = l1.split(",")[-1].strip()
-                    end_type = ""
-                    if const_count > 0:
-                        end_type += "const "
-                    end_type += base_type
-                    if pointer_count > 0:
-                        end_type += " "
-                        end_type += "*" * pointer_count
+                    pointer_count = l1.count("DW_TAG_pointer_type")
+                    const_count = l1.count("DW_TAG_const_type")
 
-                    current_args.append(end_type)
-                elif "Name: " in line:
-                    current_args.append(
-                        line.split("{")[-1].split("}")[0].strip())
-                else:
-                    current_args.append(line)
-                current_function["args"] = current_args
+                    # Get base type (last comma-separated part)
+                    parts = l1.split(",")
+                    if parts:
+                        base_type = parts[-1].strip()
+                        end_type = ""
+                        if const_count > 0:
+                            end_type += "const "
+                        end_type += base_type
+                        if pointer_count > 0:
+                            end_type += " " + "*" * pointer_count
+                        args.append(end_type)
+
+        if args:
+            current_function["args"] = args
+
+        # Create hashkey and add to all_functions_in_debug
+        if "source" in current_function:
+            try:
+                hashkey = (current_function["source"]["source_file"] +
+                           current_function["source"]["source_line"])
+                all_functions_in_debug[hashkey] = current_function
+            except KeyError:
+                pass  # Something went wrong, abandon
 
 
 def load_debug_report(debug_files, base_dir=None):
