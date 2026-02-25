@@ -21,7 +21,7 @@ import os
 import re
 import shutil
 
-from typing import Dict, List, Type, Set, Union
+from typing import Dict, List, Optional, Type, Set, Union
 
 from fuzz_introspector import (
     cfg_load,
@@ -60,6 +60,7 @@ class IntrospectionProject:
         self.base_folder = target_folder
         self.coverage_url = coverage_url
         self.optional_analyses = []
+        self.exclude_patterns = []
 
     def load_data_files(
         self,
@@ -67,11 +68,13 @@ class IntrospectionProject:
         correlation_file=None,
         out_dir: str = "",
         harness_lists=None,
+        exclude_patterns: Optional[List[str]] = None,
     ):
         """Generates the `proj_profile` and `profiles` elements of this class
         based on the raw data given as arguments. This function must be called
         before any real use of `IntrospectionProject` can happen.
         """
+        self.exclude_patterns = exclude_patterns if exclude_patterns else []
 
         if harness_lists:
             logger.info("Loading profiles using harness list")
@@ -83,11 +86,22 @@ class IntrospectionProject:
                         report_yaml,
                         self.language,
                         cfg_content=calltree_text,
+                        exclude_patterns=self.exclude_patterns,
                     ))
         else:
             logger.info("Loading profiles using files")
             self.profiles = data_loader.load_all_profiles(
                 self.base_folder, self.language, parallelise)
+
+        # Apply exclude patterns to filter functions from loaded profiles
+        if self.exclude_patterns:
+            for profile in self.profiles:
+                profile.all_class_functions = {
+                    name: func
+                    for name, func in profile.all_class_functions.items()
+                    if not profile._matches_exclude_pattern(
+                        func.function_source_file)
+                }
 
         logger.info("Found %d profiles", len(self.profiles))
         if len(self.profiles) == 0:
@@ -1307,6 +1321,8 @@ def extract_tests_from_directories(directories,
     """Extracts test files from a given collection of directory paths and also
     copies them to the `constants.SAVED_SOURCE_FOLDER` folder with the same
     absolute path appended."""
+    file_count = 0
+
     inspirations = ["sample", "test", "example"]
 
     normalized_directories = set()
@@ -1412,6 +1428,14 @@ def extract_tests_from_directories(directories,
                 d for d in dirs if not d.startswith(".")
                 and is_candidate_source(os.path.join(root, d))
             ]
+
+            # Progress logging for long scans
+            file_count += len(files)
+            if file_count % 5000 == 0:
+                logger.info(
+                    "extract_tests_from_directories: scanned %d files...",
+                    file_count)
+
             is_inspiration_root = any(ins in root for ins in inspirations)
             for f in files:
                 if not f.endswith(tuple(test_extensions)):

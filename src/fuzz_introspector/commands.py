@@ -212,7 +212,7 @@ def run_analysis_on_dir(
     introspection_proj = analysis.IntrospectionProject(language, target_folder,
                                                        coverage_url)
     introspection_proj.load_data_files(parallelise, correlation_file, out_dir,
-                                       harness_lists)
+                                       harness_lists, exclude_patterns)
 
     logger.info("Analyses to run: %s", str(analyses_to_run))
     logger.info("[+] Creating HTML report")
