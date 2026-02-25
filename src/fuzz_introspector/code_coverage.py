@@ -483,8 +483,8 @@ def load_llvm_coverage(target_dir: str,
 
     all_coverage_reports = utils.get_all_files_in_tree_with_regex(
         target_dir, r".*\.covreport$")
-    logger.info(f"Found {len(all_coverage_reports)} coverage reports in target directory {target_dir}")
-
+    logger.info(
+        f"Found {len(all_coverage_reports)} coverage reports in {target_dir}")
 
     coverage_reports = list()
 

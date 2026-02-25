@@ -154,9 +154,14 @@ def test_run_analysis_on_dir_loads_and_forwards_report_exclusions(monkeypatch):
             self.coverage_url = coverage_url
 
         def load_data_files(
-            self, parallelise, correlation_file, out_dir, harness_lists
+            self,
+            parallelise,
+            correlation_file,
+            out_dir,
+            harness_lists,
+            exclude_patterns,
         ):
-            del parallelise, correlation_file, out_dir, harness_lists
+            del parallelise, correlation_file, out_dir, harness_lists, exclude_patterns
 
     def fake_create_html_report(
         introspection_proj,
