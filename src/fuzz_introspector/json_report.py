@@ -56,9 +56,6 @@ def add_analysis_dict_to_json_report(analysis_name: str,
     Will overwrite the existing key/value pair for the analysis if it already
     exists as an analysis in the report.
     """
-    if not constants.should_dump_files:
-        return
-
     collector = merge_intents.get_active_merge_intent_collector()
     if collector is not None:
         intent = merge_intents.create_json_upsert_intent(
@@ -91,9 +88,6 @@ def add_fuzzer_key_value_to_report(fuzzer_name: str, key: str, value: Any,
     Will overwrite the existing key/value pair under the fuzzer if it already
     exists in the report.
     """
-    if not constants.should_dump_files:
-        return
-
     collector = merge_intents.get_active_merge_intent_collector()
     if collector is not None:
         intent = merge_intents.create_json_upsert_intent(
@@ -117,9 +111,6 @@ def add_project_key_value_to_report(key: str, value: Any, out_dir) -> None:
     Will overwrite the existing key/value pair if the key already exists in
     the report.
     """
-    if not constants.should_dump_files:
-        return
-
     collector = merge_intents.get_active_merge_intent_collector()
     if collector is not None:
         intent = merge_intents.create_json_upsert_intent(

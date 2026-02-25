@@ -927,10 +927,45 @@ def write_content_to_html_files(html_full_doc, all_functions_json_html,
       dynamically.
     """
     logger.info("Dumping report")
+    start_time = time.monotonic()
+    html_size_bytes = len(html_full_doc.encode("utf-8"))
+    default_prettify_mb = 5
+    max_prettify_mb = default_prettify_mb
+    max_prettify_mb_raw = os.environ.get("FI_PRETTIFY_MAX_DOC_MB", "5")
+    try:
+        max_prettify_mb = int(max_prettify_mb_raw)
+        if max_prettify_mb < 1:
+            raise ValueError
+    except ValueError:
+        max_prettify_mb = default_prettify_mb
+        logger.warning(
+            "Invalid FI_PRETTIFY_MAX_DOC_MB=%r; defaulting to %d",
+            max_prettify_mb_raw,
+            max_prettify_mb,
+        )
+    max_prettify_bytes = max_prettify_mb * 1024 * 1024
+    disable_prettify = os.environ.get("FI_DISABLE_HTML_PRETTIFY",
+                                      "").lower() in ("1", "true", "yes", "on")
+
+    if disable_prettify:
+        logger.info("Skipping HTML prettify because FI_DISABLE_HTML_PRETTIFY is set")
+        rendered_html = html_full_doc
+    elif html_size_bytes > max_prettify_bytes:
+        logger.info(
+            "Skipping HTML prettify because report size %d bytes exceeds %d MiB threshold",
+            html_size_bytes,
+            max_prettify_mb,
+        )
+        rendered_html = html_full_doc
+    else:
+        logger.info("Prettifying report HTML (%d bytes)", html_size_bytes)
+        rendered_html = html_helpers.prettify_html(html_full_doc)
+        logger.info("Finished prettifying report HTML")
+
     # Dump the HTML report.
     with open(os.path.join(out_dir, constants.HTML_REPORT),
               "w") as report_file:
-        report_file.write(html_helpers.prettify_html(html_full_doc))
+        report_file.write(rendered_html)
 
     # Dump function data to the relevant javascript file.
     with open(os.path.join(out_dir, constants.ALL_FUNCTION_JS),
@@ -946,6 +981,8 @@ def write_content_to_html_files(html_full_doc, all_functions_json_html,
 
     # Copy all of the styling into the directory.
     styling.copy_style_files(out_dir)
+    logger.info("Finished dumping report artifacts in %.2fs",
+                time.monotonic() - start_time)
 
 
 def create_section_fuzzers_overview(
@@ -1400,7 +1437,7 @@ def create_html_report(
             test_file_fd.write(json.dumps(list(all_test_files)))
 
     all_source_files = analysis.extract_all_sources(
-        introspection_proj.proj_profile.target_lang)
+        introspection_proj.proj_profile.target_lang, exclude_patterns)
 
     if dump_files:
         with open(os.path.join(out_dir, constants.ALL_SOURCE_FILES),
@@ -1468,7 +1505,12 @@ def create_html_report(
         introspection_proj.dump_debug_report(out_dir)
 
         # Double check source files have been copied
-        for elem in all_source_files:
+        logger.info("Verifying copied source files (%d files)",
+                    len(all_source_files))
+        for idx, elem in enumerate(all_source_files, 1):
+            if idx % 5000 == 0:
+                logger.info("Verified %d/%d source files", idx,
+                            len(all_source_files))
             dst = os.path.join(out_dir,
                                constants.SAVED_SOURCE_FOLDER + "/" + elem)
             if not os.path.isfile(dst):

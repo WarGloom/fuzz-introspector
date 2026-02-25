@@ -157,3 +157,216 @@ def test_reaches_func(tmpdir, sample_cfg1):
     assert fp.reaches_func_combined('Random')
     assert fp.reaches_func_combined('def')
     assert not fp.reaches_func_combined('jkl')
+
+
+def test_prune_excluded_profile_data_removes_excluded_file_targets_and_funcs(
+    tmpdir,
+) -> None:
+    fp = fuzzer_profile.FuzzerProfile(
+        os.path.join(tmpdir, "test.data"),
+        {
+            "Fuzzer filename":
+            "/src/fuzz/fuzzer_dir/fuzzer.cc",
+            "All functions": {
+                "Elements":
+                [
+                    {
+                        "functionName": "LLVMFuzzerTestOneInput",
+                        "functionsReached": ["kept", "excluded"],
+                        "functionSourceFile":
+                        "/src/fuzz/fuzzer_dir/fuzzer.cc",
+                        "linkageType": None,
+                        "functionLinenumber": None,
+                        "returnType": None,
+                        "argCount": None,
+                        "argTypes": None,
+                        "argNames": None,
+                        "BBCount": None,
+                        "ICount": None,
+                        "EdgeCount": None,
+                        "CyclomaticComplexity": None,
+                        "functionUses": None,
+                        "functionDepth": None,
+                        "constantsTouched": None,
+                        "BranchProfiles": [],
+                        "Callsites": [],
+                    },
+                    {
+                        "functionName": "kept",
+                        "functionsReached": [],
+                        "functionSourceFile": "/src/fuzz/fuzzer_dir/fuzzer.cc",
+                        "linkageType": None,
+                        "functionLinenumber": None,
+                        "returnType": None,
+                        "argCount": None,
+                        "argTypes": None,
+                        "argNames": None,
+                        "BBCount": None,
+                        "ICount": None,
+                        "EdgeCount": None,
+                        "CyclomaticComplexity": None,
+                        "functionUses": None,
+                        "functionDepth": None,
+                        "constantsTouched": None,
+                        "BranchProfiles": [],
+                        "Callsites": [],
+                    },
+                    {
+                        "functionName": "excluded",
+                        "functionsReached": [],
+                        "functionSourceFile": "/src/vendor/ignored/fuzz.cc",
+                        "linkageType": None,
+                        "functionLinenumber": None,
+                        "returnType": None,
+                        "argCount": None,
+                        "argTypes": None,
+                        "argNames": None,
+                        "BBCount": None,
+                        "ICount": None,
+                        "EdgeCount": None,
+                        "CyclomaticComplexity": None,
+                        "functionUses": None,
+                        "functionDepth": None,
+                        "constantsTouched": None,
+                        "BranchProfiles": [],
+                        "Callsites": [],
+                    },
+                ]
+            },
+        },
+        "c-cpp",
+        cfg_content="""Call tree
+LLVMFuzzerTestOneInput /src/fuzz/fuzzer_dir/fuzzer.cc linenumber=-1
+  kept /src/fuzz/fuzzer_dir/fuzzer.cc linenumber=10
+  excluded /src/vendor/ignored/fuzz.cc linenumber=11""",
+        exclude_patterns=["/vendor/.*"],
+    )
+
+    fp._set_all_reached_functions()
+    fp._set_file_targets()
+    fp.functions_reached_by_fuzzer_runtime = ["kept", "excluded"]
+
+    fp._prune_excluded_profile_data()
+
+    assert "excluded" not in fp.functions_reached_by_fuzzer
+    assert "excluded" not in fp.functions_reached_by_fuzzer_runtime
+    assert "/src/vendor/ignored/fuzz.cc" not in fp.file_targets
+    assert "excluded" not in fp.functions_unreached_by_fuzzer
+
+
+def test_prune_excluded_profile_data_applies_function_patterns_only() -> None:
+    fp = fuzzer_profile.FuzzerProfile(
+        "test.data",
+        {
+            "Fuzzer filename": "/src/project/fuzzer.cc",
+            "All functions": {
+                "Elements":
+                [
+                    {
+                        "functionName": "LLVMFuzzerTestOneInput",
+                        "functionsReached": ["allowed", "skip_me"],
+                        "functionSourceFile": "/src/project/fuzzer.cc",
+                        "linkageType": None,
+                        "functionLinenumber": None,
+                        "returnType": None,
+                        "argCount": None,
+                        "argTypes": None,
+                        "argNames": None,
+                        "BBCount": None,
+                        "ICount": None,
+                        "EdgeCount": None,
+                        "CyclomaticComplexity": None,
+                        "functionUses": None,
+                        "functionDepth": None,
+                        "constantsTouched": None,
+                        "BranchProfiles": [],
+                        "Callsites": [],
+                    },
+                    {
+                        "functionName": "allowed",
+                        "functionsReached": [],
+                        "functionSourceFile": "/src/project/file.cc",
+                        "linkageType": None,
+                        "functionLinenumber": None,
+                        "returnType": None,
+                        "argCount": None,
+                        "argTypes": None,
+                        "argNames": None,
+                        "BBCount": None,
+                        "ICount": None,
+                        "EdgeCount": None,
+                        "CyclomaticComplexity": None,
+                        "functionUses": None,
+                        "functionDepth": None,
+                        "constantsTouched": None,
+                        "BranchProfiles": [],
+                        "Callsites": [],
+                    },
+                    {
+                        "functionName": "skip_me",
+                        "functionsReached": [],
+                        "functionSourceFile": "/src/project/file.cc",
+                        "linkageType": None,
+                        "functionLinenumber": None,
+                        "returnType": None,
+                        "argCount": None,
+                        "argTypes": None,
+                        "argNames": None,
+                        "BBCount": None,
+                        "ICount": None,
+                        "EdgeCount": None,
+                        "CyclomaticComplexity": None,
+                        "functionUses": None,
+                        "functionDepth": None,
+                        "constantsTouched": None,
+                        "BranchProfiles": [],
+                        "Callsites": [],
+                    },
+                ]
+            },
+        },
+        "c-cpp",
+        cfg_content="""Call tree
+LLVMFuzzerTestOneInput /src/project/fuzzer.cc linenumber=-1
+  allowed /src/project/file.cc linenumber=10
+  skip_me /src/project/file.cc linenumber=11""",
+        exclude_function_patterns=[r"skip_me"],
+    )
+
+    fp._set_all_reached_functions()
+    fp._set_file_targets()
+    fp.functions_reached_by_fuzzer_runtime = ["allowed", "skip_me", "unknown_symbol"]
+
+    fp._prune_excluded_profile_data()
+
+    assert "skip_me" not in fp.functions_reached_by_fuzzer
+    assert "skip_me" not in fp.functions_reached_by_fuzzer_runtime
+    assert "unknown_symbol" in fp.functions_reached_by_fuzzer_runtime
+    assert fp.file_targets["/src/project/file.cc"] == {"allowed"}
+
+
+def test_invalid_exclusion_patterns_are_ignored_with_warning(
+        caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING"):
+        fp = fuzzer_profile.FuzzerProfile(
+            "test.data",
+            {
+                "Fuzzer filename": "/src/project/fuzzer.cc",
+                "All functions": {
+                    "Elements": []
+                },
+            },
+            "c-cpp",
+            cfg_content="""Call tree
+LLVMFuzzerTestOneInput /src/project/fuzzer.cc linenumber=-1""",
+            exclude_patterns=["[invalid"],
+            exclude_function_patterns=["(bad"],
+        )
+
+    warning_messages = [record.message for record in caplog.records]
+    assert any("Ignoring invalid file exclusion pattern" in msg
+               for msg in warning_messages)
+    assert any("Ignoring invalid function exclusion pattern" in msg
+               for msg in warning_messages)
+    assert not fp._matches_exclude_pattern("/src/project/fuzzer.cc")
+    assert not fp._matches_exclude_function_pattern("keep_me")

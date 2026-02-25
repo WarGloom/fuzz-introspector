@@ -32,21 +32,23 @@ from fuzz_introspector.frontends import oss_fuzz
 logger = logging.getLogger(name=__name__)
 
 
-def load_report_exclude_patterns_from_config(
-    config_path: str | None = None, ) -> list[str]:
-    """Loads FILES_TO_AVOID patterns for report extraction.
+def load_report_exclusion_patterns_from_config(
+    config_path: str | None = None,
+) -> tuple[list[str], list[str]]:
+    """Loads FILES_TO_AVOID and FUNCS_TO_AVOID patterns for report extraction.
 
-    Returns an empty list if no config path is set or the config file
+    Returns empty lists if no config path is set or the config file
     is not readable.
     """
     if config_path is None:
         config_path = os.environ.get("FUZZ_INTROSPECTOR_CONFIG", "")
 
     if not config_path:
-        return []
+        return [], []
 
-    patterns = []
-    in_files_to_avoid = False
+    file_patterns = []
+    function_patterns = []
+    active_avoid_list = ""
     try:
         with open(config_path, "r") as config_file:
             for raw_line in config_file:
@@ -54,23 +56,49 @@ def load_report_exclude_patterns_from_config(
                 if not line or line.startswith("#"):
                     continue
 
-                if line.startswith("FILES_TO_AVOID"):
-                    in_files_to_avoid = True
+                header_token = line.split(None, 1)[0].rstrip(":")
+                if header_token == "FILES_TO_AVOID":
+                    active_avoid_list = "files"
                     continue
-                if line.endswith("_TO_AVOID"):
-                    in_files_to_avoid = False
+                if header_token == "FUNCS_TO_AVOID":
+                    active_avoid_list = "functions"
+                    continue
+                if header_token.endswith("_TO_AVOID"):
+                    active_avoid_list = ""
                     continue
 
-                if in_files_to_avoid:
-                    patterns.append(line)
+                if active_avoid_list == "files":
+                    file_patterns.append(line)
+                elif active_avoid_list == "functions":
+                    function_patterns.append(line)
     except OSError as err:
         logger.warning("Could not read FUZZ_INTROSPECTOR_CONFIG '%s': %s",
                        config_path, err)
-        return []
+        return [], []
 
-    logger.info("Loaded %d report exclusion patterns from config",
-                len(patterns))
-    return patterns
+    logger.info(
+        "Loaded %d report FILES_TO_AVOID patterns and %d FUNCS_TO_AVOID patterns",
+        len(file_patterns),
+        len(function_patterns),
+    )
+    return file_patterns, function_patterns
+
+
+def load_report_exclude_patterns_from_config(
+    config_path: str | None = None,
+) -> list[str]:
+    """Loads FILES_TO_AVOID patterns for report extraction."""
+    file_patterns, _ = load_report_exclusion_patterns_from_config(config_path)
+    return file_patterns
+
+
+def load_report_exclude_function_patterns_from_config(
+    config_path: str | None = None,
+) -> list[str]:
+    """Loads FUNCS_TO_AVOID patterns for report extraction."""
+    _, function_patterns = load_report_exclusion_patterns_from_config(
+        config_path)
+    return function_patterns
 
 
 def diff_two_reports(report1: str, report2: str) -> int:
@@ -194,6 +222,7 @@ def run_analysis_on_dir(
     out_dir: str = "",
     harness_lists=None,
     exclude_patterns: Optional[list[str]] = None,
+    exclude_function_patterns: Optional[list[str]] = None,
 ) -> Tuple[int, Dict[str, Any]]:
     """Runs Fuzz Introspector analysis from based on the results
     from a frontend run. The primary task is to aggregate the data
@@ -202,7 +231,11 @@ def run_analysis_on_dir(
     constants.should_dump_files = dump_files
 
     if exclude_patterns is None:
-        exclude_patterns = load_report_exclude_patterns_from_config()
+        (exclude_patterns,
+         exclude_function_patterns) = load_report_exclusion_patterns_from_config()
+    elif exclude_function_patterns is None:
+        exclude_function_patterns = (
+            load_report_exclude_function_patterns_from_config())
 
     if enable_all_analyses:
         for analysis_interface in analysis.get_all_analyses():
@@ -211,8 +244,14 @@ def run_analysis_on_dir(
 
     introspection_proj = analysis.IntrospectionProject(language, target_folder,
                                                        coverage_url)
-    introspection_proj.load_data_files(parallelise, correlation_file, out_dir,
-                                       harness_lists, exclude_patterns)
+    introspection_proj.load_data_files(
+        parallelise,
+        correlation_file,
+        out_dir,
+        harness_lists,
+        exclude_patterns,
+        exclude_function_patterns,
+    )
 
     logger.info("Analyses to run: %s", str(analyses_to_run))
     logger.info("[+] Creating HTML report")
@@ -239,22 +278,32 @@ def light_analysis(args) -> int:
     src_dir = os.getenv("SRC", "/src/")
     inspector_dir = os.path.join(src_dir, "inspector")
     light_dir = os.path.join(inspector_dir, "light")
+    exclude_patterns, _ = load_report_exclusion_patterns_from_config()
 
     if not os.path.isdir(light_dir):
         os.makedirs(light_dir, exist_ok=True)
 
-    all_tests = analysis.extract_tests_from_directories({src_dir},
-                                                        args.language,
-                                                        inspector_dir)
+    all_tests = analysis.extract_tests_from_directories(
+        {src_dir},
+        args.language,
+        inspector_dir,
+        exclude_patterns=exclude_patterns,
+    )
 
     with open(os.path.join(light_dir, "all_tests.json"), "w") as f:
         f.write(json.dumps(list(all_tests)))
 
-    pairs = analysis.light_correlate_source_to_executable(args.language)
+    pairs = analysis.light_correlate_source_to_executable(
+        args.language,
+        exclude_patterns,
+    )
     with open(os.path.join(light_dir, "all_pairs.json"), "w") as f:
         f.write(json.dumps(list(pairs)))
 
-    all_source_files = analysis.extract_all_sources(args.language)
+    all_source_files = analysis.extract_all_sources(
+        args.language,
+        exclude_patterns,
+    )
     light_out_src = os.path.join(light_dir, "source_files")
 
     for source_file in all_source_files:
@@ -301,6 +350,8 @@ def analyse(args) -> int:
     else:
         entrypoint = "LLVMFuzzerTestOneInput"
 
+    exclude_patterns, exclude_function_patterns = (
+        load_report_exclusion_patterns_from_config())
     # Run the frontend
     oss_fuzz.analyse_folder(
         language=args.language,
@@ -316,7 +367,13 @@ def analyse(args) -> int:
 
     # Perform the FI backend project analysis from the frontend
     introspection_proj = analysis.IntrospectionProject(language, out_dir, "")
-    introspection_proj.load_data_files(True, "", out_dir)
+    introspection_proj.load_data_files(
+        True,
+        "",
+        out_dir,
+        exclude_patterns=exclude_patterns,
+        exclude_function_patterns=exclude_function_patterns,
+    )
 
     # Perform specific actions for certain standalone analyser
     if target_analyser.get_name() == "SourceCodeLineAnalyser":

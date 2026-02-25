@@ -13,6 +13,7 @@
 # limitations under the License.
 """PR6 JSON determinism + serial parity tests."""
 
+import json
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -296,3 +297,88 @@ def test_pr6_json_serial_parity_artifact_json(tmp_path: Path) -> None:
     merge_hash = _hash_file(merge_dir / constants.ALL_FUNCTIONS_JSON)
 
     assert baseline_hash == merge_hash
+
+
+def test_json_report_no_dump_preserves_summary_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(constants, "should_dump_files", False)
+    out_dir = tmp_path / "report-no-dump"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = out_dir / constants.SUMMARY_FILE
+    baseline_summary = {
+        "existing": {
+            "marker": "present"
+        },
+        "analyses": {
+            "baseline": {
+                "value": 1
+            }
+        },
+    }
+    summary_text = json.dumps(baseline_summary)
+    summary_path.write_text(summary_text, encoding="utf-8")
+
+    captured: dict[str, Any] = {}
+
+    def capture_summary(contents: dict[Any, Any], _out_dir: str) -> None:
+        captured["contents"] = contents
+
+    monkeypatch.setattr(json_report, "_overwrite_report_with_dict",
+                        capture_summary)
+
+    json_report.add_analysis_dict_to_json_report("new-analysis", {
+        "value": "active"
+    }, str(out_dir))
+
+    assert captured["contents"]["analyses"] == {
+        "baseline": {
+            "value": 1
+        },
+        "new-analysis": {
+            "value": "active"
+        },
+    }
+    assert summary_path.read_text(encoding="utf-8") == summary_text
+
+
+def test_json_report_no_dump_still_emits_merge_intents(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(constants, "should_dump_files", False)
+    out_dir = tmp_path / "intent-no-dump"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    collector = merge_intents.MergeIntentCollector()
+    with merge_intents.merge_intent_context(collector):
+        json_report.add_analysis_dict_to_json_report(
+            "detached", {
+                "value": "analysis"
+            }, str(out_dir))
+        json_report.add_fuzzer_key_value_to_report(
+            "fuzzer",
+            "stats",
+            {
+                "total": 1
+            },
+            str(out_dir),
+        )
+        json_report.add_project_key_value_to_report(
+            "stats",
+            {
+                "total": 2
+            },
+            str(out_dir),
+        )
+
+    intents = collector.get_intents()
+    assert len(intents) == 3
+    assert {
+        "analyses.detached",
+        "fuzzers.fuzzer.stats",
+        "project.stats",
+    } == {
+        intent["target_path"]
+        for intent in intents
+    }
+    assert not (out_dir / constants.SUMMARY_FILE).is_file()

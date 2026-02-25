@@ -13,10 +13,11 @@
 # limitations under the License.
 """Tests for report-phase exclusion handling."""
 
+from io import StringIO
 import os
+from pathlib import Path
 import sys
 import tempfile
-from pathlib import Path
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../")
 
@@ -160,8 +161,11 @@ def test_run_analysis_on_dir_loads_and_forwards_report_exclusions(monkeypatch):
             out_dir,
             harness_lists,
             exclude_patterns,
+            exclude_function_patterns,
         ):
-            del parallelise, correlation_file, out_dir, harness_lists, exclude_patterns
+            del parallelise, correlation_file, out_dir, harness_lists
+            captured_exclusions["patterns"] = exclude_patterns
+            captured_exclusions["function_patterns"] = exclude_function_patterns
 
     def fake_create_html_report(
         introspection_proj,
@@ -206,3 +210,152 @@ def test_run_analysis_on_dir_loads_and_forwards_report_exclusions(monkeypatch):
         )
 
     assert captured_exclusions["patterns"] == ["vendor/.*", "_deps/.*"]
+    assert captured_exclusions["function_patterns"] == ["foo"]
+
+
+def test_extract_all_sources_applies_exclude_patterns(monkeypatch):
+    def fake_walk(start_path):
+        del start_path
+        yield "/src", ["keep", "vendor", "_deps"], []
+        yield "/src/keep", [], ["a.cc"]
+        yield "/src/vendor", [], ["vendor.cc"]
+        yield "/src/_deps", [], ["ignore.cc"]
+
+    monkeypatch.setattr(analysis.os, "walk", fake_walk)
+
+    assert analysis.extract_all_sources(
+        "c-cpp",
+        [r"/src/vendor/.*", r"/src/_deps/.*"],
+    ) == {"/src/keep/a.cc"}
+
+
+def test_is_non_fuzz_harness_reads_file_once_with_bound(monkeypatch):
+    big_payload = "a" * (70 * 1024)
+
+    read_limit = {"bytes": 0}
+
+    class TrackingFile(StringIO):
+        def read(self, size: int = -1) -> str:
+            read_limit["bytes"] = size
+            return big_payload[:size]
+
+    def fake_open(*_args, **_kwargs):
+        return TrackingFile("")
+
+    def fake_walk(start_path):
+        del start_path
+        yield "/workspace/project/sample", [], ["sample_source.cpp"]
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    monkeypatch.setattr(analysis.os, "walk", fake_walk)
+
+    extracted = analysis.extract_tests_from_directories(
+        {"/workspace/project/sample"},
+        "c-cpp",
+        "/tmp/out",
+        need_copy=False,
+    )
+
+    assert "/workspace/project/sample/sample_source.cpp" in extracted
+    assert read_limit["bytes"] == 64 * 1024
+
+
+def test_analyse_loads_and_forwards_report_exclusions(monkeypatch):
+    captured = {}
+
+    class FakeStandaloneAnalysis:
+        @classmethod
+        def get_name(cls) -> str:
+            return "DummyAnalyser"
+
+        def standalone_analysis(self, *_args, **_kwargs) -> None:
+            captured["standalone_called"] = True
+
+    class FakeIntrospectionProject:
+        def __init__(self, language, target_folder, coverage_url):
+            captured["init"] = (language, target_folder, coverage_url)
+
+        def load_data_files(self,
+                            parallelise,
+                            correlation_file,
+                            out_dir,
+                            harness_lists=None,
+                            exclude_patterns=None,
+                            exclude_function_patterns=None):
+            captured["exclude_patterns"] = exclude_patterns
+            captured["exclude_function_patterns"] = exclude_function_patterns
+            self.proj_profile = {}
+            self.profiles = []
+
+    with tempfile.TemporaryDirectory(dir=os.getcwd()) as temp_dir:
+        config_path = Path(temp_dir) / "fuzz_introspector_config.conf"
+        config_path.write_text(
+            "FILES_TO_AVOID\nvendor/.*\n_tmp/.*\nFUNCS_TO_AVOID\nignored_fn\n",
+            encoding="utf-8",
+        )
+
+        args = type(
+            "Args",
+            (),
+            {
+                "language": "c-cpp",
+                "target_dir": "/workspace/project",
+                "out_dir": temp_dir,
+                "analyser": "DummyAnalyser",
+                "source_file": "",
+                "source_line": 0,
+                "exclude_static_functions": False,
+                "only_referenced_functions": False,
+                "only_header_functions": False,
+                "only_interesting_functions": False,
+                "only_easy_fuzz_params": False,
+                "max_functions": 0,
+            },
+        )()
+
+        monkeypatch.setenv("FUZZ_INTROSPECTOR_CONFIG", str(config_path))
+        monkeypatch.setattr(commands.analysis, "get_all_standalone_analyses",
+                            lambda: [FakeStandaloneAnalysis])
+        monkeypatch.setattr(commands.analysis, "IntrospectionProject",
+                            FakeIntrospectionProject)
+        monkeypatch.setattr(commands.oss_fuzz, "analyse_folder",
+                            lambda **kwargs: None)
+
+        assert commands.analyse(args) == 0
+
+    assert captured["exclude_patterns"] == ["vendor/.*", "_tmp/.*"]
+    assert captured["exclude_function_patterns"] == ["ignored_fn"]
+    assert captured["standalone_called"]
+
+
+def test_load_report_exclusion_patterns_from_config_reads_file_and_function_lists(
+):
+    with tempfile.TemporaryDirectory(dir=os.getcwd()) as temp_dir:
+        config_path = Path(temp_dir) / "fuzz_introspector_config.conf"
+        config_path.write_text(
+            "FILES_TO_AVOID\nvendor/.*\nFUNCS_TO_AVOID\nfoo::bar\n\n",
+            encoding="utf-8",
+        )
+
+        file_patterns, function_patterns = (
+            commands.load_report_exclusion_patterns_from_config(
+                str(config_path)))
+
+    assert file_patterns == ["vendor/.*"]
+    assert function_patterns == ["foo::bar"]
+
+
+def test_load_report_exclusion_patterns_from_config_accepts_header_suffixes():
+    with tempfile.TemporaryDirectory(dir=os.getcwd()) as temp_dir:
+        config_path = Path(temp_dir) / "fuzz_introspector_config.conf"
+        config_path.write_text(
+            "FILES_TO_AVOID:\nvendor/.*\nFUNCS_TO_AVOID:\nfoo::bar\n",
+            encoding="utf-8",
+        )
+
+        file_patterns, function_patterns = (
+            commands.load_report_exclusion_patterns_from_config(
+                str(config_path)))
+
+    assert file_patterns == ["vendor/.*"]
+    assert function_patterns == ["foo::bar"]

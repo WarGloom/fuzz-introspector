@@ -15,13 +15,13 @@
 
 import abc
 import bisect
+import concurrent.futures
 import logging
-import multiprocessing
 import os
 import re
 import shutil
 
-from typing import Dict, List, Optional, Type, Set, Union
+from typing import Any, Dict, List, Optional, Type, Set, Union
 
 from fuzz_introspector import (
     cfg_load,
@@ -42,6 +42,106 @@ from fuzz_introspector.datatypes import (
 from fuzz_introspector.exceptions import DataLoaderError
 
 logger = logging.getLogger(name=__name__)
+FI_PROFILE_WORKERS_ENV = "FI_PROFILE_WORKERS"
+FI_PROFILE_WORKERS_DEFAULT_CAP = 10
+
+
+def _parse_profile_worker_count() -> int:
+    """Returns worker count for profile accumulation."""
+    cpu_count = os.cpu_count() or 1
+    raw_worker_count = os.environ.get(FI_PROFILE_WORKERS_ENV, "")
+    if not raw_worker_count:
+        return max(1, min(cpu_count, FI_PROFILE_WORKERS_DEFAULT_CAP))
+
+    try:
+        worker_count = int(raw_worker_count)
+    except ValueError:
+        logger.warning("Invalid %s=%r; defaulting to capped cpu count",
+                       FI_PROFILE_WORKERS_ENV, raw_worker_count)
+        return max(1, min(cpu_count, FI_PROFILE_WORKERS_DEFAULT_CAP))
+
+    if worker_count < 1:
+        logger.warning("Invalid %s=%r; defaulting to capped cpu count",
+                       FI_PROFILE_WORKERS_ENV, raw_worker_count)
+        return max(1, min(cpu_count, FI_PROFILE_WORKERS_DEFAULT_CAP))
+
+    return min(worker_count, cpu_count)
+
+
+def _accummulate_single_profile(
+    profile_index: int,
+    profile_payload: Dict[str, Any],
+    base_folder: str,
+) -> tuple[int, Dict[str, Any]]:
+    """Worker entrypoint for profile accumulation."""
+    profile = fuzzer_profile.FuzzerProfile.from_worker_payload(profile_payload)
+    profile.accummulate_profile(base_folder, None, None, None)
+    return profile_index, profile.to_worker_payload()
+
+
+def _accummulate_profiles(
+    profiles: List[fuzzer_profile.FuzzerProfile],
+    base_folder: str,
+    parallelise: bool,
+) -> List[fuzzer_profile.FuzzerProfile]:
+    """Accumulate profile metadata with deterministic output ordering."""
+    if not parallelise or len(profiles) <= 1:
+        logger.info("Accummulating profiles serially")
+        for profile in profiles:
+            profile.accummulate_profile(base_folder, None, None, None)
+        return profiles
+
+    worker_count = min(_parse_profile_worker_count(), len(profiles))
+    if worker_count <= 1:
+        logger.info("Accummulating profiles serially")
+        for profile in profiles:
+            profile.accummulate_profile(base_folder, None, None, None)
+        return profiles
+
+    logger.info("Accummulating profiles using ProcessPoolExecutor (%d workers)",
+                worker_count)
+    indexed_profiles: List[Optional[fuzzer_profile.FuzzerProfile]] = [
+        None for _ in profiles
+    ]
+    try:
+        with concurrent.futures.ProcessPoolExecutor(
+                max_workers=worker_count) as executor:
+            submitted_futures = {}
+            for idx, profile in enumerate(profiles):
+                future = executor.submit(
+                    _accummulate_single_profile,
+                    idx,
+                    profile.to_worker_payload(),
+                    base_folder,
+                )
+                submitted_futures[future] = (idx, profile.get_key())
+
+            for future in concurrent.futures.as_completed(submitted_futures):
+                expected_idx, profile_key = submitted_futures[future]
+                try:
+                    profile_idx, updated_profile_payload = future.result()
+                except Exception as err:
+                    raise DataLoaderError(
+                        "Failed accumulating profile %s at index %d: %s" %
+                        (profile_key, expected_idx, err)) from err
+                indexed_profiles[profile_idx] = (
+                    fuzzer_profile.FuzzerProfile.from_worker_payload(
+                        updated_profile_payload))
+    except (OSError, RuntimeError) as err:
+        logger.warning(
+            "Falling back to serial profile accumulation after executor setup failure: %s",
+            err,
+        )
+        for profile in profiles:
+            profile.accummulate_profile(base_folder, None, None, None)
+        return profiles
+
+    for idx, profile in enumerate(indexed_profiles):
+        if profile is None:
+            raise DataLoaderError(
+                f"Profile accumulation failed to return result for index {idx}")
+
+    return [profile for profile in indexed_profiles if profile is not None]
 
 
 class IntrospectionProject:
@@ -61,6 +161,7 @@ class IntrospectionProject:
         self.coverage_url = coverage_url
         self.optional_analyses = []
         self.exclude_patterns = []
+        self.exclude_function_patterns = []
 
     def load_data_files(
         self,
@@ -69,12 +170,15 @@ class IntrospectionProject:
         out_dir: str = "",
         harness_lists=None,
         exclude_patterns: Optional[List[str]] = None,
+        exclude_function_patterns: Optional[List[str]] = None,
     ):
         """Generates the `proj_profile` and `profiles` elements of this class
         based on the raw data given as arguments. This function must be called
         before any real use of `IntrospectionProject` can happen.
         """
         self.exclude_patterns = exclude_patterns if exclude_patterns else []
+        self.exclude_function_patterns = (
+            exclude_function_patterns if exclude_function_patterns else [])
 
         if harness_lists:
             logger.info("Loading profiles using harness list")
@@ -87,6 +191,7 @@ class IntrospectionProject:
                         self.language,
                         cfg_content=calltree_text,
                         exclude_patterns=self.exclude_patterns,
+                        exclude_function_patterns=self.exclude_function_patterns,
                     ))
         else:
             logger.info("Loading profiles using files")
@@ -94,11 +199,14 @@ class IntrospectionProject:
                 self.base_folder, self.language, parallelise)
 
         # Apply exclude patterns to filter out entire profiles and their functions
-        if self.exclude_patterns:
+        if self.exclude_patterns or self.exclude_function_patterns:
             filtered_profiles = []
             for profile in self.profiles:
                 # Set the exclude patterns on the profile so the matching logic works
-                profile.exclude_patterns = self.exclude_patterns
+                profile.set_exclude_patterns(
+                    self.exclude_patterns,
+                    self.exclude_function_patterns,
+                )
 
                 # Drop the entire profile if the fuzzer itself is a system path
                 if profile._matches_exclude_pattern(
@@ -113,8 +221,12 @@ class IntrospectionProject:
                 profile.all_class_functions = {
                     name: func
                     for name, func in profile.all_class_functions.items()
-                    if not profile._matches_exclude_pattern(
-                        func.function_source_file)
+                    if not profile._should_exclude_function_profile(func)
+                }
+                profile.all_class_constructors = {
+                    name: func
+                    for name, func in profile.all_class_constructors.items()
+                    if not profile._should_exclude_function_profile(func)
                 }
                 filtered_profiles.append(profile)
 
@@ -132,30 +244,8 @@ class IntrospectionProject:
                 profile.correlate_executable_name(correlation_dict)
 
         logger.info("[+] Accummulating profiles")
-        logger.info("Accummulating using multiprocessing")
-        manager = multiprocessing.Manager()
-        semaphore = multiprocessing.Semaphore(10)
-
-        return_dict = manager.dict()
-
-        jobs = []
-        idx = 0
-        for profile in self.profiles:
-            p = multiprocessing.Process(
-                target=fuzzer_profile.FuzzerProfile.accummulate_profile,
-                args=(profile, self.base_folder, return_dict, f"uniq-{idx}",
-                      semaphore),
-            )
-            jobs.append(p)
-            idx += 1
-            p.start()
-        for proc in jobs:
-            proc.join()
-
-        new_profiles = []
-        for idx in return_dict:
-            new_profiles.append(return_dict[idx])
-        self.profiles = new_profiles
+        self.profiles = _accummulate_profiles(self.profiles, self.base_folder,
+                                              parallelise)
 
         logger.info("[+] Creating project profile")
         self.proj_profile = project_profile.MergedProjectProfile(
@@ -1232,11 +1322,18 @@ def correlate_introspection_functions_to_debug_info(all_functions_json_report,
             if_func["debug_function_info"] = {}
 
 
-def extract_all_sources(language):
-    all_files = set()
-    for root, _, files in os.walk("/src/"):
-        for f in files:
-            all_files.add(os.path.join(root, f))
+def extract_all_sources(
+    language: str,
+    exclude_patterns: list[str] | None = None,
+) -> set[str]:
+    # Compile regex patterns once and ignore invalid entries consistently.
+    compiled_exclude_patterns = []
+    for pattern in exclude_patterns or []:
+        try:
+            compiled_exclude_patterns.append(re.compile(pattern))
+        except re.error as err:
+            logger.warning("Invalid exclude pattern %s: %s", pattern, err)
+
     interesting_source_files = set()
 
     if language == "jvm":
@@ -1267,19 +1364,40 @@ def extract_all_sources(language):
         "/src/source-code/",
     ]
 
-    for file in all_files:
-        if not any(file.endswith(ext) for ext in test_extensions):
-            continue
+    def is_excluded_by_pattern(path):
+        normalized_path = os.path.normpath(path)
+        for pattern in compiled_exclude_patterns:
+            if pattern.search(normalized_path):
+                return True
+        return False
 
-        # Absolute path
-        if any([avoid in file for avoid in to_avoid]):
-            continue
-        if file.startswith("/src/source-code"):
-            continue
-        if file.startswith("/src/inspector/"):
-            continue
+    def is_interesting_source_file(path):
+        if not any(path.endswith(ext) for ext in test_extensions):
+            return False
+        if is_excluded_by_pattern(path):
+            return False
+        if any([avoid in path for avoid in to_avoid]):
+            return False
+        if path.startswith("/src/source-code"):
+            return False
+        if path.startswith("/src/inspector/"):
+            return False
+        return True
 
-        interesting_source_files.add(file)
+    for root, dirs, files in os.walk("/src/"):
+        dirs[:] = [
+            d for d in dirs
+            if not is_excluded_by_pattern(os.path.join(root, d))
+            and not any(
+                avoid in os.path.join(root, d) for avoid in to_avoid)
+        ]
+        for f in files:
+            path = os.path.join(root, f)
+            if not is_interesting_source_file(path):
+                continue
+
+            interesting_source_files.add(path)
+
     return interesting_source_files
 
 
@@ -1417,9 +1535,10 @@ def extract_tests_from_directories(directories,
         return True
 
     def is_non_fuzz_harness(absolute_path):
+        max_read_bytes = 64 * 1024
         try:
             with open(absolute_path, "r") as file_fp:
-                content = file_fp.read()
+                content = file_fp.read(max_read_bytes)
                 if "LLVMFuzzerTestOneInput" in content:
                     return False
                 # For rust projects
@@ -1547,7 +1666,7 @@ def _extract_test_information_jvm():
     return all_test_files
 
 
-def light_correlate_source_to_executable(language):
+def light_correlate_source_to_executable(language, exclude_patterns=None):
     """Extracts pairs of harness source/executable"""
     if language == "jvm" or language == "python":
         # Skip this step for jvm or python projects
@@ -1566,7 +1685,7 @@ def light_correlate_source_to_executable(language):
     for cov_report in cov_reports:
         print("- cov report: %s" % (cov_report))
 
-    all_source_files = extract_all_sources(language)
+    all_source_files = extract_all_sources(language, exclude_patterns)
     pairs = []
     # Match based on file names. This should be the most primitive but
     # will catch a large number of targets
