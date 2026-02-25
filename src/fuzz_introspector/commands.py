@@ -33,8 +33,7 @@ logger = logging.getLogger(name=__name__)
 
 
 def load_report_exclusion_patterns_from_config(
-    config_path: str | None = None,
-) -> tuple[list[str], list[str]]:
+    config_path: str | None = None, ) -> tuple[list[str], list[str]]:
     """Loads FILES_TO_AVOID and FUNCS_TO_AVOID patterns for report extraction.
 
     Returns empty lists if no config path is set or the config file
@@ -56,14 +55,15 @@ def load_report_exclusion_patterns_from_config(
                 if not line or line.startswith("#"):
                     continue
 
-                header_token = line.split(None, 1)[0].rstrip(":")
-                if header_token == "FILES_TO_AVOID":
+                section_token = line.split(None, 1)[0]
+                section_name = section_token.split(":")[0]
+                if section_name == "FILES_TO_AVOID":
                     active_avoid_list = "files"
                     continue
-                if header_token == "FUNCS_TO_AVOID":
+                if section_name == "FUNCS_TO_AVOID":
                     active_avoid_list = "functions"
                     continue
-                if header_token.endswith("_TO_AVOID"):
+                if section_name.endswith("_TO_AVOID"):
                     active_avoid_list = ""
                     continue
 
@@ -85,16 +85,14 @@ def load_report_exclusion_patterns_from_config(
 
 
 def load_report_exclude_patterns_from_config(
-    config_path: str | None = None,
-) -> list[str]:
+    config_path: str | None = None, ) -> list[str]:
     """Loads FILES_TO_AVOID patterns for report extraction."""
     file_patterns, _ = load_report_exclusion_patterns_from_config(config_path)
     return file_patterns
 
 
 def load_report_exclude_function_patterns_from_config(
-    config_path: str | None = None,
-) -> list[str]:
+    config_path: str | None = None, ) -> list[str]:
     """Loads FUNCS_TO_AVOID patterns for report extraction."""
     _, function_patterns = load_report_exclusion_patterns_from_config(
         config_path)
@@ -231,8 +229,8 @@ def run_analysis_on_dir(
     constants.should_dump_files = dump_files
 
     if exclude_patterns is None:
-        (exclude_patterns,
-         exclude_function_patterns) = load_report_exclusion_patterns_from_config()
+        (exclude_patterns, exclude_function_patterns
+         ) = load_report_exclusion_patterns_from_config()
     elif exclude_function_patterns is None:
         exclude_function_patterns = (
             load_report_exclude_function_patterns_from_config())
