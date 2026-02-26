@@ -22,6 +22,7 @@ import re
 import shutil
 import yaml
 import pathlib
+from functools import lru_cache
 
 from bs4 import BeautifulSoup
 
@@ -148,6 +149,7 @@ def data_file_read_yaml(filename: str) -> Optional[dict[Any, Any]]:
     return content
 
 
+@lru_cache(maxsize=None)
 def demangle_cpp_func(funcname: str) -> str:
     try:
         demangled: str = cxxfilt.demangle(funcname.replace(" ", ""))
@@ -156,6 +158,7 @@ def demangle_cpp_func(funcname: str) -> str:
         return funcname
 
 
+@lru_cache(maxsize=None)
 def demangle_rust_func(funcname: str) -> str:
     """Demangle the mangled rust function names."""
     # Ignore all non-mangled rust function names
