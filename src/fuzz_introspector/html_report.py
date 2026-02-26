@@ -21,6 +21,7 @@ import os
 import random
 import shutil
 import string
+import tempfile
 import time
 import traceback
 import typing
@@ -156,7 +157,7 @@ def _run_analysis_worker(
     coverage_url: str,
     out_dir: str,
     dump_files: bool,
-    result_queue: multiprocessing.Queue,
+    result_dir: str,
     table_id_offset: int,
 ) -> None:
     analysis_name = analysis_interface.get_name()
@@ -206,7 +207,10 @@ def _run_analysis_worker(
     envelope = worker_result.to_envelope()
     envelope["toc_entries"] = _serialize_toc_entries(local_toc)
     envelope["table_ids"] = list(local_tables)
-    result_queue.put(envelope)
+    safe_name = analysis_name.replace("/", "_")
+    result_path = os.path.join(result_dir, f"{safe_name}.{os.getpid()}.json")
+    with open(result_path, "w") as result_file:
+        json.dump(envelope, result_file)
 
 
 def _run_parallel_analyses(
@@ -232,7 +236,7 @@ def _run_parallel_analyses(
 
     for idx in range(0, len(analysis_interfaces), total_workers):
         batch = analysis_interfaces[idx:idx + total_workers]
-        result_queue: multiprocessing.Queue = ctx.Queue()
+        result_dir = tempfile.mkdtemp(prefix="fi-pr6-worker-results-")
         processes: List[Tuple[Any, str]] = []
         for analysis_interface in batch:
             analysis_name = analysis_interface.get_name()
@@ -247,23 +251,26 @@ def _run_parallel_analyses(
                     coverage_url,
                     out_dir,
                     dump_files,
-                    result_queue,
+                    result_dir,
                     table_id_offsets.get(analysis_name, 0),
                 ),
             )
             process.start()
             processes.append((process, analysis_name))
 
+        batch_results: List[Dict[str, Any]] = []
+        returned_names: set[str] = set()
+
         for process, _ in processes:
             process.join()
 
-        batch_results: List[Dict[str, Any]] = []
-        returned_names: set[str] = set()
-        while True:
+        for result_file in os.listdir(result_dir):
+            result_path = os.path.join(result_dir, result_file)
             try:
-                envelope = result_queue.get_nowait()
+                with open(result_path, "r") as result_fp:
+                    envelope = json.load(result_fp)
             except Exception:
-                break
+                continue
             batch_results.append(envelope)
             returned_names.add(envelope.get("analysis_name", ""))
 
@@ -282,6 +289,7 @@ def _run_parallel_analyses(
                     worker_pid=process.pid,
                 ))
 
+        shutil.rmtree(result_dir, ignore_errors=True)
         results.extend(batch_results)
 
     return results
