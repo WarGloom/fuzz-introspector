@@ -222,8 +222,7 @@ def _serialize_toc_entries(
 
 
 def _serialize_conclusions(
-    conclusions: List[html_helpers.HTMLConclusion],
-) -> List[Dict[str, Any]]:
+    conclusions: List[html_helpers.HTMLConclusion], ) -> List[Dict[str, Any]]:
     return [{
         "severity": conclusion.severity,
         "title": conclusion.title,
@@ -232,8 +231,7 @@ def _serialize_conclusions(
 
 
 def _deserialize_conclusions(
-    conclusions: List[Any],
-) -> List[html_helpers.HTMLConclusion]:
+    conclusions: List[Any], ) -> List[html_helpers.HTMLConclusion]:
     deserialized: List[html_helpers.HTMLConclusion] = []
     for conclusion in conclusions:
         if isinstance(conclusion, html_helpers.HTMLConclusion):
@@ -414,7 +412,9 @@ def _run_parallel_analyses(
                             _build_failure_envelope(
                                 analysis_name,
                                 "retryable_error",
-                                [f"Thread worker failed for {analysis_name}: {exc}"],
+                                [
+                                    f"Thread worker failed for {analysis_name}: {exc}"
+                                ],
                                 worker_pid=os.getpid(),
                             ))
 
@@ -1586,16 +1586,14 @@ def create_html_report(
          html_report_core) = (create_section_project_overview(
              table_of_contents, introspection_proj.proj_profile, conclusions,
              report_name))
-        _log_stage_telemetry("project_overview",
-                             stage_started,
+        _log_stage_telemetry("project_overview", stage_started,
                              stage_warn_seconds)
 
         # Create section with overview of all fuzzers
         stage_started = time.monotonic()
         html_report_core += create_section_fuzzers_overview(
             table_of_contents, tables, introspection_proj)
-        _log_stage_telemetry("fuzzers_overview",
-                             stage_started,
+        _log_stage_telemetry("fuzzers_overview", stage_started,
                              stage_warn_seconds)
 
         # Create section with table of all functions in project.
@@ -1613,8 +1611,7 @@ def create_html_report(
             introspection_proj.proj_profile.basefolder,
         )
         html_report_core += html_all_function_section
-        _log_stage_telemetry("all_functions_section",
-                             stage_started,
+        _log_stage_telemetry("all_functions_section", stage_started,
                              stage_warn_seconds)
 
         # Section with details of each fuzzer.
@@ -1629,8 +1626,7 @@ def create_html_report(
             dump_files,
             out_dir,
         )
-        _log_stage_telemetry("fuzzer_detailed_section",
-                             stage_started,
+        _log_stage_telemetry("fuzzer_detailed_section", stage_started,
                              stage_warn_seconds)
 
         # Generate sections for all optional analyses
@@ -1647,8 +1643,7 @@ def create_html_report(
             dump_files,
             out_dir,
         )
-        _log_stage_telemetry("optional_analyses",
-                             stage_started,
+        _log_stage_telemetry("optional_analyses", stage_started,
                              stage_warn_seconds)
 
         # Create HTML showing the conclusions at the top of the report.
@@ -1683,8 +1678,7 @@ def create_html_report(
         # introspector functions.
         stage_started = time.monotonic()
         introspection_proj.load_debug_report(out_dir, dump_files=dump_files)
-        _log_stage_telemetry("load_debug_report",
-                             stage_started,
+        _log_stage_telemetry("load_debug_report", stage_started,
                              stage_warn_seconds)
 
         # Correlate debug info to introspector functions
@@ -1695,15 +1689,13 @@ def create_html_report(
             introspection_proj.proj_profile.target_lang,
             introspection_proj.debug_report,
         )
-        _log_stage_telemetry("correlate_debug_info",
-                             stage_started,
+        _log_stage_telemetry("correlate_debug_info", stage_started,
                              stage_warn_seconds)
 
         stage_started = time.monotonic()
         all_source_files = analysis.extract_all_sources(
             introspection_proj.proj_profile.target_lang, exclude_patterns)
-        _log_stage_telemetry("extract_all_sources",
-                             stage_started,
+        _log_stage_telemetry("extract_all_sources", stage_started,
                              stage_warn_seconds)
 
         stage_started = time.monotonic()
@@ -1714,8 +1706,7 @@ def create_html_report(
             exclude_patterns=exclude_patterns,
             source_files=all_source_files,
         )
-        _log_stage_telemetry("extract_test_information",
-                             stage_started,
+        _log_stage_telemetry("extract_test_information", stage_started,
                              stage_warn_seconds)
         if dump_files:
             with open(os.path.join(out_dir, constants.TEST_FILES_JSON),
@@ -1787,14 +1778,12 @@ def create_html_report(
             stage_started = time.monotonic()
             write_content_to_html_files(html_full_doc, all_functions_json_html,
                                         fuzzer_table_data, out_dir)
-            _log_stage_telemetry("write_report_files",
-                                 stage_started,
+            _log_stage_telemetry("write_report_files", stage_started,
                                  stage_warn_seconds)
 
             stage_started = time.monotonic()
             introspection_proj.dump_debug_report(out_dir)
-            _log_stage_telemetry("dump_debug_report",
-                                 stage_started,
+            _log_stage_telemetry("dump_debug_report", stage_started,
                                  stage_warn_seconds)
 
             # Double check source files have been copied
@@ -1810,8 +1799,7 @@ def create_html_report(
                 if not os.path.isfile(dst):
                     os.makedirs(os.path.dirname(dst), exist_ok=True)
                     shutil.copy(elem, dst)
-            _log_stage_telemetry("verify_copied_source_files",
-                                 stage_started,
+            _log_stage_telemetry("verify_copied_source_files", stage_started,
                                  stage_warn_seconds)
 
         # Determine the source files required for the java project
