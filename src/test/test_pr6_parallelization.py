@@ -942,6 +942,44 @@ class TestPR6RetryConflictPathSafety:
         assert not merged.get("conflicts"), (
             "No conflicts expected for identical JSON upserts")
 
+    def test_json_upsert_preserves_dotted_fuzzer_keys(
+            self, conflict_test_data: Dict[str, Any]) -> None:
+        out_dir = conflict_test_data["out_dir"]
+        os.makedirs(out_dir, exist_ok=True)
+
+        coordinator = merge_coordinator.MergeCoordinator(out_dir)
+        intent = merge_intents.create_json_upsert_intent_from_parts(
+            [
+                "fuzzers",
+                "/usr/lib/gcc/x86_64-linux-gnu/9/../../../../include/c++/9/bits/stl_vector.h",
+                "stats",
+            ],
+            {
+                "total-basic-blocks": 0,
+                "total-cyclomatic-complexity": 0,
+                "file-target-count": 3,
+            },
+        )
+        coordinator.add_analysis_result(
+            "FuzzEngineInputAnalysis",
+            merge_coordinator.AnalysisWorkerResult(
+                analysis_name="FuzzEngineInputAnalysis",
+                status="success",
+                display_html=False,
+                merge_intents=[intent],
+            ).to_envelope(),
+        )
+
+        success, merged = coordinator.merge_results()
+        assert success, "Merge should accept dotted fuzzer keys"
+        assert not merged.get("errors"), "No merge errors expected"
+
+        summary_contents = coordinator.merged_json_report
+        fuzzers = summary_contents.get("fuzzers", {})
+        assert "/usr/lib/gcc/x86_64-linux-gnu/9/" not in summary_contents
+        assert ("/usr/lib/gcc/x86_64-linux-gnu/9/../../../../include/c++/9/"
+                "bits/stl_vector.h") in fuzzers
+
     def _make_artifact_intent(self, relative_path: str,
                               content: bytes) -> Dict[str, Any]:
         """Create a valid artifact_write intent for tests."""

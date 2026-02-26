@@ -99,8 +99,8 @@ def add_analysis_dict_to_json_report(analysis_name: str,
     """
     collector = merge_intents.get_active_merge_intent_collector()
     if collector is not None:
-        intent = merge_intents.create_json_upsert_intent(
-            f"analyses.{analysis_name}", dict_to_add)
+        intent = merge_intents.create_json_upsert_intent_from_parts(
+            ["analyses", analysis_name], dict_to_add)
         collector.add_intent(intent)
         return
 
@@ -131,8 +131,8 @@ def add_fuzzer_key_value_to_report(fuzzer_name: str, key: str, value: Any,
     """
     collector = merge_intents.get_active_merge_intent_collector()
     if collector is not None:
-        intent = merge_intents.create_json_upsert_intent(
-            f"fuzzers.{fuzzer_name}.{key}", value)
+        intent = merge_intents.create_json_upsert_intent_from_parts(
+            ["fuzzers", fuzzer_name, key], value)
         collector.add_intent(intent)
         return
 
@@ -155,8 +155,8 @@ def add_project_key_value_to_report(key: str, value: Any, out_dir) -> None:
     """
     collector = merge_intents.get_active_merge_intent_collector()
     if collector is not None:
-        intent = merge_intents.create_json_upsert_intent(
-            f"project.{key}", value)
+        intent = merge_intents.create_json_upsert_intent_from_parts(
+            ["project", key], value)
         collector.add_intent(intent)
         return
 

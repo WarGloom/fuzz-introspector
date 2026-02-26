@@ -23,6 +23,7 @@ from fuzz_introspector import constants
 from fuzz_introspector.merge_intents import (
     MergeIntentValidationError,
     PathSafetyError,
+    split_target_path,
     validate_path_safety,
     validate_merge_intent,
 )
@@ -216,7 +217,7 @@ class MergeCoordinator:
 
         # Navigate to target location
         current = self.merged_json_report
-        parts = target_path.split(".")
+        parts = split_target_path(target_path)
 
         for i, part in enumerate(parts):
             is_last = i == len(parts) - 1

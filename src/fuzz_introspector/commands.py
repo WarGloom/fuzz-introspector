@@ -32,6 +32,35 @@ from fuzz_introspector.frontends import oss_fuzz
 logger = logging.getLogger(name=__name__)
 
 
+def _resolve_report_exclusion_config_path(config_path: str | None) -> str:
+    """Resolve report exclusion config path from explicit or default locations."""
+    if config_path:
+        return config_path
+
+    env_path = os.environ.get("FUZZ_INTROSPECTOR_CONFIG", "")
+    if env_path:
+        return env_path
+
+    candidate_paths = []
+    src_root = os.environ.get("SRC", "")
+    if src_root:
+        candidate_paths.append(
+            os.path.join(src_root, ".clusterfuzzlite",
+                         "fuzz_introspector_config.conf"))
+
+    candidate_paths.append(
+        os.path.join("/src", ".clusterfuzzlite",
+                     "fuzz_introspector_config.conf"))
+    candidate_paths.append(
+        os.path.join(os.getcwd(), ".clusterfuzzlite",
+                     "fuzz_introspector_config.conf"))
+
+    for candidate_path in candidate_paths:
+        if os.path.isfile(candidate_path):
+            return candidate_path
+    return ""
+
+
 def load_report_exclusion_patterns_from_config(
     config_path: str | None = None, ) -> tuple[list[str], list[str]]:
     """Loads FILES_TO_AVOID and FUNCS_TO_AVOID patterns for report extraction.
@@ -39,9 +68,7 @@ def load_report_exclusion_patterns_from_config(
     Returns empty lists if no config path is set or the config file
     is not readable.
     """
-    if config_path is None:
-        config_path = os.environ.get("FUZZ_INTROSPECTOR_CONFIG", "")
-
+    config_path = _resolve_report_exclusion_config_path(config_path)
     if not config_path:
         return [], []
 

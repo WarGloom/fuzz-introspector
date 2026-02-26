@@ -19,6 +19,8 @@ from pathlib import Path
 import sys
 import tempfile
 
+import pytest
+
 sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../")
 
 from fuzz_introspector import analysis  # noqa: E402
@@ -413,3 +415,24 @@ def test_load_report_exclusion_patterns_accepts_header_colon_values():
 
     assert file_patterns == ["vendor/.*"]
     assert function_patterns == ["foo::bar"]
+
+
+def test_load_report_exclusion_patterns_uses_default_src_config(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    with tempfile.TemporaryDirectory(dir=os.getcwd()) as temp_dir:
+        config_dir = Path(temp_dir) / ".clusterfuzzlite"
+        config_dir.mkdir(parents=True)
+        config_path = config_dir / "fuzz_introspector_config.conf"
+        config_path.write_text(
+            "FILES_TO_AVOID\n/usr/.*\nFUNCS_TO_AVOID\n.*protobuf.*\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.delenv("FUZZ_INTROSPECTOR_CONFIG", raising=False)
+        monkeypatch.setenv("SRC", temp_dir)
+
+        file_patterns, function_patterns = (
+            commands.load_report_exclusion_patterns_from_config())
+
+    assert file_patterns == ["/usr/.*"]
+    assert function_patterns == [".*protobuf.*"]

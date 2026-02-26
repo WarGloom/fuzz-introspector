@@ -80,6 +80,39 @@ def merge_intent_context(collector: MergeIntentCollector):
         _MERGE_INTENT_COLLECTOR.reset(token)
 
 
+def split_target_path(target_path: str) -> List[str]:
+    """Split target path on dots while honoring backslash escapes."""
+    parts: List[str] = []
+    current: List[str] = []
+    escaped = False
+    for ch in target_path:
+        if escaped:
+            current.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == ".":
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(ch)
+    if escaped:
+        current.append("\\")
+    parts.append("".join(current))
+    return parts
+
+
+def join_target_path_parts(parts: List[str]) -> str:
+    """Join target path parts using escaped dot/backslash notation."""
+    escaped_parts = []
+    for part in parts:
+        escaped_part = part.replace("\\", "\\\\").replace(".", "\\.")
+        escaped_parts.append(escaped_part)
+    return ".".join(escaped_parts)
+
+
 def validate_merge_intent(intent: Dict[str, Any]) -> None:
     """Validate a merge intent dictionary."""
     if not isinstance(intent, dict):
@@ -121,9 +154,9 @@ def _validate_json_upsert(intent: Dict[str, Any]) -> None:
             "json_upsert value must be JSON-serializable")
 
     # Validate target_path format
+    parts = split_target_path(intent["target_path"])
     valid_prefixes = ["analyses", "project", "fuzzers"]
-    if not any(intent["target_path"].startswith(prefix + ".")
-               for prefix in valid_prefixes):
+    if len(parts) < 2 or parts[0] not in valid_prefixes:
         raise MergeIntentValidationError(
             f"json_upsert target_path must start with one of: {valid_prefixes}"
         )
@@ -228,6 +261,12 @@ def create_json_upsert_intent(target_path: str, value: Any) -> Dict[str, Any]:
     }
     validate_merge_intent(intent)
     return intent
+
+
+def create_json_upsert_intent_from_parts(parts: List[str],
+                                         value: Any) -> Dict[str, Any]:
+    """Create a json_upsert intent from unescaped path parts."""
+    return create_json_upsert_intent(join_target_path_parts(parts), value)
 
 
 def create_artifact_write_intent(relative_path: str, content: Union[str,
