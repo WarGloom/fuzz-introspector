@@ -76,8 +76,6 @@ class MergedProjectProfile:
             str, set[str]] = collections.defaultdict(set)
         runtime_reached_by_fuzzers: dict[
             str, set[str]] = collections.defaultdict(set)
-        combined_reached_by_fuzzers: dict[
-            str, set[str]] = collections.defaultdict(set)
         for profile in profiles:
             profile_id = profile.identifier
             static_funcs = set(profile.functions_reached_by_fuzzer)
@@ -85,10 +83,8 @@ class MergedProjectProfile:
 
             for func_name in static_funcs:
                 static_reached_by_fuzzers[func_name].add(profile_id)
-                combined_reached_by_fuzzers[func_name].add(profile_id)
             for func_name in runtime_funcs:
                 runtime_reached_by_fuzzers[func_name].add(profile_id)
-                combined_reached_by_fuzzers[func_name].add(profile_id)
 
         # Add all functions from the various profiles into the merged profile. Don't
         # add duplicates
@@ -115,7 +111,8 @@ class MergedProjectProfile:
                 fd.reached_by_fuzzers_runtime = list(
                     runtime_reached_by_fuzzers.get(fd.function_name, set()))
                 fd.reached_by_fuzzers_combined = list(
-                    combined_reached_by_fuzzers.get(fd.function_name, set()))
+                    static_reached_by_fuzzers.get(fd.function_name, set())
+                    | runtime_reached_by_fuzzers.get(fd.function_name, set()))
 
                 # Refine hitcount
                 fd.hitcount = len(fd.reached_by_fuzzers)
@@ -526,6 +523,9 @@ class MergedProjectProfile:
         """Returns all functions where there was a source code location
         attached, which roughly corresponds to functions declared in the
         project or third parties where source code was pulled in.
+
+        This returns an internal cached dictionary for performance, so callers
+        must treat the returned mapping as read-only.
         """
         if self._all_functions_with_source_cache is not None:
             return self._all_functions_with_source_cache
