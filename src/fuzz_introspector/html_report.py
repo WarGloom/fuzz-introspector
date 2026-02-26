@@ -119,6 +119,35 @@ def _serialize_toc_entries(
     } for entry in table_of_contents.entries]
 
 
+def _serialize_conclusions(
+    conclusions: List[html_helpers.HTMLConclusion],
+) -> List[Dict[str, Any]]:
+    return [{
+        "severity": conclusion.severity,
+        "title": conclusion.title,
+        "description": conclusion.description,
+    } for conclusion in conclusions]
+
+
+def _deserialize_conclusions(
+    conclusions: List[Any],
+) -> List[html_helpers.HTMLConclusion]:
+    deserialized: List[html_helpers.HTMLConclusion] = []
+    for conclusion in conclusions:
+        if isinstance(conclusion, html_helpers.HTMLConclusion):
+            deserialized.append(conclusion)
+            continue
+        if not isinstance(conclusion, dict):
+            continue
+        deserialized.append(
+            html_helpers.HTMLConclusion(
+                severity=conclusion.get("severity", 0),
+                title=conclusion.get("title", ""),
+                description=conclusion.get("description", ""),
+            ))
+    return deserialized
+
+
 def _apply_toc_entries(
     table_of_contents: html_helpers.HtmlTableOfContents,
     toc_entries: List[Dict[str, Any]],
@@ -197,7 +226,7 @@ def _run_analysis_worker(
         status=status,
         display_html=display_html,
         html_fragment=html_string,
-        conclusions=local_conclusions,
+        conclusions=_serialize_conclusions(local_conclusions),
         table_specs=[],
         merge_intents=intent_collector.get_intents(),
         diagnostics=diagnostics,
@@ -342,7 +371,7 @@ def _run_serial_analysis_with_envelope(
         status=status,
         display_html=display_html,
         html_fragment=html_string,
-        conclusions=local_conclusions,
+        conclusions=_serialize_conclusions(local_conclusions),
         table_specs=[],
         merge_intents=intent_collector.get_intents(),
         diagnostics=diagnostics,
@@ -1252,7 +1281,7 @@ def create_section_optional_analyses(
             "Serial compatibility merge failed; see logs for details")
 
     for conclusion in merged.get("conclusions", []):
-        conclusions.append(conclusion)
+        conclusions.extend(_deserialize_conclusions([conclusion]))
 
     if merged.get("toc_entries"):
         _apply_toc_entries(table_of_contents, merged["toc_entries"])

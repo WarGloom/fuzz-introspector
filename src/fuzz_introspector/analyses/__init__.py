@@ -53,7 +53,7 @@ all_analyses: list[type[analysis.AnalysisInterface]] = [
 
 # Explicit PR6 analysis compatibility matrix.
 analysis_parallel_compatibility = {
-    optimal_targets.OptimalTargets: PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+    optimal_targets.OptimalTargets: PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
     engine_input.EngineInput: PARALLEL_COMPATIBILITY_SERIAL_ONLY,
     runtime_coverage_analysis.RuntimeCoverageAnalysis:
     PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
