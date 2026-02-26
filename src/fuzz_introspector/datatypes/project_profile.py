@@ -54,6 +54,7 @@ class MergedProjectProfile:
                                    function_profile.FunctionProfile] = dict()
         self._all_functions_with_source_cache: Dict[
             str, function_profile.FunctionProfile] | None = None
+        self._target_lang_cache: str | None = None
         self.language = language
 
         logger.info(
@@ -262,6 +263,9 @@ class MergedProjectProfile:
     @property
     def target_lang(self):
         """Language the fuzzers are written in"""
+        if self._target_lang_cache is not None:
+            return self._target_lang_cache
+
         set_of_targets = set()
         for profile in self.profiles:
             set_of_targets.add(profile.target_lang)
@@ -269,8 +273,10 @@ class MergedProjectProfile:
             raise exceptions.AnalysisError(
                 "Project has fuzzers with multiple targets")
         if not set_of_targets:
-            return self.language
-        return set_of_targets.pop()
+            self._target_lang_cache = self.language
+            return self._target_lang_cache
+        self._target_lang_cache = set_of_targets.pop()
+        return self._target_lang_cache
 
     @property
     def total_complexity(self):

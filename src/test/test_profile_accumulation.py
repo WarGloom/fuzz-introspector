@@ -15,12 +15,14 @@
 
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../")
 
 from fuzz_introspector import analysis  # noqa: E402
+from fuzz_introspector.datatypes import project_profile  # noqa: E402
 from fuzz_introspector.exceptions import DataLoaderError  # noqa: E402
 
 
@@ -188,3 +190,47 @@ def test_profile_accumulation_parallel_serial_parity(monkeypatch):
 
     assert [(p.get_key(), p.total_basic_blocks) for p in serial_result
             ] == [(p.get_key(), p.total_basic_blocks) for p in parallel_result]
+
+
+def test_target_lang_property_is_cached():
+    class _ProfileWithCountingTarget:
+
+        def __init__(self, target_lang: str):
+            self._target_lang = target_lang
+            self.read_count = 0
+
+        @property
+        def target_lang(self):
+            self.read_count += 1
+            return self._target_lang
+
+    profile = _ProfileWithCountingTarget("c-cpp")
+    merged_profile = project_profile.MergedProjectProfile.__new__(
+        project_profile.MergedProjectProfile)
+    merged_profile.profiles = [profile]
+    merged_profile.language = "c-cpp"
+    merged_profile._target_lang_cache = None
+
+    assert merged_profile.target_lang == "c-cpp"
+    assert merged_profile.target_lang == "c-cpp"
+    assert profile.read_count == 1
+
+
+def test_get_all_functions_with_source_returns_cached_mapping():
+    merged_profile = project_profile.MergedProjectProfile.__new__(
+        project_profile.MergedProjectProfile)
+    merged_profile._all_functions_with_source_cache = None
+    merged_profile.all_functions = {
+        "keep":
+        SimpleNamespace(has_source_file=True, function_linenumber="10"),
+        "drop-nosrc":
+        SimpleNamespace(has_source_file=False, function_linenumber="20"),
+        "drop-noline":
+        SimpleNamespace(has_source_file=True, function_linenumber="-1"),
+    }
+
+    first_mapping = merged_profile.get_all_functions_with_source()
+    second_mapping = merged_profile.get_all_functions_with_source()
+
+    assert first_mapping is second_mapping
+    assert list(first_mapping.keys()) == ["keep"]
