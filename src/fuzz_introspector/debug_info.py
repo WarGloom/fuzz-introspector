@@ -23,38 +23,31 @@ import hashlib
 import json
 import logging
 import os
-import re
 import shutil
+import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from typing import Any, TypeVar
 import yaml
 
 logger = logging.getLogger(name=__name__)
 _T = TypeVar("_T")
+DebugPayload = tuple[
+    str,
+    dict[str, dict[str, str]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, str],
+    str | None,
+]
 
 # Pre-compiled regex patterns for debug info parsing (performance optimization)
 # These patterns are used in extract_all_functions_in_debug_info
 
 # Match the functions section: between "## Functions defined in module" and "## Global variables"
-FUNCTION_SECTION_RE = re.compile(
-    r"## Functions defined in module\n(.*?)## Global variables", re.DOTALL)
-
-# Match a function definition: "Subprogram: <function_name>"
-SUBPROGRAM_RE = re.compile(r"^Subprogram: (.+)$", re.MULTILINE)
-
-# Match source location line: " ... from <filepath>:<line_number>"
-# Conditions: contains " from ", contains ":", does NOT contain "- Operand" or "Elem "
-SOURCE_LOCATION_RE = re.compile(
-    r"^(?!.*- Operand)(?!.*Elem ).* from\s+([^:]+):(\d+).*$", re.MULTILINE)
-
-# Match argument type: " - Operand" lines
-# Two patterns:
-# 1. "Name: {<name>}" - named argument
-# 2. Otherwise - type information
-ARG_TYPE_RE = re.compile(r"Name: \{(.+?)\}")
-ARG_TYPE_SIMPLE_RE = re.compile(
-    r"- Operand.*?(?:Operand Type:|Type: )(.+?)(?: -|$)")
+FUNCTIONS_SECTION_START = "## Functions defined in module"
+FUNCTIONS_SECTION_END = "## Global variables"
 
 
 def extract_all_compile_units(content, all_files_in_debug_info):
@@ -200,92 +193,165 @@ def extract_all_functions_in_debug_info(content, all_functions_in_debug,
                                         all_files_in_debug_info):
     """Extract function information from debug info content.
 
-    Optimized version using pre-compiled regex patterns for better performance.
+    Uses a single-pass parser over the functions section to avoid repeated
+    section/block regex scans for large debug files.
     """
-    # Find the functions section using regex (single pass)
-    functions_match = FUNCTION_SECTION_RE.search(content)
-    if not functions_match:
+    section_start_idx = content.find(FUNCTIONS_SECTION_START)
+    if section_start_idx == -1:
         logger.debug("No functions section found in debug info")
         return
 
-    functions_section = functions_match.group(1)
+    section_start_idx += len(FUNCTIONS_SECTION_START)
+    if section_start_idx < len(content) and content[section_start_idx] == "\n":
+        section_start_idx += 1
 
-    # Find all function definitions in the section
-    subprogram_matches = list(SUBPROGRAM_RE.finditer(functions_section))
+    section_end_idx = content.find(FUNCTIONS_SECTION_END, section_start_idx)
+    if section_end_idx == -1:
+        section_end_idx = len(content)
+    functions_section = content[section_start_idx:section_end_idx]
 
-    for idx, func_match in enumerate(subprogram_matches):
-        function_name = func_match.group(1).strip()
+    current_function: dict[str, Any] | None = None
+    named_args: list[str] = []
+    operand_args: list[str] = []
 
-        # Get the text after this function name until the next function or end
-        start_pos = func_match.end()
-        if idx + 1 < len(subprogram_matches):
-            end_pos = subprogram_matches[idx + 1].start()
-        else:
-            end_pos = len(functions_section)
+    def _finalize_current_function() -> None:
+        if current_function is None:
+            return
 
-        func_block = functions_section[start_pos:end_pos]
-
-        # Parse the function block
-        current_function = {"name": function_name}
-
-        # Find source location in the block
-        source_match = SOURCE_LOCATION_RE.search(func_block)
-        if source_match:
-            source_file = source_match.group(1).strip()
-            source_line = source_match.group(2).strip()
-            current_function["source"] = {
-                "source_file": source_file,
-                "source_line": source_line,
-            }
-            # Add the file to all files in project
-            if source_file not in all_files_in_debug_info:
-                all_files_in_debug_info[source_file] = {
-                    "source_file": source_file,
-                    "language": "N/A",
-                }
-
-        # Find argument types in the block
-        args = []
-
-        # Check for "Name: {<name>}" pattern
-        for name_match in ARG_TYPE_RE.finditer(func_block):
-            args.append(name_match.group(1).strip())
-
-        # Check for type information (lines with " - Operand")
-        if len(args) == 0:
-            # No named args, look for type-only lines
-            for line in func_block.splitlines():
-                if " - Operand" in line:
-                    # Extract type info
-                    l1 = (line.replace("Operand Type:",
-                                       "").replace("Type: ",
-                                                   "").replace("-", ""))
-                    pointer_count = l1.count("DW_TAG_pointer_type")
-                    const_count = l1.count("DW_TAG_const_type")
-
-                    # Get base type (last comma-separated part)
-                    parts = l1.split(",")
-                    if parts:
-                        base_type = parts[-1].strip()
-                        end_type = ""
-                        if const_count > 0:
-                            end_type += "const "
-                        end_type += base_type
-                        if pointer_count > 0:
-                            end_type += " " + "*" * pointer_count
-                        args.append(end_type)
-
+        args = named_args if named_args else operand_args
         if args:
             current_function["args"] = args
 
-        # Create hashkey and add to all_functions_in_debug
         if "source" in current_function:
             try:
                 hashkey = (current_function["source"]["source_file"] +
                            current_function["source"]["source_line"])
                 all_functions_in_debug[hashkey] = current_function
             except KeyError:
-                pass  # Something went wrong, abandon
+                pass
+
+    def _maybe_extract_source_location(line: str) -> tuple[str, str] | None:
+        if (" from " not in line or " - Operand" in line or "Elem " in line):
+            return None
+        location = line.rsplit(" from ", maxsplit=1)[-1].strip()
+        source_file, separator, source_line_tail = location.partition(":")
+        if separator == "" or source_file == "":
+            return None
+        digits = []
+        for ch in source_line_tail:
+            if ch.isdigit():
+                digits.append(ch)
+            else:
+                break
+        if not digits:
+            return None
+        return source_file.strip(), "".join(digits)
+
+    def _maybe_extract_named_arg(line: str) -> str | None:
+        marker = "Name: {"
+        start_idx = line.find(marker)
+        if start_idx == -1:
+            return None
+        start_idx += len(marker)
+        end_idx = line.find("}", start_idx)
+        if end_idx == -1:
+            return None
+        value = line[start_idx:end_idx].strip()
+        return value if value else None
+
+    def _maybe_extract_operand_type(line: str) -> str | None:
+        if " - Operand" not in line:
+            return None
+
+        l1 = (line.replace("Operand Type:", "").replace("Type: ",
+                                                        "").replace("-", ""))
+        pointer_count = l1.count("DW_TAG_pointer_type")
+        const_count = l1.count("DW_TAG_const_type")
+        parts = l1.split(",")
+        if not parts:
+            return None
+        base_type = parts[-1].strip()
+        end_type = ""
+        if const_count > 0:
+            end_type += "const "
+        end_type += base_type
+        if pointer_count > 0:
+            end_type += " " + "*" * pointer_count
+        return end_type if end_type.strip() else None
+
+    for line in functions_section.splitlines():
+        if line.startswith("Subprogram: "):
+            _finalize_current_function()
+            function_name = line[len("Subprogram: "):].strip()
+            current_function = {"name": function_name}
+            named_args = []
+            operand_args = []
+            continue
+
+        if current_function is None:
+            continue
+
+        if "source" not in current_function:
+            source_location = _maybe_extract_source_location(line)
+            if source_location is not None:
+                source_file, source_line = source_location
+                current_function["source"] = {
+                    "source_file": source_file,
+                    "source_line": source_line,
+                }
+                if source_file not in all_files_in_debug_info:
+                    all_files_in_debug_info[source_file] = {
+                        "source_file": source_file,
+                        "language": "N/A",
+                    }
+
+        named_arg = _maybe_extract_named_arg(line)
+        if named_arg is not None:
+            named_args.append(named_arg)
+            continue
+
+        operand_type = _maybe_extract_operand_type(line)
+        if operand_type is not None:
+            operand_args.append(operand_type)
+
+    _finalize_current_function()
+
+
+def _load_debug_file_payload(debug_file: str) -> DebugPayload:
+    with open(debug_file, "rb") as debug_f:
+        raw_bytes = debug_f.read()
+    raw_content = raw_bytes.decode("utf-8", errors="ignore")
+    content_hash = hashlib.md5(raw_bytes).hexdigest()
+
+    path_mapping: dict[str, str] = {}
+    original_base_dir: str | None = None
+    try:
+        report_data = json.loads(raw_content)
+        path_mapping = report_data.get("_path_mapping", {})
+        original_base_dir = report_data.get("_base_dir", None)
+    except (json.JSONDecodeError, KeyError, TypeError):
+        pass
+
+    all_files_in_debug_info: dict[str, dict[str, str]] = {}
+    all_functions_in_debug: dict[str, dict[str, Any]] = {}
+    all_global_variables: dict[str, dict[str, Any]] = {}
+    all_types: dict[str, dict[str, Any]] = {}
+    extract_all_compile_units(raw_content, all_files_in_debug_info)
+    extract_all_functions_in_debug_info(raw_content, all_functions_in_debug,
+                                        all_files_in_debug_info)
+    extract_global_variables(raw_content, all_global_variables,
+                             all_files_in_debug_info)
+    extract_types(raw_content, all_types, all_files_in_debug_info)
+
+    return (
+        content_hash,
+        all_files_in_debug_info,
+        all_functions_in_debug,
+        all_global_variables,
+        all_types,
+        path_mapping,
+        original_base_dir,
+    )
 
 
 def load_debug_report(debug_files, base_dir=None):
@@ -307,39 +373,80 @@ def load_debug_report(debug_files, base_dir=None):
     original_base_dir = None
     seen_hashes = set()  # Track processed content
 
-    # Extract all of the details
-    for debug_file in debug_files:
+    def _merge_debug_payload(payload: DebugPayload) -> None:
+        nonlocal path_mapping
+        nonlocal original_base_dir
+        (content_hash, payload_files, payload_functions, payload_globals,
+         payload_types, payload_path_mapping, payload_base_dir) = payload
+        if content_hash in seen_hashes:
+            return
+        seen_hashes.add(content_hash)
+        if not path_mapping and payload_path_mapping:
+            path_mapping = payload_path_mapping
+        if original_base_dir is None and payload_base_dir:
+            original_base_dir = payload_base_dir
+        all_files_in_debug_info.update(payload_files)
+        all_functions_in_debug.update(payload_functions)
+        all_global_variables.update(payload_globals)
+        all_types.update(payload_types)
+
+    parallel_enabled = _parse_bool_env("FI_DEBUG_REPORT_PARALLEL", True)
+    max_workers_default = min(os.cpu_count() or 1, 8)
+    worker_count = _parse_int_env("FI_DEBUG_REPORT_WORKERS", max_workers_default,
+                                  1)
+
+    if parallel_enabled and worker_count > 1 and len(debug_files) > 1:
+        logger.info("Loading %d debug report files with %d workers",
+                    len(debug_files), min(worker_count, len(debug_files)))
+        indexed_payloads: dict[int, DebugPayload] = {}
+        fallback_to_serial = False
         try:
-            with open(debug_file, "r") as debug_f:
-                raw_content = debug_f.read()
-
-            # Hash the content to avoid parsing identical debug info files
-            content_hash = hashlib.md5(raw_content.encode("utf-8")).hexdigest()
-            if content_hash in seen_hashes:
-                logger.debug("Skipping identical debug file: %s", debug_file)
-                continue
-            seen_hashes.add(content_hash)
-
-            # Try to extract path mapping from the debug file
-            if not path_mapping:
+            with ProcessPoolExecutor(
+                    max_workers=min(worker_count, len(debug_files))) as ex:
+                future_to_idx = {
+                    ex.submit(_load_debug_file_payload, debug_file): idx
+                    for idx, debug_file in enumerate(debug_files)
+                }
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        indexed_payloads[idx] = future.result()
+                    except Exception as err:
+                        logger.warning(
+                            ("Parallel debug report parsing failed at index %d: "
+                             "%s. Falling back to serial parsing."), idx, err)
+                        fallback_to_serial = True
+                        break
+        except (OSError, RuntimeError, ValueError) as err:
+            logger.warning(
+                "Failed to initialize parallel debug report parsing: %s. "
+                "Falling back to serial parsing.", err)
+            fallback_to_serial = True
+        if not fallback_to_serial:
+            for idx in range(len(debug_files)):
+                _merge_debug_payload(indexed_payloads[idx])
+        else:
+            all_files_in_debug_info.clear()
+            all_functions_in_debug.clear()
+            all_global_variables.clear()
+            all_types.clear()
+            path_mapping = {}
+            original_base_dir = None
+            seen_hashes.clear()
+            for debug_file in debug_files:
                 try:
-                    report_data = json.loads(raw_content)
-                    path_mapping = report_data.get("_path_mapping", {})
-                    original_base_dir = report_data.get("_base_dir", None)
-                except (json.JSONDecodeError, KeyError):
-                    # Not a JSON file or no mapping available - that's fine
-                    pass
-
-            extract_all_compile_units(raw_content, all_files_in_debug_info)
-            extract_all_functions_in_debug_info(raw_content,
-                                                all_functions_in_debug,
-                                                all_files_in_debug_info)
-            extract_global_variables(raw_content, all_global_variables,
-                                     all_files_in_debug_info)
-            extract_types(raw_content, all_types, all_files_in_debug_info)
-        except (IOError, OSError) as e:
-            logger.warning("Failed to read debug file %s: %s", debug_file, e)
-            continue
+                    _merge_debug_payload(_load_debug_file_payload(debug_file))
+                except (IOError, OSError) as e:
+                    logger.warning("Failed to read debug file %s: %s", debug_file,
+                                   e)
+                    continue
+    else:
+        for debug_file in debug_files:
+            try:
+                _merge_debug_payload(_load_debug_file_payload(debug_file))
+            except (IOError, OSError) as e:
+                logger.warning("Failed to read debug file %s: %s", debug_file, e)
+                continue
     if base_dir and (path_mapping or original_base_dir):
         # Remap paths from original base to new base
         for file_dict in all_files_in_debug_info.values():
@@ -548,7 +655,16 @@ def _write_spill(items: list[Any], category: str) -> tuple[str, int]:
 
 
 def _estimate_list_bytes(items: list[Any]) -> int:
-    return len(json.dumps(items))
+    if not items:
+        return 0
+
+    # Keep this estimate intentionally cheap to avoid large temporary
+    # allocations from serializing entire shards.
+    sample_size = min(len(items), 32)
+    sample = items[:sample_size]
+    sample_bytes = sum(sys.getsizeof(item) for item in sample)
+    avg_item_bytes = sample_bytes // sample_size if sample_size else 0
+    return sys.getsizeof(items) + (avg_item_bytes * len(items))
 
 
 def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
@@ -1065,8 +1181,6 @@ def syzkaller_get_type_implementation(typename, all_debug_types):
 
 
 if __name__ in "__main__":
-    import sys
-
     type_debug_files = [sys.argv[1]]
     typename = sys.argv[2]
 

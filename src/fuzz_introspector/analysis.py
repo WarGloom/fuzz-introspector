@@ -1344,8 +1344,8 @@ def correlate_introspection_functions_to_debug_info(all_functions_json_report,
      debug_lines_by_filename) = (_build_debug_function_indexes(
          debug_all_functions, header_index_by_name))
 
-    for dl3 in debug_dict_by_filename:
-        print("%s ------- %d" % (dl3, len(debug_dict_by_filename[dl3])))
+    logger.debug("Indexed debug functions by file: %d entries",
+                 len(debug_dict_by_filename))
 
     # Now correlate signatures
     for if_func in all_functions_json_report:

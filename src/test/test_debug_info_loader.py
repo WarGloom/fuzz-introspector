@@ -18,8 +18,6 @@ import logging
 import os
 import tempfile
 
-import pytest
-
 from fuzz_introspector import debug_info
 
 
@@ -27,6 +25,13 @@ def _write_yaml(tmpdir, name, payload):
     path = os.path.join(tmpdir, name)
     with open(path, "w", encoding="utf-8") as fp:
         json.dump(payload, fp)
+    return path
+
+
+def _write_text(tmpdir, name, content):
+    path = os.path.join(tmpdir, name)
+    with open(path, "w", encoding="utf-8") as fp:
+        fp.write(content)
     return path
 
 
@@ -209,3 +214,73 @@ def test_correlate_debugged_function_to_debug_types_parallel(monkeypatch):
         types, funcs, "/tmp", False)
     assert "func_signature_elems" in funcs[0]
     assert "source" in funcs[0]
+
+
+def test_extract_all_functions_in_debug_info_single_pass_parser():
+    content = """
+## Functions defined in module
+Subprogram: foo
+  details from /src/foo.c:10
+  - Operand Type: DW_TAG_const_type, DW_TAG_pointer_type, int
+  - Operand Name: {named_arg}
+Subprogram: bar
+  details from /src/bar.c:20
+  - Operand Type: DW_TAG_pointer_type, char
+## Global variables
+"""
+    all_functions = {}
+    all_files = {}
+    debug_info.extract_all_functions_in_debug_info(content, all_functions,
+                                                   all_files)
+
+    assert "/src/foo.c10" in all_functions
+    assert "/src/bar.c20" in all_functions
+    assert all_functions["/src/foo.c10"]["args"] == ["named_arg"]
+    assert all_functions["/src/bar.c20"]["args"] == ["char *"]
+    assert "/src/foo.c" in all_files
+    assert "/src/bar.c" in all_files
+
+
+def test_load_debug_report_parallel_matches_serial(monkeypatch):
+    def _canonicalize(report):
+        return {
+            key: sorted((json.dumps(item, sort_keys=True)
+                         for item in report.get(key, [])))
+            for key in (
+                "all_files_in_project",
+                "all_functions_in_project",
+                "all_global_variables",
+                "all_types",
+            )
+        }
+
+    content_1 = """
+Compile unit: c /src/a.c
+## Functions defined in module
+Subprogram: f1
+  details from /src/a.c:11
+  - Operand Type: DW_TAG_pointer_type, char
+## Global variables
+"""
+    content_2 = """
+Compile unit: c /src/b.c
+## Functions defined in module
+Subprogram: f2
+  details from /src/b.c:22
+  - Operand Name: {arg}
+## Global variables
+"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        f1 = _write_text(tmpdir, "d1.debug", content_1)
+        f2 = _write_text(tmpdir, "d2.debug", content_2)
+        f3 = _write_text(tmpdir, "d3.debug", content_1)  # duplicate content
+        files = [f1, f2, f3]
+
+        monkeypatch.setenv("FI_DEBUG_REPORT_PARALLEL", "0")
+        serial_report = debug_info.load_debug_report(files)
+
+        monkeypatch.setenv("FI_DEBUG_REPORT_PARALLEL", "1")
+        monkeypatch.setenv("FI_DEBUG_REPORT_WORKERS", "2")
+        parallel_report = debug_info.load_debug_report(files)
+
+    assert _canonicalize(serial_report) == _canonicalize(parallel_report)
