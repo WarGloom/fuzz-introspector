@@ -394,8 +394,8 @@ def load_debug_report(debug_files, base_dir=None):
 
     parallel_enabled = _parse_bool_env("FI_DEBUG_REPORT_PARALLEL", True)
     max_workers_default = min(os.cpu_count() or 1, 8)
-    worker_count = _parse_int_env("FI_DEBUG_REPORT_WORKERS", max_workers_default,
-                                  1)
+    worker_count = _parse_int_env("FI_DEBUG_REPORT_WORKERS",
+                                  max_workers_default, 1)
 
     if parallel_enabled and worker_count > 1 and len(debug_files) > 1:
         logger.info("Loading %d debug report files with %d workers",
@@ -414,9 +414,9 @@ def load_debug_report(debug_files, base_dir=None):
                     try:
                         indexed_payloads[idx] = future.result()
                     except Exception as err:
-                        logger.warning(
-                            ("Parallel debug report parsing failed at index %d: "
-                             "%s. Falling back to serial parsing."), idx, err)
+                        logger.warning((
+                            "Parallel debug report parsing failed at index %d: "
+                            "%s. Falling back to serial parsing."), idx, err)
                         fallback_to_serial = True
                         break
         except (OSError, RuntimeError, ValueError) as err:
@@ -439,15 +439,16 @@ def load_debug_report(debug_files, base_dir=None):
                 try:
                     _merge_debug_payload(_load_debug_file_payload(debug_file))
                 except (IOError, OSError) as e:
-                    logger.warning("Failed to read debug file %s: %s", debug_file,
-                                   e)
+                    logger.warning("Failed to read debug file %s: %s",
+                                   debug_file, e)
                     continue
     else:
         for debug_file in debug_files:
             try:
                 _merge_debug_payload(_load_debug_file_payload(debug_file))
             except (IOError, OSError) as e:
-                logger.warning("Failed to read debug file %s: %s", debug_file, e)
+                logger.warning("Failed to read debug file %s: %s", debug_file,
+                               e)
                 continue
     if base_dir and (path_mapping or original_base_dir):
         # Remap paths from original base to new base
@@ -634,14 +635,16 @@ def _safe_file_size(path: str) -> int:
     try:
         file_size = os.path.getsize(path)
     except OSError as exc:
-        logger.debug("Could not stat %s for size-balanced sharding: %s", path, exc)
+        logger.debug("Could not stat %s for size-balanced sharding: %s", path,
+                     exc)
         return 1
     if file_size <= 0:
         return 1
     return file_size
 
 
-def _build_size_balanced_shards(paths: list[str], shard_size: int) -> list[list[str]]:
+def _build_size_balanced_shards(paths: list[str],
+                                shard_size: int) -> list[list[str]]:
     fixed_shards = _chunked(paths, shard_size)
     target_shard_count = len(fixed_shards)
     if target_shard_count <= 1:
@@ -681,21 +684,23 @@ def _build_size_balanced_shards(paths: list[str], shard_size: int) -> list[list[
         shards.append(current_shard)
 
     if len(shards) != target_shard_count:
-        logger.warning("Failed to build size-balanced shards; using fixed-count")
+        logger.warning(
+            "Failed to build size-balanced shards; using fixed-count")
         return fixed_shards
     return shards
 
 
 def _build_yaml_shards(paths: list[str], shard_size: int) -> list[list[str]]:
-    strategy = os.environ.get("FI_DEBUG_SHARD_STRATEGY", "fixed_count").strip(
-    ).lower() or "fixed_count"
+    strategy = os.environ.get("FI_DEBUG_SHARD_STRATEGY",
+                              "fixed_count").strip().lower() or "fixed_count"
     if strategy == "fixed_count":
         return _chunked(paths, shard_size)
     if strategy == "size_balanced":
         return _build_size_balanced_shards(paths, shard_size)
 
-    logger.warning("Invalid FI_DEBUG_SHARD_STRATEGY=%r; using default "
-                   "'fixed_count'", strategy)
+    logger.warning(
+        "Invalid FI_DEBUG_SHARD_STRATEGY=%r; using default "
+        "'fixed_count'", strategy)
     return _chunked(paths, shard_size)
 
 
@@ -768,11 +773,12 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                                          shard_count, 1, shard_count)
     adaptive_workers_enabled = _parse_bool_env("FI_DEBUG_ADAPTIVE_WORKERS",
                                                False)
-    spill_policy = os.environ.get("FI_DEBUG_SPILL_POLICY", "oldest").strip(
-    ).lower() or "oldest"
+    spill_policy = os.environ.get("FI_DEBUG_SPILL_POLICY",
+                                  "oldest").strip().lower() or "oldest"
     if spill_policy not in ("oldest", "largest"):
-        logger.warning("Invalid FI_DEBUG_SPILL_POLICY=%r; using default "
-                       "'oldest'", spill_policy)
+        logger.warning(
+            "Invalid FI_DEBUG_SPILL_POLICY=%r; using default "
+            "'oldest'", spill_policy)
         spill_policy = "oldest"
     shard_items_by_idx: dict[int, list[Any]] = {}
     shard_bytes_by_idx: dict[int, int] = {}
@@ -800,9 +806,9 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
         current_mem_bytes += shard_bytes
         while _should_spill() and shard_items_by_idx:
             if spill_policy == "largest":
-                spill_idx = max(
-                    shard_items_by_idx,
-                    key=lambda idx: (shard_bytes_by_idx.get(idx, 0), -idx))
+                spill_idx = max(shard_items_by_idx,
+                                key=lambda idx:
+                                (shard_bytes_by_idx.get(idx, 0), -idx))
             else:
                 spill_idx = min(shard_items_by_idx)
             spill_items = shard_items_by_idx[spill_idx]
@@ -867,14 +873,16 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                 )
 
         try:
-            with executor_cls(max_workers=min(worker_count, len(shards))) as ex:
+            with executor_cls(
+                    max_workers=min(worker_count, len(shards))) as ex:
                 future_to_idx: dict[Any, int] = {}
 
                 def _submit_shard(shard_idx: int) -> None:
                     shard = shards[shard_idx]
-                    shard_start_elapsed[shard_idx] = (
-                        time.perf_counter() - run_start)
-                    future_to_idx[ex.submit(_load_yaml_shard, shard)] = shard_idx
+                    shard_start_elapsed[shard_idx] = (time.perf_counter() -
+                                                      run_start)
+                    future_to_idx[ex.submit(_load_yaml_shard,
+                                            shard)] = shard_idx
 
                 next_idx = 0
                 initial_inflight = min(adaptive_inflight_cap, len(shards))
@@ -891,7 +899,8 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                                            return_when=FIRST_COMPLETED)
                     for future in done_futures:
                         idx = future_to_idx.pop(future)
-                        shard_end_elapsed[idx] = time.perf_counter() - run_start
+                        shard_end_elapsed[idx] = time.perf_counter(
+                        ) - run_start
                         try:
                             items = future.result()
                         except Exception as exc:  # pragma: no cover - defensive
@@ -926,8 +935,8 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                                 else:
                                     tail_latency_streak = 0
 
-                            pressure_detected = (
-                                spill_streak >= 2 or tail_latency_streak >= 2)
+                            pressure_detected = (spill_streak >= 2
+                                                 or tail_latency_streak >= 2)
                             if adaptive_inflight_cap > 1 and pressure_detected:
                                 previous_cap = adaptive_inflight_cap
                                 adaptive_inflight_cap -= 1
@@ -994,8 +1003,8 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
 
         results: list[Any] = []
         if spilled_by_idx:
-            logger.info("Merging %d spilled shards for %s", len(spilled_by_idx),
-                        category)
+            logger.info("Merging %d spilled shards for %s",
+                        len(spilled_by_idx), category)
         merged_count = 0
         for idx in range(shard_count):
             spill_path = spilled_by_idx.pop(idx, None)
@@ -1194,11 +1203,16 @@ def create_friendly_debug_types(debug_type_dictionary,
             entry = {
                 "raw_debug_info": debug_type_dictionary[addr],
                 "friendly-info": {
-                    "raw-types": friendly_type,
-                    "string_type": convert_param_list_to_str_v2(friendly_type),
-                    "is-struct": is_struct(friendly_type),
-                    "struct-elems": structure_elems,
-                    "is-enum": is_enumeration(friendly_type),
+                    "raw-types":
+                    friendly_type,
+                    "string_type":
+                    convert_param_list_to_str_v2(friendly_type),
+                    "is-struct":
+                    is_struct(friendly_type),
+                    "struct-elems":
+                    structure_elems,
+                    "is-enum":
+                    is_enumeration(friendly_type),
                     "enum-elems":
                     debug_type_dictionary[addr].get("enum_elems", []),
                 },
