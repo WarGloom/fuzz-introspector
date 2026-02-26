@@ -34,7 +34,8 @@ FI_PROFILE_BACKEND_PROCESS = "process"
 
 
 def _get_profile_executor_backend(
-) -> tuple[type[concurrent.futures.Executor], str]:
+) -> tuple[type[concurrent.futures.ThreadPoolExecutor]
+           | type[concurrent.futures.ProcessPoolExecutor], str]:
     """Returns configured parallel backend for profile loading."""
     backend = os.environ.get(FI_PROFILE_BACKEND_ENV,
                              FI_PROFILE_BACKEND_THREAD).strip().lower()
@@ -161,13 +162,13 @@ def load_all_profiles(
     if parallelise:
         worker_count = max(1, min(worker_count, len(data_files)))
         executor_cls, backend = _get_profile_executor_backend()
-        logger.info("Loading profiles in parallel using %s backend (%d workers)",
-                    backend, worker_count)
+        logger.info(
+            "Loading profiles in parallel using %s backend (%d workers)",
+            backend, worker_count)
         try:
             indexed_profiles: Dict[
                 int, Optional[fuzzer_profile.FuzzerProfile]] = {}
-            with executor_cls(
-                    max_workers=worker_count) as executor:
+            with executor_cls(max_workers=worker_count) as executor:
                 future_to_idx = {
                     executor.submit(_load_profile, data_file, language): idx
                     for idx, data_file in enumerate(data_files)

@@ -22,12 +22,12 @@ import re
 import shutil
 import time
 
-from typing import Any, Dict, List, Optional, Type, Set, Union
+from typing import Any, Dict, List, Optional, Type, Set, Union, cast
 
 try:
     import resource
 except ImportError:  # pragma: no cover
-    resource = None
+    resource = cast(Any, None)
 
 from fuzz_introspector import (
     cfg_load,
@@ -148,8 +148,9 @@ def _get_debug_stage_tuning_hint(stage_name: str) -> str:
         "FI_DEBUG_REPORT_PARALLEL and FI_DEBUG_REPORT_WORKERS",
         "debug_types_yaml": ("FI_DEBUG_MAX_WORKERS, FI_DEBUG_SHARD_FILES, "
                              "FI_DEBUG_SPILL_MB, and FI_DEBUG_MAX_INMEM_MB"),
-        "debug_functions_yaml": ("FI_DEBUG_MAX_WORKERS, FI_DEBUG_SHARD_FILES, "
-                                 "FI_DEBUG_SPILL_MB, and FI_DEBUG_MAX_INMEM_MB"),
+        "debug_functions_yaml":
+        ("FI_DEBUG_MAX_WORKERS, FI_DEBUG_SHARD_FILES, "
+         "FI_DEBUG_SPILL_MB, and FI_DEBUG_MAX_INMEM_MB"),
         "type_correlation":
         "FI_DEBUG_CORRELATE_PARALLEL and FI_DEBUG_CORRELATE_WORKERS",
     }
@@ -164,7 +165,9 @@ def _log_debug_load_stage(
     perf_warn_enabled: bool,
     warn_after_seconds: int,
 ) -> None:
-    stage_fields: list[str] = [f"stage={stage_name}", f"elapsed={elapsed_seconds:.3f}s"]
+    stage_fields: list[str] = [
+        f"stage={stage_name}", f"elapsed={elapsed_seconds:.3f}s"
+    ]
     for metric_name, metric_value in metrics.items():
         stage_fields.append(f"{metric_name}={metric_value}")
 
@@ -257,13 +260,13 @@ def _accummulate_profiles(
             profile.accummulate_profile(base_folder, None, None, None)
         return profiles
 
-    for idx, profile in enumerate(indexed_profiles):
-        if profile is None:
+    for idx, indexed_profile in enumerate(indexed_profiles):
+        if indexed_profile is None:
             raise DataLoaderError(
                 f"Profile accumulation failed to return result for index {idx}"
             )
 
-    return [profile for profile in indexed_profiles if profile is not None]
+    return cast(List[fuzzer_profile.FuzzerProfile], indexed_profiles)
 
 
 class IntrospectionProject:
