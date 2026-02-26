@@ -1241,11 +1241,7 @@ def correlate_debugged_function_to_debug_types(all_debug_types,
     chunk_size = max(1, total_funcs // worker_count) if worker_count > 0 else 1
 
     def _process_slice(func_slice):
-        for dfunc in func_slice:
-            func_sig, source_location = extract_debugged_function_signature(
-                dfunc, debug_type_dictionary)
-            dfunc["func_signature_elems"] = func_sig
-            dfunc["source"] = source_location
+        _correlate_function_slice(func_slice, debug_type_dictionary)
 
     if parallel_enabled and worker_count > 1 and total_funcs > 1:
         logger.info("Correlating %d debug functions with %d threads",
@@ -1264,21 +1260,26 @@ def correlate_debugged_function_to_debug_types(all_debug_types,
                     logger.warning(
                         "Parallel correlation chunk %d failed: %s; "
                         "falling back to serial", idx, exc)
-                    for dfunc in all_debug_functions:
-                        func_sig, source_location = (
-                            extract_debugged_function_signature(
-                                dfunc, debug_type_dictionary))
-                        dfunc["func_signature_elems"] = func_sig
-                        dfunc["source"] = source_location
+                    _correlate_function_slice(all_debug_functions,
+                                              debug_type_dictionary)
                     break
     else:
         logger.info("Correlating %d debug functions serially", total_funcs)
-        for dfunc in all_debug_functions:
-            func_signature_elems, source_location = (
-                extract_debugged_function_signature(dfunc,
-                                                    debug_type_dictionary))
-            dfunc["func_signature_elems"] = func_signature_elems
-            dfunc["source"] = source_location
+        _correlate_function_slice(all_debug_functions, debug_type_dictionary)
+
+
+def _correlate_function_slice(func_slice: list[Any],
+                              debug_type_dictionary: dict[int, Any]) -> None:
+    """Correlate function signatures for a function slice in-place.
+
+    Kept as a module-level helper so correlation execution backends can reuse
+    one implementation while preserving current mutation semantics.
+    """
+    for dfunc in func_slice:
+        func_signature_elems, source_location = (
+            extract_debugged_function_signature(dfunc, debug_type_dictionary))
+        dfunc["func_signature_elems"] = func_signature_elems
+        dfunc["source"] = source_location
 
 
 def extract_syzkaller_type(param_list):
