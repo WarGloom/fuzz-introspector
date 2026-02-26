@@ -19,3 +19,6 @@ tests/tree-sitter-frontend/
 
 .claude/settings.local.json
 .agents/
+plan.md
+docs/perf/debug_info_remediation_plan.md
+docs/perf/p2_2_process_pool_plan.md
