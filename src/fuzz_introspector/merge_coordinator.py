@@ -288,9 +288,11 @@ class MergeCoordinator:
 
         fuzzer_updates = self.merged_json_report.get("fuzzers")
         if fuzzer_updates:
+            summary_contents.setdefault("fuzzers", {})
             for fuzzer_name, updates in fuzzer_updates.items():
-                summary_contents.setdefault(fuzzer_name, {})
-                self._merge_nested_dict(summary_contents[fuzzer_name], updates)
+                summary_contents["fuzzers"].setdefault(fuzzer_name, {})
+                self._merge_nested_dict(
+                    summary_contents["fuzzers"][fuzzer_name], updates)
 
         try:
             with open(summary_path, "w") as summary_fd:

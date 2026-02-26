@@ -1355,6 +1355,38 @@ def create_section_optional_analyses(
     out_dir,
 ) -> str:
     """Creates the HTML sections containing optional analyses."""
+    previous_should_dump_files = constants.should_dump_files
+    constants.should_dump_files = dump_files
+    try:
+        return _create_section_optional_analyses_impl(
+            table_of_contents,
+            analyses_to_run,
+            output_json,
+            tables,
+            introspection_proj,
+            basefolder,
+            coverage_url,
+            conclusions,
+            dump_files,
+            out_dir,
+        )
+    finally:
+        constants.should_dump_files = previous_should_dump_files
+
+
+def _create_section_optional_analyses_impl(
+    table_of_contents,
+    analyses_to_run,
+    output_json,
+    tables,
+    introspection_proj: analysis.IntrospectionProject,
+    basefolder,
+    coverage_url,
+    conclusions,
+    dump_files,
+    out_dir,
+) -> str:
+    """Implementation of optional analyses section generation."""
     html_report_core = ""
     logger.info(" - Handling optional analyses")
     html_report_core += '<div class="report-box">'
