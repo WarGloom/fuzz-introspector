@@ -38,6 +38,17 @@ def test_parse_parallel_worker_count_defaults_to_cpu_count(monkeypatch):
     assert html_report._parse_parallel_worker_count() == 4
 
 
+def test_parse_parallel_backend_defaults_and_validation(monkeypatch):
+    monkeypatch.delenv("FI_PR6_PARALLEL_BACKEND", raising=False)
+    assert html_report._parse_parallel_backend() == "thread"
+
+    monkeypatch.setenv("FI_PR6_PARALLEL_BACKEND", "process")
+    assert html_report._parse_parallel_backend() == "process"
+
+    monkeypatch.setenv("FI_PR6_PARALLEL_BACKEND", "invalid")
+    assert html_report._parse_parallel_backend() == "thread"
+
+
 def _write_pid_marker(out_dir: str, analysis_name: str) -> None:
     marker_path = os.path.join(out_dir, f"{analysis_name}.pid")
     with open(marker_path, "w") as marker_file:
@@ -454,6 +465,7 @@ class TestPR6ParallelExecution:
         PARALLEL_EXECUTION_LOG.clear()
         monkeypatch.setenv("FI_PR6_PARALLEL_ANALYSIS", "1")
         monkeypatch.setenv("FI_PR6_ANALYSIS_WORKERS", "2")
+        monkeypatch.setenv("FI_PR6_PARALLEL_BACKEND", "process")
         monkeypatch.setattr(
             analysis,
             "get_all_analyses",

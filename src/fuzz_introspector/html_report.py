@@ -14,6 +14,7 @@
 """Module for creating HTML reports"""
 
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import multiprocessing
@@ -54,6 +55,8 @@ logger = logging.getLogger(name=__name__)
 
 PR6_PARALLEL_ANALYSIS_FLAG_ENV = "FI_PR6_PARALLEL_ANALYSIS"
 PR6_PARALLEL_ANALYSIS_WORKERS_ENV = "FI_PR6_ANALYSIS_WORKERS"
+PR6_PARALLEL_ANALYSIS_BACKEND_ENV = "FI_PR6_PARALLEL_BACKEND"
+PR6_PARALLEL_ANALYSIS_DEFAULT_BACKEND = "thread"
 TABLE_ID_STRIDE = 100000
 
 
@@ -82,6 +85,21 @@ def _parse_parallel_worker_count() -> int:
         return 1
 
     return min(worker_count, os.cpu_count() or 1)
+
+
+def _parse_parallel_backend() -> str:
+    backend = os.environ.get(PR6_PARALLEL_ANALYSIS_BACKEND_ENV,
+                             PR6_PARALLEL_ANALYSIS_DEFAULT_BACKEND)
+    backend = backend.strip().lower()
+    if backend in ("thread", "process"):
+        return backend
+    logger.warning(
+        "Invalid %s=%r; defaulting to %s",
+        PR6_PARALLEL_ANALYSIS_BACKEND_ENV,
+        backend,
+        PR6_PARALLEL_ANALYSIS_DEFAULT_BACKEND,
+    )
+    return PR6_PARALLEL_ANALYSIS_DEFAULT_BACKEND
 
 
 def _get_parallel_compatibility_by_name() -> dict[str, str]:
@@ -252,6 +270,7 @@ def _run_parallel_analyses(
     dump_files: bool,
     worker_count: int,
     table_id_offsets: Dict[str, int],
+    backend: str,
 ) -> List[Dict[str, Any]]:
     if worker_count < 1:
         return []
@@ -259,7 +278,6 @@ def _run_parallel_analyses(
     if not analysis_interfaces:
         return []
 
-    ctx = multiprocessing.get_context("fork")
     results: List[Dict[str, Any]] = []
     total_workers = min(worker_count, len(analysis_interfaces))
 
@@ -267,25 +285,54 @@ def _run_parallel_analyses(
         batch = analysis_interfaces[idx:idx + total_workers]
         result_dir = tempfile.mkdtemp(prefix="fi-pr6-worker-results-")
         processes: List[Tuple[Any, str]] = []
+        thread_futures: Dict[str, Any] = {}
+        process_ctx = (multiprocessing.get_context("fork")
+                       if backend == "process" else None)
         for analysis_interface in batch:
             analysis_name = analysis_interface.get_name()
             display_html = analysis_name in analyses_to_run
-            process = ctx.Process(
-                target=_run_analysis_worker,
-                args=(
-                    analysis_interface,
-                    display_html,
-                    introspection_proj,
-                    basefolder,
-                    coverage_url,
-                    out_dir,
-                    dump_files,
-                    result_dir,
-                    table_id_offsets.get(analysis_name, 0),
-                ),
+            worker_args = (
+                analysis_interface,
+                display_html,
+                introspection_proj,
+                basefolder,
+                coverage_url,
+                out_dir,
+                dump_files,
+                result_dir,
+                table_id_offsets.get(analysis_name, 0),
             )
-            process.start()
-            processes.append((process, analysis_name))
+            if backend == "process":
+                if process_ctx is None:
+                    raise FuzzIntrospectorError(
+                        "Parallel process backend unavailable")
+                process = process_ctx.Process(
+                    target=_run_analysis_worker,
+                    args=worker_args,
+                )
+                process.start()
+                processes.append((process, analysis_name))
+            else:
+                thread_futures[analysis_name] = worker_args
+
+        if backend != "process" and thread_futures:
+            with ThreadPoolExecutor(max_workers=total_workers) as executor:
+                thread_futures = {
+                    analysis_name:
+                    executor.submit(_run_analysis_worker, *worker_args)
+                    for analysis_name, worker_args in thread_futures.items()
+                }
+                for analysis_name, future in thread_futures.items():
+                    try:
+                        future.result()
+                    except Exception as exc:  # pragma: no cover - defensive path
+                        results.append(
+                            _build_failure_envelope(
+                                analysis_name,
+                                "retryable_error",
+                                [f"Thread worker failed for {analysis_name}: {exc}"],
+                                worker_pid=os.getpid(),
+                            ))
 
         batch_results: List[Dict[str, Any]] = []
         returned_names: set[str] = set()
@@ -303,20 +350,39 @@ def _run_parallel_analyses(
             batch_results.append(envelope)
             returned_names.add(envelope.get("analysis_name", ""))
 
-        for process, analysis_name in processes:
-            if analysis_name in returned_names:
-                continue
-            diagnostics = [
-                f"Worker exited without result for {analysis_name}",
-                f"exit_code={process.exitcode}",
+        if backend == "process":
+            for process, analysis_name in processes:
+                if analysis_name in returned_names:
+                    continue
+                diagnostics = [
+                    f"Worker exited without result for {analysis_name}",
+                    f"exit_code={process.exitcode}",
+                ]
+                batch_results.append(
+                    _build_failure_envelope(
+                        analysis_name,
+                        "retryable_error",
+                        diagnostics,
+                        worker_pid=process.pid,
+                    ))
+        else:
+            expected_names = [
+                analysis_interface.get_name() for analysis_interface in batch
             ]
-            batch_results.append(
-                _build_failure_envelope(
-                    analysis_name,
-                    "retryable_error",
-                    diagnostics,
-                    worker_pid=process.pid,
-                ))
+            for analysis_name in expected_names:
+                if analysis_name in returned_names:
+                    continue
+                diagnostics = [
+                    f"Worker exited without result for {analysis_name}",
+                    "exit_code=thread_worker_missing_result",
+                ]
+                batch_results.append(
+                    _build_failure_envelope(
+                        analysis_name,
+                        "retryable_error",
+                        diagnostics,
+                        worker_pid=os.getpid(),
+                    ))
 
         shutil.rmtree(result_dir, ignore_errors=True)
         results.extend(batch_results)
@@ -1168,6 +1234,7 @@ def create_section_optional_analyses(
 
     coordinator = merge_coordinator.MergeCoordinator(out_dir)
     parallel_worker_count = _parse_parallel_worker_count()
+    parallel_backend = _parse_parallel_backend()
     parallel_compatibility = _get_parallel_compatibility_by_name()
     parallel_interfaces: List[type[analysis.AnalysisInterface]] = []
     serial_interfaces: List[type[analysis.AnalysisInterface]] = []
@@ -1192,9 +1259,10 @@ def create_section_optional_analyses(
 
     if parallel_worker_count > 1 and parallel_interfaces:
         logger.info(
-            " - Running %d vetted analyses with %d workers",
+            " - Running %d vetted analyses with %d workers (%s backend)",
             len(parallel_interfaces),
             parallel_worker_count,
+            parallel_backend,
         )
         parallel_results = _run_parallel_analyses(
             parallel_interfaces,
@@ -1206,6 +1274,7 @@ def create_section_optional_analyses(
             dump_files,
             parallel_worker_count,
             table_id_offsets,
+            parallel_backend,
         )
         for envelope in parallel_results:
             status = envelope.get("status")
