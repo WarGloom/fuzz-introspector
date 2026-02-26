@@ -370,3 +370,114 @@ LLVMFuzzerTestOneInput /src/project/fuzzer.cc linenumber=-1""",
                for msg in warning_messages)
     assert not fp._matches_exclude_pattern("/src/project/fuzzer.cc")
     assert not fp._matches_exclude_function_pattern("keep_me")
+
+
+def test_is_file_covered_caches_coverage_scans(tmpdir) -> None:
+    frontend_yaml = {
+        "Fuzzer filename": "/src/project/fuzz_target.cc",
+        "All functions": {
+            "Elements": [
+                {
+                    "functionName": "LLVMFuzzerTestOneInput",
+                    "functionsReached": ["f1", "f2"],
+                    "functionSourceFile": "/src/project/fuzz_target.cc",
+                    "linkageType": None,
+                    "functionLinenumber": None,
+                    "returnType": None,
+                    "argCount": None,
+                    "argTypes": None,
+                    "argNames": None,
+                    "BBCount": None,
+                    "ICount": None,
+                    "EdgeCount": None,
+                    "CyclomaticComplexity": None,
+                    "functionUses": None,
+                    "functionDepth": None,
+                    "constantsTouched": None,
+                    "BranchProfiles": [],
+                    "Callsites": [],
+                },
+                {
+                    "functionName": "f1",
+                    "functionsReached": [],
+                    "functionSourceFile": "/src/project/file_a.cc",
+                    "linkageType": None,
+                    "functionLinenumber": None,
+                    "returnType": None,
+                    "argCount": None,
+                    "argTypes": None,
+                    "argNames": None,
+                    "BBCount": None,
+                    "ICount": None,
+                    "EdgeCount": None,
+                    "CyclomaticComplexity": None,
+                    "functionUses": None,
+                    "functionDepth": None,
+                    "constantsTouched": None,
+                    "BranchProfiles": [],
+                    "Callsites": [],
+                },
+                {
+                    "functionName": "f2",
+                    "functionsReached": [],
+                    "functionSourceFile": "/src/project/file_b.cc",
+                    "linkageType": None,
+                    "functionLinenumber": None,
+                    "returnType": None,
+                    "argCount": None,
+                    "argTypes": None,
+                    "argNames": None,
+                    "BBCount": None,
+                    "ICount": None,
+                    "EdgeCount": None,
+                    "CyclomaticComplexity": None,
+                    "functionUses": None,
+                    "functionDepth": None,
+                    "constantsTouched": None,
+                    "BranchProfiles": [],
+                    "Callsites": [],
+                },
+            ]
+        },
+    }
+    fp = fuzzer_profile.FuzzerProfile(
+        os.path.join(tmpdir, "test.data"),
+        frontend_yaml,
+        "c-cpp",
+        cfg_content="Call tree\nLLVMFuzzerTestOneInput /src/project/fuzz_target.cc linenumber=-1",
+    )
+    fp.file_targets = {
+        "/src/project/file_a.cc": {"f1"},
+        "/src/project/file_b.cc": {"f2"},
+    }
+
+    class FakeCoverage:
+
+        def __init__(self, hit_summary):
+            self._hit_summary = hit_summary
+            self.call_count = 0
+
+        def get_hit_summary(self, function_name):
+            self.call_count += 1
+            return self._hit_summary[function_name]
+
+    first_cov = FakeCoverage({
+        "LLVMFuzzerTestOneInput": (1, 0),
+        "f1": (10, 2),
+        "f2": (10, 0),
+    })
+    fp.coverage = first_cov
+
+    assert fp.is_file_covered("/src/project/file_a.cc", "/src/project")
+    assert first_cov.call_count == 2
+    assert fp.is_file_covered("/src/project/file_a.cc", "/src/project")
+    assert first_cov.call_count == 2
+
+    second_cov = FakeCoverage({
+        "LLVMFuzzerTestOneInput": (1, 0),
+        "f1": (10, 0),
+        "f2": (10, 0),
+    })
+    fp.coverage = second_cov
+    assert not fp.is_file_covered("/src/project/file_a.cc", "/src/project")
+    assert second_cov.call_count == 2

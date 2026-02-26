@@ -82,6 +82,9 @@ class FuzzerProfile:
         self._exclude_file_regexes: List[Pattern[str]] = []
         self._exclude_function_regexes: List[Pattern[str]] = []
         self.set_exclude_patterns(exclude_patterns, exclude_function_patterns)
+        self._covered_files_cache: Dict[str, Set[str]] = {}
+        self._covered_files_cache_metadata: Dict[str, Tuple[int, int]] = {}
+        self._file_targets_cache_version: int = 0
 
         # Read entrypoint of fuzzer if this is a Python module
         if target_lang == "python":
@@ -273,6 +276,8 @@ class FuzzerProfile:
             for key, val in self.file_targets.items():
                 new_dict[key.replace(basefolder, "")] = val
             self.file_targets = new_dict
+            self._file_targets_cache_version += 1
+            self._invalidate_is_file_covered_cache()
 
     def get_callsites(self):
         return cfg_load.extract_all_callsites(self.fuzzer_callsite_calltree)
@@ -632,6 +637,9 @@ class FuzzerProfile:
             profile.entrypoint_method = payload["entrypoint_method"]
 
         profile.dst_to_fd_cache = dict()
+        profile._covered_files_cache = {}
+        profile._covered_files_cache_metadata = {}
+        profile._file_targets_cache_version = 0
         profile._set_fd_cache()
         return profile
 
@@ -744,6 +752,8 @@ class FuzzerProfile:
             filtered_file_targets[filename] = filtered_targets
 
         self.file_targets = filtered_file_targets
+        self._file_targets_cache_version += 1
+        self._invalidate_is_file_covered_cache()
         self.functions_reached_by_fuzzer = [
             func for func in self.functions_reached_by_fuzzer
             if not self._should_exclude_function_name(func)
@@ -791,33 +801,73 @@ class FuzzerProfile:
         :returns: `True` if the file is covered by runtime code coverage,
                   `False` otherwise.
         """
-        # We need to refine the pathname to match how coverage file paths are.
-        file_name = os.path.abspath(file_name)
+        cache_key = basefolder if basefolder is not None else ""
+        cache_metadata = (
+            id(self.coverage),
+            self._file_targets_cache_version,
+        )
+        covered_files = self._covered_files_cache.get(cache_key)
+        if (
+            covered_files is None
+            or self._covered_files_cache_metadata.get(cache_key) != cache_metadata
+        ):
+            covered_files = self._build_covered_files_index(basefolder)
+            self._covered_files_cache[cache_key] = covered_files
+            self._covered_files_cache_metadata[cache_key] = cache_metadata
 
-        # Refine filename if needed
+        normalized_file = self._normalize_file_path_for_coverage(file_name, basefolder)
+        return (
+            file_name in covered_files
+            or os.path.abspath(file_name) in covered_files
+            or normalized_file in covered_files
+        )
+
+    def _normalize_file_path_for_coverage(
+        self, file_name: str, basefolder: Optional[str]
+    ) -> str:
+        normalized_file_name = os.path.abspath(file_name)
         if basefolder is not None and basefolder != "/":
-            new_file_name = file_name.replace(basefolder, "")
-        else:
-            new_file_name = file_name
+            normalized_file_name = normalized_file_name.replace(basefolder, "")
+        return normalized_file_name
+
+    def _invalidate_is_file_covered_cache(self) -> None:
+        self._covered_files_cache = {}
+        self._covered_files_cache_metadata = {}
+
+    def _build_covered_files_index(self, basefolder: Optional[str]) -> Set[str]:
+        covered_files: Set[str] = set()
+        if self.coverage is None:
+            return covered_files
 
         for funcname, func_profile in self.all_class_functions.items():
-            # Check it's a relevant filename
             func_file_name = func_profile.function_source_file
-            if basefolder is not None and basefolder != "/":
-                new_func_file_name = func_file_name.replace(basefolder, "")
-            else:
-                new_func_file_name = func_file_name
-            if func_file_name != file_name and new_func_file_name != new_file_name:
+            if not func_file_name:
                 continue
-            # Return true if the function is hit
-            _, _, hp = self.get_cov_metrics(funcname)
-            if hp is not None and hp > 0.0:
-                if (
-                    func_file_name in self.file_targets
-                    or new_file_name in self.file_targets
-                ):
-                    return True
-        return False
+
+            abs_func_file = os.path.abspath(func_file_name)
+            normalized_func_file = self._normalize_file_path_for_coverage(
+                func_file_name, basefolder
+            )
+            normalized_abs_func_file = self._normalize_file_path_for_coverage(
+                abs_func_file, basefolder
+            )
+            if (
+                func_file_name not in self.file_targets
+                and normalized_func_file not in self.file_targets
+                and abs_func_file not in self.file_targets
+                and normalized_abs_func_file not in self.file_targets
+            ):
+                continue
+
+            _, _, hit_percentage = self.get_cov_metrics(funcname)
+            if hit_percentage is None or hit_percentage <= 0.0:
+                continue
+
+            covered_files.add(func_file_name)
+            covered_files.add(abs_func_file)
+            covered_files.add(normalized_func_file)
+            covered_files.add(normalized_abs_func_file)
+        return covered_files
 
     def get_cov_metrics(
         self, funcname: str
@@ -963,6 +1013,7 @@ class FuzzerProfile:
             )
         else:
             raise DataLoaderError("The profile target has no coverage loading support")
+        self._invalidate_is_file_covered_cache()
 
     def _get_target_fuzzer_filename(self) -> str:
         return (
@@ -988,6 +1039,8 @@ class FuzzerProfile:
                 if cs.dst_function_source_file not in self.file_targets:
                     self.file_targets[cs.dst_function_source_file] = set()
                 self.file_targets[cs.dst_function_source_file].add(cs.dst_function_name)
+        self._file_targets_cache_version += 1
+        self._invalidate_is_file_covered_cache()
 
     def _set_total_basic_blocks(self) -> None:
         """Sets self.total_basic_blocks to the sum of basic blocks of all the
