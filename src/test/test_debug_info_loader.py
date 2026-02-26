@@ -18,8 +18,6 @@ import logging
 import os
 import tempfile
 
-import pytest
-
 from fuzz_introspector import debug_info
 
 
