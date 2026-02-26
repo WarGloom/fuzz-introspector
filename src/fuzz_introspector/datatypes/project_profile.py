@@ -13,6 +13,7 @@
 # limitations under the License.
 """Project profile"""
 
+import collections
 import os
 import logging
 
@@ -67,6 +68,25 @@ class MergedProjectProfile:
                 if func_name not in self.functions_reached:
                     self.unreached_functions.add(func_name)
 
+        # Build once to avoid O(functions * profiles) repeated membership checks.
+        static_reached_by_fuzzers: dict[
+            str, set[str]] = collections.defaultdict(set)
+        runtime_reached_by_fuzzers: dict[
+            str, set[str]] = collections.defaultdict(set)
+        combined_reached_by_fuzzers: dict[
+            str, set[str]] = collections.defaultdict(set)
+        for profile in profiles:
+            profile_id = profile.identifier
+            static_funcs = set(profile.functions_reached_by_fuzzer)
+            runtime_funcs = set(profile.functions_reached_by_fuzzer_runtime)
+
+            for func_name in static_funcs:
+                static_reached_by_fuzzers[func_name].add(profile_id)
+                combined_reached_by_fuzzers[func_name].add(profile_id)
+            for func_name in runtime_funcs:
+                runtime_reached_by_fuzzers[func_name].add(profile_id)
+                combined_reached_by_fuzzers[func_name].add(profile_id)
+
         # Add all functions from the various profiles into the merged profile. Don't
         # add duplicates
         logger.info("Creating all_functions dictionary")
@@ -84,32 +104,15 @@ class MergedProjectProfile:
                        for to_exclude in excluded_functions):
                     continue
 
-                # populate hitcount and reached_by_fuzzers and whether it has been handled already
-                # Also populate the reached_by_fuzzers_runtime and reached_by_fuzzers_combined
-                for profile2 in profiles:
-                    # Statically reached functions
-                    if profile2.reaches_func(fd.function_name):
-                        fd.reached_by_fuzzers.append(profile2.identifier)
+                if fd.function_name not in self.all_functions:
+                    self.all_functions[fd.function_name] = fd
 
-                    # Dynamically reached functions
-                    if profile2.reaches_func_runtime(fd.function_name):
-                        fd.reached_by_fuzzers_runtime.append(
-                            profile2.identifier)
-
-                    # Statically or dynamically reached functions
-                    if profile2.reaches_func_combined(fd.function_name):
-                        fd.reached_by_fuzzers_combined.append(
-                            profile2.identifier)
-
-                    if fd.function_name not in self.all_functions:
-                        self.all_functions[fd.function_name] = fd
-
-                # Deduplicate the reached_by_fuzzer* list
-                fd.reached_by_fuzzers = list(set(fd.reached_by_fuzzers))
+                fd.reached_by_fuzzers = list(
+                    static_reached_by_fuzzers.get(fd.function_name, set()))
                 fd.reached_by_fuzzers_runtime = list(
-                    set(fd.reached_by_fuzzers_runtime))
+                    runtime_reached_by_fuzzers.get(fd.function_name, set()))
                 fd.reached_by_fuzzers_combined = list(
-                    set(fd.reached_by_fuzzers_combined))
+                    combined_reached_by_fuzzers.get(fd.function_name, set()))
 
                 # Refine hitcount
                 fd.hitcount = len(fd.reached_by_fuzzers)
