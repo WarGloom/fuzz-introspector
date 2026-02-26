@@ -304,32 +304,34 @@ def test_load_debug_report_native_mode_without_command_falls_back_cleanly(caplog
     """Native mode without configured command should safely fall back to Python."""
     expected_report = _sample_debug_report()
 
-    with mock.patch.object(
-            debug_info,
-            "_load_debug_file_payload",
-            return_value=_sample_debug_payload()) as load_payload_mock:
+    for native_loader in ("rust", "go"):
+        caplog.clear()
         with mock.patch.object(
                 debug_info,
-                "_try_native_loader_command",
-                wraps=debug_info._try_native_loader_command
-        ) as native_loader_mock:
-            with caplog.at_level("INFO"):
-                with mock.patch.dict(
-                        os.environ, {
-                            "FI_DEBUG_REPORT_PARALLEL": "0",
-                            "FI_DEBUG_NATIVE_LOADER": "rust",
-                        }, clear=True):
-                    result = debug_info.load_debug_report(
-                        ["/tmp/fake-debug-file"])
+                "_load_debug_file_payload",
+                return_value=_sample_debug_payload()) as load_payload_mock:
+            with mock.patch.object(
+                    debug_info,
+                    "_try_native_loader_command",
+                    wraps=debug_info._try_native_loader_command
+            ) as native_loader_mock:
+                with caplog.at_level("INFO"):
+                    with mock.patch.dict(
+                            os.environ, {
+                                "FI_DEBUG_REPORT_PARALLEL": "0",
+                                "FI_DEBUG_NATIVE_LOADER": native_loader,
+                            }, clear=True):
+                        result = debug_info.load_debug_report(
+                            ["/tmp/fake-debug-file"])
 
-    assert result == expected_report
-    load_payload_mock.assert_called_once()
-    native_loader_mock.assert_called_once()
-    assert any("Selected native debug loader: rust" in record.message
-               for record in caplog.records)
-    assert any("FI_DEBUG_NATIVE_LOADER_CMD" in record.message and
-               "falling back to python debug loader" in record.message
-               for record in caplog.records)
+        assert result == expected_report
+        load_payload_mock.assert_called_once()
+        native_loader_mock.assert_called_once()
+        assert any(f"Selected native debug loader: {native_loader}" in
+                   record.message for record in caplog.records)
+        assert any("FI_DEBUG_NATIVE_LOADER_CMD" in record.message and
+                   "falling back to python debug loader" in record.message
+                   for record in caplog.records)
 
 
 def test_load_debug_report_native_command_success_uses_native_payload():
@@ -352,21 +354,22 @@ def test_load_debug_report_native_command_success_uses_native_payload():
     command = _python_command(
         f"import json; print(json.dumps({native_report!r}))")
 
-    with mock.patch.object(
-            debug_info,
-            "_load_debug_file_payload",
-            side_effect=AssertionError("python payload loader should not run")
-    ) as load_payload_mock:
-        with mock.patch.dict(
-                os.environ, {
-                    "FI_DEBUG_REPORT_PARALLEL": "0",
-                    "FI_DEBUG_NATIVE_LOADER": "rust",
-                    "FI_DEBUG_NATIVE_LOADER_CMD": command,
-                }, clear=True):
-            result = debug_info.load_debug_report(["/tmp/fake-debug-file"])
+    for native_loader in ("rust", "go"):
+        with mock.patch.object(
+                debug_info,
+                "_load_debug_file_payload",
+                side_effect=AssertionError("python payload loader should not run")
+        ) as load_payload_mock:
+            with mock.patch.dict(
+                    os.environ, {
+                        "FI_DEBUG_REPORT_PARALLEL": "0",
+                        "FI_DEBUG_NATIVE_LOADER": native_loader,
+                        "FI_DEBUG_NATIVE_LOADER_CMD": command,
+                    }, clear=True):
+                result = debug_info.load_debug_report(["/tmp/fake-debug-file"])
 
-    assert result == native_report
-    load_payload_mock.assert_not_called()
+        assert result == native_report
+        load_payload_mock.assert_not_called()
 
 
 def test_load_debug_report_native_command_failures_fall_back_to_python(caplog):
@@ -382,25 +385,26 @@ def test_load_debug_report_native_command_failures_fall_back_to_python(caplog):
             debug_info,
             "_load_debug_file_payload",
             return_value=_sample_debug_payload()) as load_payload_mock:
-        for command, expected_message in scenarios:
-            caplog.clear()
-            with caplog.at_level("WARNING"):
-                with mock.patch.dict(
-                        os.environ, {
-                            "FI_DEBUG_REPORT_PARALLEL": "0",
-                            "FI_DEBUG_NATIVE_LOADER": "rust",
-                            "FI_DEBUG_NATIVE_LOADER_CMD": command,
-                        }, clear=True):
-                    result = debug_info.load_debug_report(
-                        ["/tmp/fake-debug-file"])
+        for native_loader in ("rust", "go"):
+            for command, expected_message in scenarios:
+                caplog.clear()
+                with caplog.at_level("WARNING"):
+                    with mock.patch.dict(
+                            os.environ, {
+                                "FI_DEBUG_REPORT_PARALLEL": "0",
+                                "FI_DEBUG_NATIVE_LOADER": native_loader,
+                                "FI_DEBUG_NATIVE_LOADER_CMD": command,
+                            }, clear=True):
+                        result = debug_info.load_debug_report(
+                            ["/tmp/fake-debug-file"])
 
-            assert result == expected_report
-            assert any(expected_message in record.message
-                       for record in caplog.records)
-            assert any("falling back to python debug loader" in record.message
-                       for record in caplog.records)
+                assert result == expected_report
+                assert any(expected_message in record.message
+                           for record in caplog.records)
+                assert any("falling back to python debug loader" in
+                           record.message for record in caplog.records)
 
-    assert load_payload_mock.call_count == len(scenarios)
+    assert load_payload_mock.call_count == len(scenarios) * 2
 
 
 def test_load_yaml_collections_invalid_inmem_cap_env_does_not_spill():

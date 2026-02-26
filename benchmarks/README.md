@@ -197,3 +197,46 @@ python3 "${REPO_ROOT}/scripts/check_report_equivalence.py" \
   --sort-lists-at all_functions.js:$ \
   --markdown-report benchmarks/results/native_loader_equivalence.md
 ```
+
+## 4) Native loader parity flow (Go vs Python)
+
+Build the Go native loader:
+
+```bash
+GO_LOADER_DIR=/tmp/fuzz-introspector-research/tools/native_debug_loader_go
+go build -C "${GO_LOADER_DIR}"
+GO_LOADER_CMD="${GO_LOADER_DIR}/native_debug_loader_go"
+```
+
+Run native report generation:
+
+```bash
+PARITY_ROOT=/tmp/fi-native-loader-go-parity
+mkdir -p "${PARITY_ROOT}/python" "${PARITY_ROOT}/go"
+
+(
+  cd "${PARITY_ROOT}/python" && \
+  python3 "${REPO_ROOT}/src/main.py" report \
+    --target-dir "${TARGET_DIR}" \
+    --language c-cpp
+)
+
+(
+  cd "${PARITY_ROOT}/go" && \
+  FI_DEBUG_NATIVE_LOADER=go \
+  FI_DEBUG_NATIVE_LOADER_CMD="${GO_LOADER_CMD}" \
+  python3 "${REPO_ROOT}/src/main.py" report \
+    --target-dir "${TARGET_DIR}" \
+    --language c-cpp
+)
+```
+
+Compare outputs:
+
+```bash
+python3 "${REPO_ROOT}/scripts/check_report_equivalence.py" \
+  "${PARITY_ROOT}/python" \
+  "${PARITY_ROOT}/go" \
+  --ignore-report-date \
+  --markdown-report benchmarks/results/native_loader_go_equivalence.md
+```
