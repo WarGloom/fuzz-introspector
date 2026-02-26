@@ -751,7 +751,7 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
         return True
 
     if parallel_enabled and worker_count > 1 and len(shards) > 1:
-        use_process_pool = _parse_bool_env("FI_DEBUG_USE_PROCESS_POOL", True)
+        use_process_pool = _parse_bool_env("FI_DEBUG_USE_PROCESS_POOL", False)
         logger.info(
             "Loading %d %s shards with %d workers (%s pool)",
             len(shards),

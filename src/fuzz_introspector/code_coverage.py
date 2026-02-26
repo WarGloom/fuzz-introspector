@@ -18,6 +18,7 @@ import sys
 import json
 import logging
 import re
+import threading
 
 from typing import (
     Any,
@@ -37,6 +38,9 @@ COVERAGE_CASE_REGEX = re.compile(r".*\|.*\scase.*:")
 COVERAGE_BRANCH_REGEX = re.compile(r".*\|.*\sBranch.*\(.*:.*\):")
 
 logger = logging.getLogger(name=__name__)
+LLVM_COVERAGE_CACHE_ENV = "FI_LLVM_COVERAGE_CACHE"
+_LLVM_COVERAGE_PROFILE_CACHE: Dict[Tuple[Any, ...], "CoverageProfile"] = {}
+_LLVM_COVERAGE_PROFILE_CACHE_LOCK = threading.Lock()
 
 
 class CoverageProfile:
@@ -71,6 +75,18 @@ class CoverageProfile:
 
     def set_type(self, cov_type: str) -> None:
         self._cov_type = cov_type
+
+    def clone_with_shared_data(self) -> "CoverageProfile":
+        """Create a lightweight profile that shares immutable coverage maps."""
+        profile = CoverageProfile()
+        profile.covmap = self.covmap
+        profile.file_map = self.file_map
+        profile.branch_cov_map = self.branch_cov_map
+        profile._cov_type = self._cov_type
+        profile.coverage_files = list(self.coverage_files)
+        profile.dual_file_map = self.dual_file_map
+        profile.kernel_coverage = self.kernel_coverage
+        return profile
 
     def get_type(self) -> str:
         return self._cov_type
@@ -498,6 +514,32 @@ def load_llvm_coverage(
     if len(coverage_reports) == 0:
         coverage_reports = all_coverage_reports
 
+    cache_enabled = os.getenv(LLVM_COVERAGE_CACHE_ENV, "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+    cache_key: Optional[Tuple[Any, ...]] = None
+    if cache_enabled:
+        cache_entries = []
+        for coverage_report in coverage_reports:
+            try:
+                stat_result = os.stat(coverage_report)
+            except OSError:
+                cache_entries = []
+                break
+            cache_entries.append((coverage_report, stat_result.st_mtime_ns,
+                                  stat_result.st_size))
+        if cache_entries:
+            cache_key = (tuple(cache_entries), is_rust)
+            with _LLVM_COVERAGE_PROFILE_CACHE_LOCK:
+                cached_profile = _LLVM_COVERAGE_PROFILE_CACHE.get(cache_key)
+            if cached_profile is not None:
+                logger.info("Reusing cached LLVM coverage for %d reports",
+                            len(coverage_reports))
+                return cached_profile.clone_with_shared_data()
+
     cp = CoverageProfile()
     logger.info(f"Using the following coverages {coverage_reports}")
     cp.set_type("function")
@@ -644,6 +686,10 @@ def load_llvm_coverage(
                         f"reading coverage: {curr_func} -- {line_number} -- {hit_times}"
                     )
                     cp.covmap[curr_func].append((line_number, hit_times))
+    if cache_key is not None:
+        with _LLVM_COVERAGE_PROFILE_CACHE_LOCK:
+            _LLVM_COVERAGE_PROFILE_CACHE[cache_key] = cp
+        return cp.clone_with_shared_data()
     return cp
 
 

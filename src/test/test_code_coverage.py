@@ -14,6 +14,7 @@
 
 """Test code_coverage.py"""
 
+import builtins
 import os
 import sys
 import pytest
@@ -233,3 +234,64 @@ def test_get_hit_details_negative_cache_invalidates_on_covmap_growth(monkeypatch
     cp.covmap["missing"] = [(99, 5)]
     assert cp.get_hit_details("missing") == [(99, 5)]
     assert call_count["demangle_cpp_func"] == 1
+
+
+def test_load_llvm_coverage_reuses_cached_parse_result(monkeypatch, tmp_path):
+    code_coverage._LLVM_COVERAGE_PROFILE_CACHE.clear()
+    monkeypatch.delenv(code_coverage.LLVM_COVERAGE_CACHE_ENV, raising=False)
+
+    cov_path = tmp_path / "target.covreport"
+    cov_path.write_text(
+        "func_a:\n"
+        "  10| 2| return 1;\n",
+        encoding="utf-8",
+    )
+
+    open_counts = {"covreport_reads": 0}
+    original_open = builtins.open
+
+    def counting_open(path, mode="r", *args, **kwargs):
+        if str(path).endswith(".covreport") and "r" in mode:
+            open_counts["covreport_reads"] += 1
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", counting_open)
+
+    first = code_coverage.load_llvm_coverage(str(tmp_path), "target")
+    second = code_coverage.load_llvm_coverage(str(tmp_path), "target")
+
+    assert open_counts["covreport_reads"] == 1
+    assert first is not second
+    assert first.covmap is second.covmap
+    assert first.branch_cov_map is second.branch_cov_map
+    assert first.get_hit_summary("func_a") == (1, 1)
+    assert "func_a" in first._func_cov_key_cache
+    assert "func_a" not in second._func_cov_key_cache
+
+
+def test_load_llvm_coverage_cache_can_be_disabled(monkeypatch, tmp_path):
+    code_coverage._LLVM_COVERAGE_PROFILE_CACHE.clear()
+    monkeypatch.setenv(code_coverage.LLVM_COVERAGE_CACHE_ENV, "0")
+
+    cov_path = tmp_path / "target.covreport"
+    cov_path.write_text(
+        "func_b:\n"
+        "  12| 3| return 2;\n",
+        encoding="utf-8",
+    )
+
+    open_counts = {"covreport_reads": 0}
+    original_open = builtins.open
+
+    def counting_open(path, mode="r", *args, **kwargs):
+        if str(path).endswith(".covreport") and "r" in mode:
+            open_counts["covreport_reads"] += 1
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", counting_open)
+
+    first = code_coverage.load_llvm_coverage(str(tmp_path), "target")
+    second = code_coverage.load_llvm_coverage(str(tmp_path), "target")
+
+    assert open_counts["covreport_reads"] == 2
+    assert first.covmap is not second.covmap
