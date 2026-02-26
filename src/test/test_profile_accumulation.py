@@ -234,3 +234,56 @@ def test_get_all_functions_with_source_returns_cached_mapping():
 
     assert first_mapping is second_mapping
     assert list(first_mapping.keys()) == ["keep"]
+
+
+def test_parse_bool_env_invalid_uses_default(monkeypatch, caplog):
+    monkeypatch.setenv(analysis.FI_DEBUG_STAGE_RSS_ENV, "invalid")
+
+    with caplog.at_level("WARNING"):
+        parsed_value = analysis._parse_bool_env(analysis.FI_DEBUG_STAGE_RSS_ENV,
+                                                False)
+
+    assert not parsed_value
+    assert any("FI_DEBUG_STAGE_RSS" in record.message for record in caplog.records)
+
+
+def test_parse_stage_warn_seconds_invalid_uses_default(monkeypatch, caplog):
+    monkeypatch.setenv(analysis.FI_STAGE_WARN_SECONDS_ENV, "-2")
+
+    with caplog.at_level("WARNING"):
+        warn_seconds = analysis._parse_stage_warn_seconds()
+
+    assert warn_seconds == analysis.FI_STAGE_WARN_SECONDS_DEFAULT
+    assert any("FI_STAGE_WARN_SECONDS" in record.message for record in caplog.records)
+
+
+def test_log_debug_load_stage_includes_rss_field(monkeypatch, caplog):
+    monkeypatch.setattr(analysis, "_get_stage_rss_mb", lambda: 42.25)
+
+    with caplog.at_level("INFO"):
+        analysis._log_debug_load_stage(
+            "debug_types_yaml",
+            1.2,
+            {"files": 4, "types": 10},
+            include_rss=True,
+            perf_warn_enabled=False,
+            warn_after_seconds=0,
+        )
+
+    assert any("rss_mb=42.25" in record.message for record in caplog.records)
+
+
+def test_log_debug_load_stage_emits_perf_warning(caplog):
+    with caplog.at_level("WARNING"):
+        analysis._log_debug_load_stage(
+            "debug_functions_yaml",
+            6.0,
+            {"files": 5},
+            include_rss=False,
+            perf_warn_enabled=True,
+            warn_after_seconds=3,
+        )
+
+    warning_messages = [record.message for record in caplog.records]
+    assert any("exceeded threshold=3s" in message for message in warning_messages)
+    assert any("FI_DEBUG_MAX_WORKERS" in message for message in warning_messages)

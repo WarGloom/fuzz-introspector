@@ -18,3 +18,4 @@ tests/java/result/
 tests/tree-sitter-frontend/
 
 .claude/settings.local.json
+.agents/

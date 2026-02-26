@@ -24,6 +24,11 @@ import time
 
 from typing import Any, Dict, List, Optional, Type, Set, Union
 
+try:
+    import resource
+except ImportError:  # pragma: no cover
+    resource = None
+
 from fuzz_introspector import (
     cfg_load,
     code_coverage,
@@ -45,6 +50,12 @@ from fuzz_introspector.exceptions import DataLoaderError
 logger = logging.getLogger(name=__name__)
 FI_PROFILE_WORKERS_ENV = "FI_PROFILE_WORKERS"
 FI_PROFILE_WORKERS_DEFAULT_CAP = 0
+FI_DEBUG_STAGE_RSS_ENV = "FI_DEBUG_STAGE_RSS"
+FI_DEBUG_PERF_WARN_ENV = "FI_DEBUG_PERF_WARN"
+FI_STAGE_WARN_SECONDS_ENV = "FI_STAGE_WARN_SECONDS"
+FI_STAGE_WARN_SECONDS_DEFAULT = 0
+_BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
+_BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
 
 
 def _parse_profile_worker_count() -> int:
@@ -69,6 +80,112 @@ def _parse_profile_worker_count() -> int:
         return cpu_count
 
     return min(worker_count, cpu_count)
+
+
+def _parse_bool_env(env_name: str, default: bool) -> bool:
+    raw_value = os.environ.get(env_name, "").strip().lower()
+    if not raw_value:
+        return default
+    if raw_value in _BOOL_TRUE_VALUES:
+        return True
+    if raw_value in _BOOL_FALSE_VALUES:
+        return False
+    logger.warning("Invalid %s=%r; defaulting to %s", env_name, raw_value,
+                   default)
+    return default
+
+
+def _parse_stage_warn_seconds() -> int:
+    raw_value = os.environ.get(FI_STAGE_WARN_SECONDS_ENV, "")
+    if not raw_value:
+        return FI_STAGE_WARN_SECONDS_DEFAULT
+    try:
+        warn_seconds = int(raw_value)
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; defaulting to %d",
+            FI_STAGE_WARN_SECONDS_ENV,
+            raw_value,
+            FI_STAGE_WARN_SECONDS_DEFAULT,
+        )
+        return FI_STAGE_WARN_SECONDS_DEFAULT
+    if warn_seconds < 0:
+        logger.warning(
+            "Invalid %s=%r; defaulting to %d",
+            FI_STAGE_WARN_SECONDS_ENV,
+            raw_value,
+            FI_STAGE_WARN_SECONDS_DEFAULT,
+        )
+        return FI_STAGE_WARN_SECONDS_DEFAULT
+    return warn_seconds
+
+
+def _get_stage_rss_mb() -> float | None:
+    """Best-effort snapshot of process RSS in MiB."""
+    try:
+        with open("/proc/self/statm", "r", encoding="utf-8") as statm_file:
+            rss_pages = int(statm_file.read().split()[1])
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        return rss_pages * page_size / (1024 * 1024)
+    except (OSError, ValueError, IndexError):
+        pass
+
+    if resource is None:
+        return None
+
+    try:
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        if usage.ru_maxrss > 10**9:
+            return usage.ru_maxrss / (1024 * 1024)
+        return usage.ru_maxrss / 1024.0
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _get_debug_stage_tuning_hint(stage_name: str) -> str:
+    stage_hints = {
+        "debug_report":
+        "FI_DEBUG_REPORT_PARALLEL and FI_DEBUG_REPORT_WORKERS",
+        "debug_types_yaml": ("FI_DEBUG_MAX_WORKERS, FI_DEBUG_SHARD_FILES, "
+                             "FI_DEBUG_SPILL_MB, and FI_DEBUG_MAX_INMEM_MB"),
+        "debug_functions_yaml": ("FI_DEBUG_MAX_WORKERS, FI_DEBUG_SHARD_FILES, "
+                                 "FI_DEBUG_SPILL_MB, and FI_DEBUG_MAX_INMEM_MB"),
+        "type_correlation":
+        "FI_DEBUG_CORRELATE_PARALLEL and FI_DEBUG_CORRELATE_WORKERS",
+    }
+    return stage_hints.get(stage_name, "debug loader worker and shard knobs")
+
+
+def _log_debug_load_stage(
+    stage_name: str,
+    elapsed_seconds: float,
+    metrics: dict[str, int],
+    include_rss: bool,
+    perf_warn_enabled: bool,
+    warn_after_seconds: int,
+) -> None:
+    stage_fields: list[str] = [f"stage={stage_name}", f"elapsed={elapsed_seconds:.3f}s"]
+    for metric_name, metric_value in metrics.items():
+        stage_fields.append(f"{metric_name}={metric_value}")
+
+    if include_rss:
+        rss_mb = _get_stage_rss_mb()
+        if rss_mb is None:
+            stage_fields.append("rss_mb=n/a")
+        else:
+            stage_fields.append(f"rss_mb={rss_mb:.2f}")
+
+    logger.info("[debug-load] %s", " ".join(stage_fields))
+
+    if perf_warn_enabled and warn_after_seconds > 0 and elapsed_seconds > warn_after_seconds:
+        logger.warning(
+            ("[debug-load] stage=%s exceeded threshold=%ds with elapsed=%.3fs. "
+             "Tune %s."),
+            stage_name,
+            warn_after_seconds,
+            elapsed_seconds,
+            _get_debug_stage_tuning_hint(stage_name),
+        )
 
 
 def _accummulate_single_profile(
@@ -277,12 +394,19 @@ class IntrospectionProject:
 
     def load_debug_report(self, out_dir, dump_files=True):
         """Load and digest debug information."""
+        include_stage_rss = _parse_bool_env(FI_DEBUG_STAGE_RSS_ENV, False)
+        perf_warn_enabled = _parse_bool_env(FI_DEBUG_PERF_WARN_ENV, True)
+        warn_after_seconds = _parse_stage_warn_seconds()
+
         load_started = time.perf_counter()
         self.debug_report = debug_info.load_debug_report(self.debug_files)
-        logger.info(
-            "[debug-load] stage=debug_report elapsed=%.3fs files=%d",
+        _log_debug_load_stage(
+            "debug_report",
             time.perf_counter() - load_started,
-            len(self.debug_files),
+            {"files": len(self.debug_files)},
+            include_stage_rss,
+            perf_warn_enabled,
+            warn_after_seconds,
         )
 
         # Load the yaml  content of debug files holding type information and
@@ -290,23 +414,31 @@ class IntrospectionProject:
         type_load_started = time.perf_counter()
         self.debug_all_types = debug_info.load_debug_all_yaml_files(
             self.debug_type_files)
-        logger.info(
-            ("[debug-load] stage=debug_types_yaml elapsed=%.3fs "
-             "files=%d types=%d"),
+        _log_debug_load_stage(
+            "debug_types_yaml",
             time.perf_counter() - type_load_started,
-            len(self.debug_type_files),
-            len(self.debug_all_types),
+            {
+                "files": len(self.debug_type_files),
+                "types": len(self.debug_all_types),
+            },
+            include_stage_rss,
+            perf_warn_enabled,
+            warn_after_seconds,
         )
 
         function_load_started = time.perf_counter()
         self.debug_all_functions = debug_info.load_debug_all_yaml_files(
             self.debug_function_files)
-        logger.info(
-            ("[debug-load] stage=debug_functions_yaml elapsed=%.3fs "
-             "files=%d functions=%d"),
+        _log_debug_load_stage(
+            "debug_functions_yaml",
             time.perf_counter() - function_load_started,
-            len(self.debug_function_files),
-            len(self.debug_all_functions),
+            {
+                "files": len(self.debug_function_files),
+                "functions": len(self.debug_all_functions),
+            },
+            include_stage_rss,
+            perf_warn_enabled,
+            warn_after_seconds,
         )
 
         # Index the functions based on file locations. This is useful for
@@ -331,13 +463,17 @@ class IntrospectionProject:
 
         self.debug_all_functions = no_path_debug_funcs + list(
             tmp_debug_functions.values())
-        logger.info(
-            ("[debug-load] stage=dedupe_rewrite elapsed=%.3fs "
-             "types=%d functions_before=%d functions_after=%d"),
+        _log_debug_load_stage(
+            "dedupe_rewrite",
             time.perf_counter() - dedupe_rewrite_started,
-            len(self.debug_all_types),
-            original_function_count,
-            len(self.debug_all_functions),
+            {
+                "types": len(self.debug_all_types),
+                "functions_before": original_function_count,
+                "functions_after": len(self.debug_all_functions),
+            },
+            include_stage_rss,
+            perf_warn_enabled,
+            warn_after_seconds,
         )
 
         # Extract the raw function signature. This propagates types into all of
@@ -349,12 +485,16 @@ class IntrospectionProject:
             out_dir,
             dump_files=dump_files,
         )
-        logger.info(
-            ("[debug-load] stage=type_correlation elapsed=%.3fs "
-             "types=%d functions=%d"),
+        _log_debug_load_stage(
+            "type_correlation",
             time.perf_counter() - type_correlation_started,
-            len(self.debug_all_types),
-            len(self.debug_all_functions),
+            {
+                "types": len(self.debug_all_types),
+                "functions": len(self.debug_all_functions),
+            },
+            include_stage_rss,
+            perf_warn_enabled,
+            warn_after_seconds,
         )
 
     def dump_debug_report(self, out_dir):

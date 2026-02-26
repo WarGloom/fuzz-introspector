@@ -26,7 +26,9 @@ import os
 import shutil
 import sys
 import tempfile
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+import time
+from concurrent.futures import (FIRST_COMPLETED, ProcessPoolExecutor,
+                                ThreadPoolExecutor, as_completed, wait)
 from typing import Any, TypeVar
 import yaml
 
@@ -628,6 +630,75 @@ def _chunked(iterable: list[_T], size: int) -> list[list[_T]]:
     return [iterable[i:i + size] for i in range(0, len(iterable), size)]
 
 
+def _safe_file_size(path: str) -> int:
+    try:
+        file_size = os.path.getsize(path)
+    except OSError as exc:
+        logger.debug("Could not stat %s for size-balanced sharding: %s", path, exc)
+        return 1
+    if file_size <= 0:
+        return 1
+    return file_size
+
+
+def _build_size_balanced_shards(paths: list[str], shard_size: int) -> list[list[str]]:
+    fixed_shards = _chunked(paths, shard_size)
+    target_shard_count = len(fixed_shards)
+    if target_shard_count <= 1:
+        return fixed_shards
+
+    weighted_paths = [(path, _safe_file_size(path)) for path in paths]
+    total_size = sum(file_size for _, file_size in weighted_paths)
+    if total_size <= 0:
+        return fixed_shards
+
+    target_shard_size = total_size / target_shard_count
+    shards: list[list[str]] = []
+    current_shard: list[str] = []
+    current_shard_size = 0
+    path_count = len(weighted_paths)
+
+    for idx, (path, file_size) in enumerate(weighted_paths):
+        current_shard.append(path)
+        current_shard_size += file_size
+
+        completed_shards_after_close = len(shards) + 1
+        remaining_shards = target_shard_count - completed_shards_after_close
+        remaining_paths = path_count - (idx + 1)
+        if remaining_shards <= 0:
+            continue
+
+        enough_for_remaining = remaining_paths >= remaining_shards
+        must_close_to_fill = remaining_paths == remaining_shards
+        meets_target = current_shard_size >= target_shard_size
+
+        if enough_for_remaining and (meets_target or must_close_to_fill):
+            shards.append(current_shard)
+            current_shard = []
+            current_shard_size = 0
+
+    if current_shard:
+        shards.append(current_shard)
+
+    if len(shards) != target_shard_count:
+        logger.warning("Failed to build size-balanced shards; using fixed-count")
+        return fixed_shards
+    return shards
+
+
+def _build_yaml_shards(paths: list[str], shard_size: int) -> list[list[str]]:
+    strategy = os.environ.get("FI_DEBUG_SHARD_STRATEGY", "fixed_count").strip(
+    ).lower() or "fixed_count"
+    if strategy == "fixed_count":
+        return _chunked(paths, shard_size)
+    if strategy == "size_balanced":
+        return _build_size_balanced_shards(paths, shard_size)
+
+    logger.warning("Invalid FI_DEBUG_SHARD_STRATEGY=%r; using default "
+                   "'fixed_count'", strategy)
+    return _chunked(paths, shard_size)
+
+
 def _load_yaml_file(path: str) -> Any:
     with open(path, "r") as yaml_f:
         return yaml.safe_load(yaml_f)
@@ -649,8 +720,15 @@ def _write_spill(items: list[Any], category: str) -> tuple[str, int]:
     fd, spill_path = tempfile.mkstemp(prefix=f"fi-{category}-",
                                       suffix=".jsonl")
     os.close(fd)
-    with open(spill_path, "w") as spill_fp:
-        json.dump(items, spill_fp)
+    try:
+        with open(spill_path, "w") as spill_fp:
+            json.dump(items, spill_fp)
+    except Exception:
+        try:
+            os.remove(spill_path)
+        except OSError:
+            pass
+        raise
     return spill_path, len(items)
 
 
@@ -683,28 +761,66 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                                   1)
     shard_size = _parse_int_env("FI_DEBUG_SHARD_FILES", 4, 1)
     spill_mb = _parse_int_env("FI_DEBUG_SPILL_MB", 0, 0)
-    shards = _chunked(list(paths), shard_size)
+    max_inmem_mb = _parse_int_env("FI_DEBUG_MAX_INMEM_MB", 0, 0)
+    shards = _build_yaml_shards(list(paths), shard_size)
     shard_count = len(shards)
+    max_inflight_shards = _parse_int_env("FI_DEBUG_MAX_INFLIGHT_SHARDS",
+                                         shard_count, 1, shard_count)
+    adaptive_workers_enabled = _parse_bool_env("FI_DEBUG_ADAPTIVE_WORKERS",
+                                               False)
+    spill_policy = os.environ.get("FI_DEBUG_SPILL_POLICY", "oldest").strip(
+    ).lower() or "oldest"
+    if spill_policy not in ("oldest", "largest"):
+        logger.warning("Invalid FI_DEBUG_SPILL_POLICY=%r; using default "
+                       "'oldest'", spill_policy)
+        spill_policy = "oldest"
     shard_items_by_idx: dict[int, list[Any]] = {}
+    shard_bytes_by_idx: dict[int, int] = {}
     spilled_by_idx: dict[int, str] = {}
     spill_threshold_bytes = spill_mb * 1024 * 1024
+    max_inmem_bytes = max_inmem_mb * 1024 * 1024
     current_mem_bytes = 0
 
-    def _record_shard_items(shard_idx: int, items: list[Any]) -> None:
-        nonlocal current_mem_bytes
-        shard_items_by_idx[shard_idx] = items
-        if spill_threshold_bytes <= 0:
-            return
+    def _should_spill() -> bool:
+        if spill_threshold_bytes > 0 and current_mem_bytes >= spill_threshold_bytes:
+            return True
+        if max_inmem_bytes > 0 and current_mem_bytes >= max_inmem_bytes:
+            return True
+        return False
 
-        current_mem_bytes += _estimate_list_bytes(items)
-        while current_mem_bytes >= spill_threshold_bytes and shard_items_by_idx:
-            spill_idx = min(shard_items_by_idx)
-            spill_items = shard_items_by_idx.pop(spill_idx)
-            current_mem_bytes -= _estimate_list_bytes(spill_items)
+    def _record_shard_items(shard_idx: int, items: list[Any]) -> int:
+        nonlocal current_mem_bytes
+        spill_count = 0
+        shard_items_by_idx[shard_idx] = items
+        if spill_threshold_bytes <= 0 and max_inmem_bytes <= 0:
+            return spill_count
+
+        shard_bytes = _estimate_list_bytes(items)
+        shard_bytes_by_idx[shard_idx] = shard_bytes
+        current_mem_bytes += shard_bytes
+        while _should_spill() and shard_items_by_idx:
+            if spill_policy == "largest":
+                spill_idx = max(
+                    shard_items_by_idx,
+                    key=lambda idx: (shard_bytes_by_idx.get(idx, 0), -idx))
+            else:
+                spill_idx = min(shard_items_by_idx)
+            spill_items = shard_items_by_idx[spill_idx]
+            spill_bytes = shard_bytes_by_idx.pop(
+                spill_idx, _estimate_list_bytes(spill_items))
             spill_path, _ = _write_spill(spill_items, category)
+            shard_items_by_idx.pop(spill_idx)
+            current_mem_bytes -= spill_bytes
             spilled_by_idx[spill_idx] = spill_path
-            logger.info("Spilled shard %d/%d to %s", spill_idx + 1,
-                        shard_count, spill_path)
+            spill_count += 1
+            logger.info(
+                "Spilled shard %d/%d to %s (in-memory: %d bytes)",
+                spill_idx + 1,
+                shard_count,
+                spill_path,
+                current_mem_bytes,
+            )
+        return spill_count
 
     def _load_serial_shards() -> None:
         for shard_idx, shard in enumerate(shards):
@@ -715,6 +831,7 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
     def _reset_parallel_state() -> None:
         nonlocal current_mem_bytes
         shard_items_by_idx.clear()
+        shard_bytes_by_idx.clear()
         for spill_path in spilled_by_idx.values():
             try:
                 os.remove(spill_path)
@@ -725,89 +842,190 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
 
     def _run_parallel_shards_with_executor(executor_cls: Any,
                                            execution_label: str) -> bool:
+        run_start = time.perf_counter()
+        shard_start_elapsed: dict[int, float] = {}
+        shard_end_elapsed: dict[int, float] = {}
+        adaptive_inflight_cap = max_inflight_shards
+        spill_streak = 0
+        tail_latency_streak = 0
+        shard_elapsed_seconds: list[float] = []
+
+        def _log_parallel_shard_telemetry() -> None:
+            for shard_idx in sorted(shard_end_elapsed):
+                start_elapsed = shard_start_elapsed.get(shard_idx, 0.0)
+                end_elapsed = shard_end_elapsed[shard_idx]
+                logger.info(
+                    ("Parallel shard telemetry for %s %d/%d: start=%.4fs "
+                     "end=%.4fs elapsed=%.4fs files=%d"),
+                    category,
+                    shard_idx + 1,
+                    shard_count,
+                    start_elapsed,
+                    end_elapsed,
+                    end_elapsed - start_elapsed,
+                    len(shards[shard_idx]),
+                )
+
         try:
             with executor_cls(max_workers=min(worker_count, len(shards))) as ex:
-                future_to_idx = {
-                    ex.submit(_load_yaml_shard, shard): idx
-                    for idx, shard in enumerate(shards)
-                }
-                for future in as_completed(future_to_idx):
-                    idx = future_to_idx[future]
-                    try:
-                        items = future.result()
-                    except Exception as exc:  # pragma: no cover - defensive
-                        logger.warning(
-                            ("%s shard %d failed: %s; aborting %s execution"),
-                            execution_label.capitalize(), idx, exc,
-                            execution_label)
-                        return False
-                    logger.info("Loaded shard %d/%d (%d files)", idx + 1,
-                                shard_count, len(shards[idx]))
-                    _record_shard_items(idx, items)
+                future_to_idx: dict[Any, int] = {}
+
+                def _submit_shard(shard_idx: int) -> None:
+                    shard = shards[shard_idx]
+                    shard_start_elapsed[shard_idx] = (
+                        time.perf_counter() - run_start)
+                    future_to_idx[ex.submit(_load_yaml_shard, shard)] = shard_idx
+
+                next_idx = 0
+                initial_inflight = min(adaptive_inflight_cap, len(shards))
+                while next_idx < initial_inflight:
+                    _submit_shard(next_idx)
+                    next_idx += 1
+                logger.info(
+                    "Submitted %d/%d %s shards to %s pool (max in-flight %d)",
+                    len(future_to_idx), len(shards), category, execution_label,
+                    max_inflight_shards)
+                loaded_count = 0
+                while future_to_idx:
+                    done_futures, _ = wait(set(future_to_idx),
+                                           return_when=FIRST_COMPLETED)
+                    for future in done_futures:
+                        idx = future_to_idx.pop(future)
+                        shard_end_elapsed[idx] = time.perf_counter() - run_start
+                        try:
+                            items = future.result()
+                        except Exception as exc:  # pragma: no cover - defensive
+                            _log_parallel_shard_telemetry()
+                            logger.warning(
+                                ("%s shard %d failed: %s; aborting %s "
+                                 "execution"), execution_label.capitalize(),
+                                idx, exc, execution_label)
+                            return False
+                        logger.info("Loaded shard %d/%d (%d files)", idx + 1,
+                                    shard_count, len(shards[idx]))
+                        spill_count = _record_shard_items(idx, items)
+                        loaded_count += 1
+                        logger.info("Shard load progress for %s: %d/%d",
+                                    category, loaded_count, shard_count)
+                        if adaptive_workers_enabled:
+                            if spill_count > 0:
+                                spill_streak += 1
+                            else:
+                                spill_streak = 0
+
+                            shard_elapsed = (shard_end_elapsed[idx] -
+                                             shard_start_elapsed.get(idx, 0.0))
+                            shard_elapsed_seconds.append(shard_elapsed)
+                            if len(shard_elapsed_seconds) >= 4:
+                                sorted_elapsed = sorted(shard_elapsed_seconds)
+                                median_elapsed = sorted_elapsed[
+                                    len(sorted_elapsed) // 2]
+                                tail_threshold = max(0.2, median_elapsed * 2.5)
+                                if shard_elapsed >= tail_threshold:
+                                    tail_latency_streak += 1
+                                else:
+                                    tail_latency_streak = 0
+
+                            pressure_detected = (
+                                spill_streak >= 2 or tail_latency_streak >= 2)
+                            if adaptive_inflight_cap > 1 and pressure_detected:
+                                previous_cap = adaptive_inflight_cap
+                                adaptive_inflight_cap -= 1
+                                spill_streak = 0
+                                tail_latency_streak = 0
+                                logger.info(
+                                    ("Adaptive worker downshift for %s: "
+                                     "max in-flight %d -> %d"),
+                                    category,
+                                    previous_cap,
+                                    adaptive_inflight_cap,
+                                )
+                        while (next_idx < len(shards)
+                               and len(future_to_idx) < adaptive_inflight_cap):
+                            _submit_shard(next_idx)
+                            next_idx += 1
+                _log_parallel_shard_telemetry()
         except (OSError, RuntimeError, ValueError) as exc:
             logger.warning("Failed to initialize %s shard pool: %s",
                            execution_label, exc)
             return False
         return True
 
-    if parallel_enabled and worker_count > 1 and len(shards) > 1:
-        use_process_pool = _parse_bool_env("FI_DEBUG_USE_PROCESS_POOL", False)
-        logger.info(
-            "Loading %d %s shards with %d workers (%s pool)",
-            len(shards),
-            category,
-            worker_count,
-            "process" if use_process_pool else "thread",
-        )
-        loaded_in_parallel = False
-        if use_process_pool:
-            loaded_in_parallel = _run_parallel_shards_with_executor(
-                ProcessPoolExecutor, "process")
+    try:
+        if parallel_enabled and worker_count > 1 and len(shards) > 1:
+            use_process_pool = _parse_bool_env("FI_DEBUG_USE_PROCESS_POOL",
+                                               False)
+            logger.info(
+                "Loading %d %s shards with %d workers (%s pool)",
+                len(shards),
+                category,
+                worker_count,
+                "process" if use_process_pool else "thread",
+            )
+            loaded_in_parallel = False
+            if use_process_pool:
+                loaded_in_parallel = _run_parallel_shards_with_executor(
+                    ProcessPoolExecutor, "process")
+                if not loaded_in_parallel:
+                    _reset_parallel_state()
+                    logger.info(
+                        "Falling back to thread pool for %d %s shards",
+                        len(shards),
+                        category,
+                    )
+                    loaded_in_parallel = _run_parallel_shards_with_executor(
+                        ThreadPoolExecutor, "thread")
+            else:
+                loaded_in_parallel = _run_parallel_shards_with_executor(
+                    ThreadPoolExecutor, "thread")
+
             if not loaded_in_parallel:
                 _reset_parallel_state()
                 logger.info(
-                    "Falling back to thread pool for %d %s shards",
+                    "Falling back to serial loading for %d %s shards",
                     len(shards),
                     category,
                 )
-                loaded_in_parallel = _run_parallel_shards_with_executor(
-                    ThreadPoolExecutor, "thread")
+                _load_serial_shards()
         else:
-            loaded_in_parallel = _run_parallel_shards_with_executor(
-                ThreadPoolExecutor, "thread")
-
-        if not loaded_in_parallel:
-            _reset_parallel_state()
-            logger.info(
-                "Falling back to serial loading for %d %s shards",
-                len(shards),
-                category,
-            )
+            logger.info("Loading %d %s files serially (shard size %d)",
+                        len(paths), category, shard_size)
             _load_serial_shards()
-    else:
-        logger.info("Loading %d %s files serially (shard size %d)", len(paths),
-                    category, shard_size)
-        _load_serial_shards()
 
-    results: list[Any] = []
-    if spilled_by_idx:
-        logger.info("Merging %d spilled shards for %s", len(spilled_by_idx),
-                    category)
-    for idx in range(shard_count):
-        spill_path = spilled_by_idx.get(idx)
-        if spill_path is not None:
-            try:
-                with open(spill_path, "r") as spill_fp:
-                    items = json.load(spill_fp)
-                    results.extend(items)
-            finally:
+        results: list[Any] = []
+        if spilled_by_idx:
+            logger.info("Merging %d spilled shards for %s", len(spilled_by_idx),
+                        category)
+        merged_count = 0
+        for idx in range(shard_count):
+            spill_path = spilled_by_idx.pop(idx, None)
+            if spill_path is not None:
+                logger.info("Merging spilled shard %d/%d from %s", idx + 1,
+                            shard_count, spill_path)
                 try:
-                    os.remove(spill_path)
-                except OSError:
-                    pass
-            continue
-        results.extend(shard_items_by_idx.get(idx, []))
-    return results
+                    with open(spill_path, "r") as spill_fp:
+                        items = json.load(spill_fp)
+                        results.extend(items)
+                finally:
+                    try:
+                        os.remove(spill_path)
+                    except OSError:
+                        pass
+                merged_count += 1
+                logger.info("Shard merge progress for %s: %d/%d", category,
+                            merged_count, shard_count)
+                continue
+            results.extend(shard_items_by_idx.get(idx, []))
+            merged_count += 1
+            logger.info("Shard merge progress for %s: %d/%d", category,
+                        merged_count, shard_count)
+        return results
+    finally:
+        for spill_path in spilled_by_idx.values():
+            try:
+                os.remove(spill_path)
+            except OSError:
+                pass
 
 
 # ------------------------------------------------------------
@@ -935,10 +1153,8 @@ def create_friendly_debug_types(debug_type_dictionary,
                                 dump_files=True):
     """Create an address-indexed json dictionary. The goal is to use this for
     fast iteration over types using e.g. recursive lookups."""
-    friendly_name_sig = dict()
     logging.info("Have to create for %d addresses" %
                  (len(debug_type_dictionary)))
-    idx = 0
 
     addr_members = dict()
     for elem_addr, elem_val in debug_type_dictionary.items():
@@ -957,36 +1173,42 @@ def create_friendly_debug_types(debug_type_dictionary,
             current_members.append(elem_dict)
             addr_members[int(elem_val["scope"])] = current_members
 
-    for addr in debug_type_dictionary:
-        idx += 1
-        if idx % 2500 == 0:
-            logging.info("Idx: %d" % (idx))
-        friendly_type = extract_func_sig_friendly_type_tags(
-            addr, debug_type_dictionary)
+    # Nothing consumes this structure in-memory today; it is only persisted.
+    # Avoid large temporary maps and serialize incrementally.
+    if not dump_files:
+        return
 
-        # is this a struct?
-        # Collect elements
-        structure_elems = []
-        if is_struct(friendly_type):
-            structure_elems = addr_members.get(int(addr), [])
+    output_path = os.path.join(out_dir, "all-friendly-debug-types.json")
+    with open(output_path, "w") as f:
+        f.write("{")
+        for idx, addr in enumerate(debug_type_dictionary):
+            if idx % 2500 == 0 and idx > 0:
+                logging.info("Idx: %d" % (idx))
 
-        friendly_name_sig[addr] = {
-            "raw_debug_info": debug_type_dictionary[addr],
-            "friendly-info": {
-                "raw-types": friendly_type,
-                "string_type": convert_param_list_to_str_v2(friendly_type),
-                "is-struct": is_struct(friendly_type),
-                "struct-elems": structure_elems,
-                "is-enum": is_enumeration(friendly_type),
-                "enum-elems":
-                debug_type_dictionary[addr].get("enum_elems", []),
-            },
-        }
+            friendly_type = extract_func_sig_friendly_type_tags(
+                addr, debug_type_dictionary)
+            structure_elems = []
+            if is_struct(friendly_type):
+                structure_elems = addr_members.get(int(addr), [])
 
-    if dump_files:
-        with open(os.path.join(out_dir, "all-friendly-debug-types.json"),
-                  "w") as f:
-            json.dump(friendly_name_sig, f)
+            entry = {
+                "raw_debug_info": debug_type_dictionary[addr],
+                "friendly-info": {
+                    "raw-types": friendly_type,
+                    "string_type": convert_param_list_to_str_v2(friendly_type),
+                    "is-struct": is_struct(friendly_type),
+                    "struct-elems": structure_elems,
+                    "is-enum": is_enumeration(friendly_type),
+                    "enum-elems":
+                    debug_type_dictionary[addr].get("enum_elems", []),
+                },
+            }
+            if idx > 0:
+                f.write(",")
+            f.write(json.dumps(str(addr)))
+            f.write(":")
+            json.dump(entry, f)
+        f.write("}")
 
 
 def correlate_debugged_function_to_debug_types(all_debug_types,

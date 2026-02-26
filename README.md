@@ -51,10 +51,18 @@ variables:
 - `FI_DEBUG_SHARD_FILES` (default: `4`): number of YAML files per shard.
 - `FI_DEBUG_SPILL_MB` (default: `0`): in-memory shard spill threshold in MB.
   `0` disables spill-to-disk.
+- `FI_DEBUG_MAX_INMEM_MB` (default: `0`): hard in-memory cap for shard
+  buffering in MB. `0` disables cap-based spilling.
 - `FI_DEBUG_CORRELATE_PARALLEL` (default: `true`): enable parallel function
   type-correlation.
 - `FI_DEBUG_CORRELATE_WORKERS` (default: `min(cpu_count, 8)`): worker cap for
   type-correlation.
+- `FI_PROFILE_BACKEND` (default: `thread`): profile loading backend.
+  Supported: `thread`, `process`.
+- `FI_CALLTREE_BITMAP_MAX_NODES` (default: `20000`): skip large calltree
+  bitmap generation above this node count. `0` disables bitmap generation.
+- `FI_STAGE_WARN_SECONDS` (default: `0`): emit warning when a report stage
+  exceeds this duration in seconds. `0` disables warnings.
 
 Presets:
 
@@ -64,8 +72,12 @@ export FI_DEBUG_PARALLEL=true
 export FI_DEBUG_MAX_WORKERS=2
 export FI_DEBUG_SHARD_FILES=4
 export FI_DEBUG_SPILL_MB=0
+export FI_DEBUG_MAX_INMEM_MB=0
 export FI_DEBUG_CORRELATE_PARALLEL=true
 export FI_DEBUG_CORRELATE_WORKERS=2
+export FI_PROFILE_BACKEND=thread
+export FI_CALLTREE_BITMAP_MAX_NODES=20000
+export FI_STAGE_WARN_SECONDS=0
 ```
 
 - Large host (favor throughput)
@@ -74,8 +86,12 @@ export FI_DEBUG_PARALLEL=true
 export FI_DEBUG_MAX_WORKERS=8
 export FI_DEBUG_SHARD_FILES=8
 export FI_DEBUG_SPILL_MB=0
+export FI_DEBUG_MAX_INMEM_MB=0
 export FI_DEBUG_CORRELATE_PARALLEL=true
 export FI_DEBUG_CORRELATE_WORKERS=8
+export FI_PROFILE_BACKEND=process
+export FI_CALLTREE_BITMAP_MAX_NODES=40000
+export FI_STAGE_WARN_SECONDS=180
 ```
 
 - Low-memory CI (favor stability)
@@ -84,8 +100,12 @@ export FI_DEBUG_PARALLEL=true
 export FI_DEBUG_MAX_WORKERS=2
 export FI_DEBUG_SHARD_FILES=2
 export FI_DEBUG_SPILL_MB=128
+export FI_DEBUG_MAX_INMEM_MB=512
 export FI_DEBUG_CORRELATE_PARALLEL=false
 export FI_DEBUG_CORRELATE_WORKERS=1
+export FI_PROFILE_BACKEND=thread
+export FI_CALLTREE_BITMAP_MAX_NODES=5000
+export FI_STAGE_WARN_SECONDS=120
 ```
 
 ## Architecture

@@ -20,6 +20,7 @@ import logging
 import multiprocessing
 import os
 import random
+import resource
 import shutil
 import string
 import tempfile
@@ -57,6 +58,10 @@ PR6_PARALLEL_ANALYSIS_FLAG_ENV = "FI_PR6_PARALLEL_ANALYSIS"
 PR6_PARALLEL_ANALYSIS_WORKERS_ENV = "FI_PR6_ANALYSIS_WORKERS"
 PR6_PARALLEL_ANALYSIS_BACKEND_ENV = "FI_PR6_PARALLEL_BACKEND"
 PR6_PARALLEL_ANALYSIS_DEFAULT_BACKEND = "thread"
+CALLTREE_BITMAP_MAX_NODES_ENV = "FI_CALLTREE_BITMAP_MAX_NODES"
+CALLTREE_BITMAP_MAX_NODES_DEFAULT = 20000
+STAGE_WARN_SECONDS_ENV = "FI_STAGE_WARN_SECONDS"
+STAGE_WARN_SECONDS_DEFAULT = 0
 TABLE_ID_STRIDE = 100000
 
 
@@ -100,6 +105,85 @@ def _parse_parallel_backend() -> str:
         PR6_PARALLEL_ANALYSIS_DEFAULT_BACKEND,
     )
     return PR6_PARALLEL_ANALYSIS_DEFAULT_BACKEND
+
+
+def _parse_calltree_bitmap_max_nodes() -> int:
+    raw_value = os.environ.get(CALLTREE_BITMAP_MAX_NODES_ENV, "")
+    if not raw_value:
+        return CALLTREE_BITMAP_MAX_NODES_DEFAULT
+
+    try:
+        max_nodes = int(raw_value)
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; defaulting to %d",
+            CALLTREE_BITMAP_MAX_NODES_ENV,
+            raw_value,
+            CALLTREE_BITMAP_MAX_NODES_DEFAULT,
+        )
+        return CALLTREE_BITMAP_MAX_NODES_DEFAULT
+
+    if max_nodes < 0:
+        logger.warning(
+            "Invalid %s=%r; defaulting to %d",
+            CALLTREE_BITMAP_MAX_NODES_ENV,
+            raw_value,
+            CALLTREE_BITMAP_MAX_NODES_DEFAULT,
+        )
+        return CALLTREE_BITMAP_MAX_NODES_DEFAULT
+
+    return max_nodes
+
+
+def _parse_stage_warn_seconds() -> int:
+    raw_value = os.environ.get(STAGE_WARN_SECONDS_ENV, "")
+    if not raw_value:
+        return STAGE_WARN_SECONDS_DEFAULT
+    try:
+        warn_seconds = int(raw_value)
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; defaulting to %d",
+            STAGE_WARN_SECONDS_ENV,
+            raw_value,
+            STAGE_WARN_SECONDS_DEFAULT,
+        )
+        return STAGE_WARN_SECONDS_DEFAULT
+    if warn_seconds < 0:
+        logger.warning(
+            "Invalid %s=%r; defaulting to %d",
+            STAGE_WARN_SECONDS_ENV,
+            raw_value,
+            STAGE_WARN_SECONDS_DEFAULT,
+        )
+        return STAGE_WARN_SECONDS_DEFAULT
+    return warn_seconds
+
+
+def _get_rss_mb() -> float:
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    # Linux ru_maxrss is KiB. On macOS it is bytes.
+    if usage.ru_maxrss > 10**9:
+        return usage.ru_maxrss / (1024 * 1024)
+    return usage.ru_maxrss / 1024.0
+
+
+def _log_stage_telemetry(stage_name: str,
+                         start_time: float | None = None,
+                         warn_after_seconds: int = 0) -> None:
+    elapsed = ""
+    if start_time is not None:
+        elapsed_seconds = time.monotonic() - start_time
+        elapsed = f", elapsed={elapsed_seconds:.2f}s"
+        if warn_after_seconds > 0 and elapsed_seconds > warn_after_seconds:
+            logger.warning(
+                "Stage '%s' exceeded configured threshold (%ds): %.2fs",
+                stage_name,
+                warn_after_seconds,
+                elapsed_seconds,
+            )
+    logger.info("Stage telemetry: %s, rss_max=%.2fMB%s", stage_name,
+                _get_rss_mb(), elapsed)
 
 
 def _get_parallel_compatibility_by_name() -> dict[str, str]:
@@ -886,10 +970,63 @@ def create_fuzzer_detailed_section(
     if not colormap_file_prefix:
         colormap_file_prefix = str(random.randint(0, 99999))
     image_name = f"{colormap_file_prefix}_colormap.png"
+    image_path = os.path.join(out_dir, image_name)
 
-    color_list = html_helpers.create_horisontal_calltree_image(
-        image_name, profile, dump_files, out_dir)
-    html_string += f'<img class="colormap" src="{image_name}">'
+    callsites = profile.get_callsites()
+    callsite_count = len(callsites)
+    max_bitmap_nodes = _parse_calltree_bitmap_max_nodes()
+    color_list = []
+    should_generate_bitmap = dump_files
+    bitmap_skip_reason = ""
+    if not dump_files:
+        bitmap_skip_reason = "dump_files_disabled"
+    if max_bitmap_nodes == 0:
+        should_generate_bitmap = False
+        bitmap_skip_reason = "configured_off"
+        logger.info(
+            "Skipping calltree overview bitmap for %s because %s is set to 0",
+            profile.identifier,
+            CALLTREE_BITMAP_MAX_NODES_ENV,
+        )
+    elif callsite_count > max_bitmap_nodes:
+        should_generate_bitmap = False
+        bitmap_skip_reason = "threshold_exceeded"
+        logger.info(
+            "Skipping calltree overview bitmap for %s because calltree is too large "
+            "(callsites=%d, threshold=%d)",
+            profile.identifier,
+            callsite_count,
+            max_bitmap_nodes,
+        )
+
+    if should_generate_bitmap:
+        color_list = html_helpers.create_horisontal_calltree_image(
+            image_name, profile, dump_files, out_dir)
+
+    if dump_files and os.path.exists(image_path):
+        html_string += f'<img class="colormap" src="{image_name}">'
+    else:
+        if bitmap_skip_reason in ("configured_off", "threshold_exceeded"):
+            html_string += (
+                "<p class='no-top-margin'>Call tree overview bitmap omitted "
+                "for this fuzzer due to configured size limits.</p>")
+        elif bitmap_skip_reason == "dump_files_disabled":
+            logger.debug(
+                "Skipping calltree overview bitmap for %s because dump_files is disabled",
+                profile.identifier,
+            )
+        else:
+            html_string += (
+                "<p class='no-top-margin'>Call tree overview bitmap is "
+                "unavailable in this environment.</p>")
+            logger.info(
+                "Calltree overview bitmap not embedded for %s because file %s does not exist",
+                profile.identifier,
+                image_path,
+            )
+
+        if not color_list:
+            color_list = [cs.cov_color for cs in callsites]
 
     # At this point we want to ensure there is coverage in order to proceed.
     # If there is no code coverage then the remaining will be quite bloat
@@ -1422,6 +1559,8 @@ def create_html_report(
     """
 
     logger.info(" - Creating HTML report")
+    stage_warn_seconds = _parse_stage_warn_seconds()
+    _log_stage_telemetry("create_html_report:start")
     # Main logic
     # Keep summary writes immediate here because optional analyses may merge and
     # write summary.json directly through merge coordinator.
@@ -1442,16 +1581,25 @@ def create_html_report(
         html_body_start = '<div class="content-section">'
 
         # Create overview section
+        stage_started = time.monotonic()
         (html_overview, html_report_top,
          html_report_core) = (create_section_project_overview(
              table_of_contents, introspection_proj.proj_profile, conclusions,
              report_name))
+        _log_stage_telemetry("project_overview",
+                             stage_started,
+                             stage_warn_seconds)
 
         # Create section with overview of all fuzzers
+        stage_started = time.monotonic()
         html_report_core += create_section_fuzzers_overview(
             table_of_contents, tables, introspection_proj)
+        _log_stage_telemetry("fuzzers_overview",
+                             stage_started,
+                             stage_warn_seconds)
 
         # Create section with table of all functions in project.
+        stage_started = time.monotonic()
         (
             all_function_table,
             all_functions_json_html,
@@ -1465,8 +1613,12 @@ def create_html_report(
             introspection_proj.proj_profile.basefolder,
         )
         html_report_core += html_all_function_section
+        _log_stage_telemetry("all_functions_section",
+                             stage_started,
+                             stage_warn_seconds)
 
         # Section with details of each fuzzer.
+        stage_started = time.monotonic()
         fuzzer_table_data: Dict[str, Any] = {}
         html_report_core += create_section_fuzzer_detailed_section(
             table_of_contents,
@@ -1477,8 +1629,12 @@ def create_html_report(
             dump_files,
             out_dir,
         )
+        _log_stage_telemetry("fuzzer_detailed_section",
+                             stage_started,
+                             stage_warn_seconds)
 
         # Generate sections for all optional analyses
+        stage_started = time.monotonic()
         html_report_core += create_section_optional_analyses(
             table_of_contents,
             analyses_to_run,
@@ -1491,6 +1647,9 @@ def create_html_report(
             dump_files,
             out_dir,
         )
+        _log_stage_telemetry("optional_analyses",
+                             stage_started,
+                             stage_warn_seconds)
 
         # Create HTML showing the conclusions at the top of the report.
         html_report_top += html_helpers.create_conclusions_box(conclusions)
@@ -1522,19 +1681,32 @@ def create_html_report(
 
         # Load debug informaiton because it will be correlated to the
         # introspector functions.
+        stage_started = time.monotonic()
         introspection_proj.load_debug_report(out_dir, dump_files=dump_files)
+        _log_stage_telemetry("load_debug_report",
+                             stage_started,
+                             stage_warn_seconds)
 
         # Correlate debug info to introspector functions
+        stage_started = time.monotonic()
         analysis.correlate_introspection_functions_to_debug_info(
             all_functions_json_report,
             introspection_proj.debug_all_functions,
             introspection_proj.proj_profile.target_lang,
             introspection_proj.debug_report,
         )
+        _log_stage_telemetry("correlate_debug_info",
+                             stage_started,
+                             stage_warn_seconds)
 
+        stage_started = time.monotonic()
         all_source_files = analysis.extract_all_sources(
             introspection_proj.proj_profile.target_lang, exclude_patterns)
+        _log_stage_telemetry("extract_all_sources",
+                             stage_started,
+                             stage_warn_seconds)
 
+        stage_started = time.monotonic()
         all_test_files = analysis.extract_test_information(
             introspection_proj.debug_report,
             introspection_proj.proj_profile.target_lang,
@@ -1542,6 +1714,9 @@ def create_html_report(
             exclude_patterns=exclude_patterns,
             source_files=all_source_files,
         )
+        _log_stage_telemetry("extract_test_information",
+                             stage_started,
+                             stage_warn_seconds)
         if dump_files:
             with open(os.path.join(out_dir, constants.TEST_FILES_JSON),
                       "w") as test_file_fd:
@@ -1609,14 +1784,23 @@ def create_html_report(
                     jvm_constructor_json_report, out_dir)
 
         if dump_files:
+            stage_started = time.monotonic()
             write_content_to_html_files(html_full_doc, all_functions_json_html,
                                         fuzzer_table_data, out_dir)
+            _log_stage_telemetry("write_report_files",
+                                 stage_started,
+                                 stage_warn_seconds)
 
+            stage_started = time.monotonic()
             introspection_proj.dump_debug_report(out_dir)
+            _log_stage_telemetry("dump_debug_report",
+                                 stage_started,
+                                 stage_warn_seconds)
 
             # Double check source files have been copied
             logger.info("Verifying copied source files (%d files)",
                         len(all_source_files))
+            stage_started = time.monotonic()
             for idx, elem in enumerate(all_source_files, 1):
                 if idx % 5000 == 0:
                     logger.info("Verified %d/%d source files", idx,
@@ -1626,6 +1810,9 @@ def create_html_report(
                 if not os.path.isfile(dst):
                     os.makedirs(os.path.dirname(dst), exist_ok=True)
                     shutil.copy(elem, dst)
+            _log_stage_telemetry("verify_copied_source_files",
+                                 stage_started,
+                                 stage_warn_seconds)
 
         # Determine the source files required for the java project
         source_file_list = []
@@ -1645,3 +1832,4 @@ def create_html_report(
         # Copy source files (Only for Java/Python projects)
         utils.copy_source_files(source_file_list, introspection_proj.language,
                                 out_dir)
+        _log_stage_telemetry("create_html_report:done")

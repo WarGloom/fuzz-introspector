@@ -16,6 +16,7 @@
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -82,3 +83,87 @@ def test_get_body_script_tags_does_not_mutate_main_js_list(
     html_report.get_body_script_tags([], {})
 
     assert styling.MAIN_JS_FILES == original
+
+
+def test_parse_calltree_bitmap_max_nodes_env(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FI_CALLTREE_BITMAP_MAX_NODES", raising=False)
+    assert html_report._parse_calltree_bitmap_max_nodes() == 20000
+
+    monkeypatch.setenv("FI_CALLTREE_BITMAP_MAX_NODES", "123")
+    assert html_report._parse_calltree_bitmap_max_nodes() == 123
+
+    monkeypatch.setenv("FI_CALLTREE_BITMAP_MAX_NODES", "-1")
+    assert html_report._parse_calltree_bitmap_max_nodes() == 20000
+
+    monkeypatch.setenv("FI_CALLTREE_BITMAP_MAX_NODES", "bad")
+    assert html_report._parse_calltree_bitmap_max_nodes() == 20000
+
+
+def test_parse_stage_warn_seconds_env(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FI_STAGE_WARN_SECONDS", raising=False)
+    assert html_report._parse_stage_warn_seconds() == 0
+
+    monkeypatch.setenv("FI_STAGE_WARN_SECONDS", "60")
+    assert html_report._parse_stage_warn_seconds() == 60
+
+    monkeypatch.setenv("FI_STAGE_WARN_SECONDS", "-5")
+    assert html_report._parse_stage_warn_seconds() == 0
+
+    monkeypatch.setenv("FI_STAGE_WARN_SECONDS", "bad")
+    assert html_report._parse_stage_warn_seconds() == 0
+
+
+def test_create_fuzzer_detailed_section_skips_bitmap_for_large_calltree(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        caplog: pytest.LogCaptureFixture) -> None:
+    class DummyCalltreeAnalysis:
+
+        def __init__(self):
+            self.dump_files = False
+
+        def create_calltree(self, _profile, out_dir):
+            return os.path.join(out_dir, "calltree_view_0.html")
+
+    class DummyProfile:
+        identifier = "my/fuzzer"
+        branch_blockers = []
+
+        def get_callsites(self):
+            return [
+                SimpleNamespace(cov_color="red"),
+                SimpleNamespace(cov_color="green"),
+                SimpleNamespace(cov_color="yellow"),
+            ]
+
+    monkeypatch.setenv("FI_CALLTREE_BITMAP_MAX_NODES", "2")
+    monkeypatch.setattr(
+        "fuzz_introspector.analyses.calltree_analysis.FuzzCalltreeAnalysis",
+        DummyCalltreeAnalysis,
+    )
+    monkeypatch.setattr(
+        html_report.html_helpers,
+        "create_horisontal_calltree_image",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("bitmap generation should be skipped")),
+    )
+
+    with caplog.at_level("INFO"):
+        html = html_report.create_fuzzer_detailed_section(
+            proj_profile=SimpleNamespace(has_coverage_data=lambda: False),
+            profile=DummyProfile(),
+            table_of_contents=html_report.html_helpers.HtmlTableOfContents(),
+            tables=[],
+            profile_idx=0,
+            conclusions=[],
+            extract_conclusion=False,
+            fuzzer_table_data={},
+            dump_files=True,
+            out_dir=str(tmp_path),
+        )
+
+    assert "Call tree overview bitmap omitted" in html
+    assert '<img class="colormap"' not in html
+    assert any("Skipping calltree overview bitmap" in record.message
+               for record in caplog.records)

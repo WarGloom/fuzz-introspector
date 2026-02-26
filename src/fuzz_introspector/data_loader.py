@@ -28,6 +28,26 @@ from fuzz_introspector import utils
 from fuzz_introspector.datatypes import fuzzer_profile, bug
 
 logger = logging.getLogger(name=__name__)
+FI_PROFILE_BACKEND_ENV = "FI_PROFILE_BACKEND"
+FI_PROFILE_BACKEND_THREAD = "thread"
+FI_PROFILE_BACKEND_PROCESS = "process"
+
+
+def _get_profile_executor_backend(
+) -> tuple[type[concurrent.futures.Executor], str]:
+    """Returns configured parallel backend for profile loading."""
+    backend = os.environ.get(FI_PROFILE_BACKEND_ENV,
+                             FI_PROFILE_BACKEND_THREAD).strip().lower()
+
+    if backend == FI_PROFILE_BACKEND_PROCESS:
+        return concurrent.futures.ProcessPoolExecutor, backend
+
+    if backend and backend != FI_PROFILE_BACKEND_THREAD:
+        logger.warning("Invalid %s=%r; defaulting to %s backend",
+                       FI_PROFILE_BACKEND_ENV, backend,
+                       FI_PROFILE_BACKEND_THREAD)
+
+    return concurrent.futures.ThreadPoolExecutor, FI_PROFILE_BACKEND_THREAD
 
 
 def read_fuzzer_data_file_to_profile(
@@ -91,7 +111,7 @@ def load_all_debug_files(target_folder: str):
     debug_info_files = utils.get_all_files_in_tree_with_regex(
         target_folder, ".*debug_info$")
     for file in debug_info_files:
-        print("debug info file: %s", file)
+        logger.info("debug info file: %s", file)
     return debug_info_files
 
 
@@ -100,7 +120,7 @@ def find_all_debug_all_types_files(target_folder: str):
     debug_info_files = utils.get_all_files_in_tree_with_regex(
         target_folder, ".*debug_all_types$")
     for file in debug_info_files:
-        print("debug info file: %s", file)
+        logger.info("debug info file: %s", file)
     return debug_info_files
 
 
@@ -109,7 +129,7 @@ def find_all_debug_function_files(target_folder: str):
     debug_info_files = utils.get_all_files_in_tree_with_regex(
         target_folder, ".*debug_all_functions$")
     for file in debug_info_files:
-        print("debug info file: %s", file)
+        logger.info("debug info file: %s", file)
     return debug_info_files
 
 
@@ -140,10 +160,13 @@ def load_all_profiles(
     logger.info(" - found %d profiles to load", len(data_files))
     if parallelise:
         worker_count = max(1, min(worker_count, len(data_files)))
+        executor_cls, backend = _get_profile_executor_backend()
+        logger.info("Loading profiles in parallel using %s backend (%d workers)",
+                    backend, worker_count)
         try:
             indexed_profiles: Dict[
                 int, Optional[fuzzer_profile.FuzzerProfile]] = {}
-            with concurrent.futures.ProcessPoolExecutor(
+            with executor_cls(
                     max_workers=worker_count) as executor:
                 future_to_idx = {
                     executor.submit(_load_profile, data_file, language): idx
