@@ -15,6 +15,8 @@
 
 import json
 import os
+import shlex
+import sys
 import tempfile
 import threading
 import time
@@ -56,6 +58,10 @@ def _sample_debug_report():
         "all_global_variables": list(payload[3].values()),
         "all_types": list(payload[4].values()),
     }
+
+
+def _python_command(script: str) -> str:
+    return f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
 
 
 def test_make_path_relative():
@@ -324,6 +330,77 @@ def test_load_debug_report_native_mode_without_command_falls_back_cleanly(caplog
     assert any("FI_DEBUG_NATIVE_LOADER_CMD" in record.message and
                "falling back to python debug loader" in record.message
                for record in caplog.records)
+
+
+def test_load_debug_report_native_command_success_uses_native_payload():
+    """Native command output should bypass Python payload loading."""
+    native_report = {
+        "all_files_in_project": [{
+            "source_file": "/native/main.c",
+            "language": "c",
+        }],
+        "all_functions_in_project": [{
+            "name": "native_main",
+            "source": {
+                "source_file": "/native/main.c",
+                "source_line": "7",
+            },
+        }],
+        "all_global_variables": [],
+        "all_types": [],
+    }
+    command = _python_command(
+        f"import json; print(json.dumps({native_report!r}))")
+
+    with mock.patch.object(
+            debug_info,
+            "_load_debug_file_payload",
+            side_effect=AssertionError("python payload loader should not run")
+    ) as load_payload_mock:
+        with mock.patch.dict(
+                os.environ, {
+                    "FI_DEBUG_REPORT_PARALLEL": "0",
+                    "FI_DEBUG_NATIVE_LOADER": "rust",
+                    "FI_DEBUG_NATIVE_LOADER_CMD": command,
+                }, clear=True):
+            result = debug_info.load_debug_report(["/tmp/fake-debug-file"])
+
+    assert result == native_report
+    load_payload_mock.assert_not_called()
+
+
+def test_load_debug_report_native_command_failures_fall_back_to_python(caplog):
+    """Native command failures should fall back to Python payload loading."""
+    expected_report = _sample_debug_report()
+    scenarios = [
+        (_python_command("import sys; sys.stderr.write('fail\\n'); sys.exit(7)"),
+         "exited with 7"),
+        (_python_command("print('not-json')"), "returned invalid JSON"),
+    ]
+
+    with mock.patch.object(
+            debug_info,
+            "_load_debug_file_payload",
+            return_value=_sample_debug_payload()) as load_payload_mock:
+        for command, expected_message in scenarios:
+            caplog.clear()
+            with caplog.at_level("WARNING"):
+                with mock.patch.dict(
+                        os.environ, {
+                            "FI_DEBUG_REPORT_PARALLEL": "0",
+                            "FI_DEBUG_NATIVE_LOADER": "rust",
+                            "FI_DEBUG_NATIVE_LOADER_CMD": command,
+                        }, clear=True):
+                    result = debug_info.load_debug_report(
+                        ["/tmp/fake-debug-file"])
+
+            assert result == expected_report
+            assert any(expected_message in record.message
+                       for record in caplog.records)
+            assert any("falling back to python debug loader" in record.message
+                       for record in caplog.records)
+
+    assert load_payload_mock.call_count == len(scenarios)
 
 
 def test_load_yaml_collections_invalid_inmem_cap_env_does_not_spill():

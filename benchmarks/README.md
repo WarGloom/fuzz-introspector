@@ -138,3 +138,62 @@ benchmarks/collect_report_metrics.sh /tmp/fuzz_report.log \
 | `loaded` | Current loaded shard count. |
 | `total` | Total shard count. |
 | `delta_since_prev_sec` | Delta from previous progress event for same category. |
+
+## 3) Native loader parity flow (Rust vs Python)
+
+Build the Rust native loader:
+
+```bash
+RUST_LOADER_DIR=/path/to/native-debug-loader-rs
+cargo build --release --manifest-path "${RUST_LOADER_DIR}/Cargo.toml"
+RUST_LOADER_CMD="${RUST_LOADER_DIR}/target/release/<native-loader-binary>"
+```
+
+`FI_DEBUG_NATIVE_LOADER_CMD` should point to a command that prints the report
+JSON payload to stdout (fuzz-introspector appends debug file paths).
+
+Generate baseline and native reports in separate output folders:
+
+```bash
+REPO_ROOT="$(pwd)"
+TARGET_DIR=/path/to/introspector-artifacts
+PARITY_ROOT=/tmp/fi-native-loader-parity
+mkdir -p "${PARITY_ROOT}/python" "${PARITY_ROOT}/rust"
+
+(
+  cd "${PARITY_ROOT}/python" && \
+  python3 "${REPO_ROOT}/src/main.py" report \
+    --target-dir "${TARGET_DIR}" \
+    --language c-cpp
+)
+
+(
+  cd "${PARITY_ROOT}/rust" && \
+  FI_DEBUG_NATIVE_LOADER=rust \
+  FI_DEBUG_NATIVE_LOADER_CMD="${RUST_LOADER_CMD}" \
+  python3 "${REPO_ROOT}/src/main.py" report \
+    --target-dir "${TARGET_DIR}" \
+    --language c-cpp
+)
+```
+
+Run semantic parity check with the existing equivalence script:
+
+```bash
+python3 "${REPO_ROOT}/scripts/check_report_equivalence.py" \
+  "${PARITY_ROOT}/python" \
+  "${PARITY_ROOT}/rust" \
+  --ignore-report-date \
+  --markdown-report benchmarks/results/native_loader_equivalence.md
+```
+
+If only list ordering differs, re-run with targeted list normalization:
+
+```bash
+python3 "${REPO_ROOT}/scripts/check_report_equivalence.py" \
+  "${PARITY_ROOT}/python" \
+  "${PARITY_ROOT}/rust" \
+  --ignore-report-date \
+  --sort-lists-at all_functions.js:$ \
+  --markdown-report benchmarks/results/native_loader_equivalence.md
+```
