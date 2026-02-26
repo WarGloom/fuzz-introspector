@@ -23,7 +23,9 @@ import hashlib
 import json
 import logging
 import os
+import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -50,6 +52,17 @@ DebugPayload = tuple[
 # Match the functions section: between "## Functions defined in module" and "## Global variables"
 FUNCTIONS_SECTION_START = "## Functions defined in module"
 FUNCTIONS_SECTION_END = "## Global variables"
+
+FI_DEBUG_NATIVE_LOADER_ENV = "FI_DEBUG_NATIVE_LOADER"
+FI_DEBUG_NATIVE_LOADER_CMD_ENV = "FI_DEBUG_NATIVE_LOADER_CMD"
+FI_DEBUG_NATIVE_LOADER_PYTHON = "python"
+FI_DEBUG_NATIVE_LOADER_RUST = "rust"
+FI_DEBUG_NATIVE_LOADER_GO = "go"
+FI_DEBUG_NATIVE_LOADER_VALUES = (
+    FI_DEBUG_NATIVE_LOADER_PYTHON,
+    FI_DEBUG_NATIVE_LOADER_RUST,
+    FI_DEBUG_NATIVE_LOADER_GO,
+)
 
 
 def extract_all_compile_units(content, all_files_in_debug_info):
@@ -367,6 +380,14 @@ def load_debug_report(debug_files, base_dir=None):
     Returns:
         Dictionary containing debug information with paths resolved
     """
+    selected_native_loader = _parse_native_loader_env()
+    if selected_native_loader != FI_DEBUG_NATIVE_LOADER_PYTHON:
+        logger.info("Selected native debug loader: %s", selected_native_loader)
+        native_report = _try_native_loader_command(selected_native_loader,
+                                                   debug_files, base_dir)
+        if native_report is not None:
+            return native_report
+
     all_files_in_debug_info = dict()
     all_functions_in_debug = dict()
     all_global_variables = dict()
@@ -594,6 +615,135 @@ def load_debug_all_yaml_files(debug_all_types_files):
 # ------------------------------------------------------------
 # YAML loading and correlation helpers (streamed + sharded)
 # ------------------------------------------------------------
+
+
+def _parse_native_loader_env() -> str:
+    raw = os.environ.get(FI_DEBUG_NATIVE_LOADER_ENV,
+                         FI_DEBUG_NATIVE_LOADER_PYTHON)
+    value = raw.strip().lower() or FI_DEBUG_NATIVE_LOADER_PYTHON
+    if value not in FI_DEBUG_NATIVE_LOADER_VALUES:
+        logger.warning(
+            "Invalid %s=%r; using default %r", FI_DEBUG_NATIVE_LOADER_ENV,
+            raw, FI_DEBUG_NATIVE_LOADER_PYTHON)
+        return FI_DEBUG_NATIVE_LOADER_PYTHON
+    return value
+
+
+def _validate_native_loader_report(report_data: Any) -> dict[str, list[Any]] | None:
+    required_sections = (
+        "all_files_in_project",
+        "all_functions_in_project",
+        "all_global_variables",
+        "all_types",
+    )
+    if not isinstance(report_data, dict):
+        return None
+
+    validated_sections: dict[str, list[Any]] = {}
+    for section in required_sections:
+        section_data = report_data.get(section)
+        if not isinstance(section_data, list):
+            return None
+        validated_sections[section] = section_data
+    return validated_sections
+
+
+def _try_native_loader_command(
+        native_loader: str,
+        debug_files: list[str],
+        base_dir: str | None) -> dict[str, list[Any]] | None:
+    command_raw = os.environ.get(FI_DEBUG_NATIVE_LOADER_CMD_ENV, "").strip()
+    if not command_raw:
+        logger.info(
+            ("%s=%s selected but %s is not configured; "
+             "falling back to python debug loader"),
+            FI_DEBUG_NATIVE_LOADER_ENV,
+            native_loader,
+            FI_DEBUG_NATIVE_LOADER_CMD_ENV,
+        )
+        return None
+
+    try:
+        command = shlex.split(command_raw)
+    except ValueError as err:
+        logger.warning(
+            "Invalid %s=%r: %s; falling back to python debug loader",
+            FI_DEBUG_NATIVE_LOADER_CMD_ENV,
+            command_raw,
+            err,
+        )
+        return None
+    if not command:
+        logger.warning("Invalid %s=%r; falling back to python debug loader",
+                       FI_DEBUG_NATIVE_LOADER_CMD_ENV, command_raw)
+        return None
+
+    command.extend(debug_files)
+    if base_dir:
+        command.extend(["--base-dir", base_dir])
+
+    logger.info("Running %s native loader command", native_loader)
+    try:
+        completed = subprocess.run(command,
+                                   check=False,
+                                   capture_output=True,
+                                   text=True)
+    except OSError as err:
+        logger.warning(
+            "Failed to run %s native loader command %r: %s; "
+            "falling back to python debug loader",
+            native_loader,
+            command_raw,
+            err,
+        )
+        return None
+
+    if completed.returncode != 0:
+        stderr_output = completed.stderr.strip()
+        if stderr_output:
+            logger.warning(
+                "%s native loader command exited with %d: %s; "
+                "falling back to python debug loader",
+                native_loader,
+                completed.returncode,
+                stderr_output,
+            )
+        else:
+            logger.warning(
+                "%s native loader command exited with %d; "
+                "falling back to python debug loader",
+                native_loader,
+                completed.returncode,
+            )
+        return None
+
+    output = completed.stdout.strip()
+    if not output:
+        logger.warning(
+            "%s native loader command returned empty output; "
+            "falling back to python debug loader", native_loader)
+        return None
+
+    try:
+        report_data = json.loads(output)
+    except json.JSONDecodeError as err:
+        logger.warning(
+            "%s native loader command returned invalid JSON: %s; "
+            "falling back to python debug loader",
+            native_loader,
+            err,
+        )
+        return None
+
+    validated = _validate_native_loader_report(report_data)
+    if validated is None:
+        logger.warning(
+            "%s native loader command returned unsupported payload; "
+            "falling back to python debug loader", native_loader)
+        return None
+
+    logger.info("Using %s native loader output", native_loader)
+    return validated
 
 
 def _parse_bool_env(var_name: str, default: bool) -> bool:

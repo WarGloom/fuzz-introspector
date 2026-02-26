@@ -23,6 +23,41 @@ from unittest import mock
 from fuzz_introspector import debug_info
 
 
+def _sample_debug_payload():
+    return (
+        "sample-hash",
+        {
+            "/tmp/project/main.c": {
+                "source_file": "/tmp/project/main.c",
+                "language": "c",
+            },
+        },
+        {
+            "/tmp/project/main.c12": {
+                "name": "main",
+                "source": {
+                    "source_file": "/tmp/project/main.c",
+                    "source_line": "12",
+                },
+            },
+        },
+        {},
+        {},
+        {},
+        None,
+    )
+
+
+def _sample_debug_report():
+    payload = _sample_debug_payload()
+    return {
+        "all_files_in_project": list(payload[1].values()),
+        "all_functions_in_project": list(payload[2].values()),
+        "all_global_variables": list(payload[3].values()),
+        "all_types": list(payload[4].values()),
+    }
+
+
 def test_make_path_relative():
     """Test converting absolute paths to relative paths."""
     # Create a temporary directory structure
@@ -197,6 +232,98 @@ def test_load_debug_report_missing_file():
         # Should return the report with the non-existent file
         assert len(result["all_files_in_project"]) == 1
         assert result["all_files_in_project"][0]["source_file"] == "/nonexistent/file.c"
+
+
+def test_load_debug_report_default_native_loader_path_unchanged():
+    """Default native loader setting should keep Python report loading behavior."""
+    expected_report = _sample_debug_report()
+
+    with mock.patch.object(
+            debug_info,
+            "_load_debug_file_payload",
+            return_value=_sample_debug_payload()) as load_payload_mock:
+        with mock.patch.object(
+                debug_info,
+                "_try_native_loader_command",
+                wraps=debug_info._try_native_loader_command
+        ) as native_loader_mock:
+            with mock.patch.dict(
+                    os.environ, {
+                        "FI_DEBUG_REPORT_PARALLEL": "0",
+                    }, clear=True):
+                default_report = debug_info.load_debug_report(
+                    ["/tmp/fake-debug-file"])
+
+            with mock.patch.dict(
+                    os.environ, {
+                        "FI_DEBUG_REPORT_PARALLEL": "0",
+                        "FI_DEBUG_NATIVE_LOADER": "python",
+                    }, clear=True):
+                explicit_python_report = debug_info.load_debug_report(
+                    ["/tmp/fake-debug-file"])
+
+    assert default_report == expected_report
+    assert explicit_python_report == expected_report
+    assert load_payload_mock.call_count == 2
+    native_loader_mock.assert_not_called()
+
+
+def test_load_debug_report_invalid_native_loader_falls_back_with_warning(caplog):
+    """Invalid native loader value should warn and keep Python loading path."""
+    expected_report = _sample_debug_report()
+
+    with mock.patch.object(
+            debug_info,
+            "_load_debug_file_payload",
+            return_value=_sample_debug_payload()) as load_payload_mock:
+        with mock.patch.object(debug_info,
+                               "_try_native_loader_command") as native_loader_mock:
+            with caplog.at_level("WARNING"):
+                with mock.patch.dict(
+                        os.environ, {
+                            "FI_DEBUG_REPORT_PARALLEL": "0",
+                            "FI_DEBUG_NATIVE_LOADER": "invalid-loader",
+                        }, clear=True):
+                    result = debug_info.load_debug_report(
+                        ["/tmp/fake-debug-file"])
+
+    assert result == expected_report
+    load_payload_mock.assert_called_once()
+    native_loader_mock.assert_not_called()
+    assert any("Invalid FI_DEBUG_NATIVE_LOADER" in record.message
+               for record in caplog.records)
+
+
+def test_load_debug_report_native_mode_without_command_falls_back_cleanly(caplog):
+    """Native mode without configured command should safely fall back to Python."""
+    expected_report = _sample_debug_report()
+
+    with mock.patch.object(
+            debug_info,
+            "_load_debug_file_payload",
+            return_value=_sample_debug_payload()) as load_payload_mock:
+        with mock.patch.object(
+                debug_info,
+                "_try_native_loader_command",
+                wraps=debug_info._try_native_loader_command
+        ) as native_loader_mock:
+            with caplog.at_level("INFO"):
+                with mock.patch.dict(
+                        os.environ, {
+                            "FI_DEBUG_REPORT_PARALLEL": "0",
+                            "FI_DEBUG_NATIVE_LOADER": "rust",
+                        }, clear=True):
+                    result = debug_info.load_debug_report(
+                        ["/tmp/fake-debug-file"])
+
+    assert result == expected_report
+    load_payload_mock.assert_called_once()
+    native_loader_mock.assert_called_once()
+    assert any("Selected native debug loader: rust" in record.message
+               for record in caplog.records)
+    assert any("FI_DEBUG_NATIVE_LOADER_CMD" in record.message and
+               "falling back to python debug loader" in record.message
+               for record in caplog.records)
 
 
 def test_load_yaml_collections_invalid_inmem_cap_env_does_not_spill():
