@@ -170,29 +170,26 @@ class MergedProjectProfile:
 
         # Accumulate run-time coverage mapping
         self.runtime_coverage = code_coverage.CoverageProfile()
+        runtime_covmap = self.runtime_coverage.covmap
         for profile in profiles:
             if profile.coverage is None:
                 continue
-            for func_name in profile.coverage.covmap:
-                if func_name not in self.runtime_coverage.covmap:
-                    self.runtime_coverage.covmap[
-                        func_name] = profile.coverage.covmap[func_name]
+            for func_name, profile_cov_entries in profile.coverage.covmap.items(
+            ):
+                existing_entries = runtime_covmap.get(func_name)
+                if existing_entries is None:
+                    runtime_covmap[func_name] = profile_cov_entries
                 else:
                     # Merge by picking highest line numbers. Here we can assume they coverage
                     # maps have the same number of elements with the same line numbers but
                     # different hit counts.
                     new_line_counts = list()
-                    for idx1 in range(
-                            len(self.runtime_coverage.covmap[func_name])):
-                        try:
-                            ln1, ht1 = self.runtime_coverage.covmap[func_name][
-                                idx1]
-                            ln2, ht2 = profile.coverage.covmap[func_name][idx1]
-                        except Exception:
-                            ln1, ht1 = self.runtime_coverage.covmap[func_name][
-                                idx1]
-                            ln2, ht2 = self.runtime_coverage.covmap[func_name][
-                                idx1]
+                    profile_entries_len = len(profile_cov_entries)
+                    for idx1, (ln1, ht1) in enumerate(existing_entries):
+                        if idx1 < profile_entries_len:
+                            ln2, ht2 = profile_cov_entries[idx1]
+                        else:
+                            ln2, ht2 = ln1, ht1
                         # It may be that line numbers are not the same for the same function
                         # name across different fuzzers.
                         # This *could* actually happen, and will often (almost always) happen for
@@ -204,7 +201,7 @@ class MergedProjectProfile:
                                 f"{func_name}:{ln1}:{ln2}, ignoring")
                             continue
                         new_line_counts.append((ln1, max(ht1, ht2)))
-                    self.runtime_coverage.covmap[func_name] = new_line_counts
+                    runtime_covmap[func_name] = new_line_counts
             # TODO (navidem): will need to merge branch coverages (branch_cov_map) if we need to
             # identify blockers based on all fuzz targets coverage
         self._set_basefolder()
