@@ -712,39 +712,77 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                         shard_count, len(shard))
             _record_shard_items(shard_idx, _load_yaml_shard(shard))
 
-    if parallel_enabled and worker_count > 1 and len(shards) > 1:
-        logger.info("Loading %d %s shards with %d workers", len(shards),
-                    category, worker_count)
-        fallback_to_serial = False
-        with ThreadPoolExecutor(
-                max_workers=min(worker_count, len(shards))) as ex:
-            future_to_idx = {
-                ex.submit(_load_yaml_shard, shard): idx
-                for idx, shard in enumerate(shards)
-            }
-            for future in as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                try:
-                    items = future.result()
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.warning(
-                        "Parallel shard %d failed: %s; falling back serial",
-                        idx, exc)
-                    fallback_to_serial = True
-                    break
-                else:
+    def _reset_parallel_state() -> None:
+        nonlocal current_mem_bytes
+        shard_items_by_idx.clear()
+        for spill_path in spilled_by_idx.values():
+            try:
+                os.remove(spill_path)
+            except OSError:
+                pass
+        spilled_by_idx.clear()
+        current_mem_bytes = 0
+
+    def _run_parallel_shards_with_executor(executor_cls: Any,
+                                           execution_label: str) -> bool:
+        try:
+            with executor_cls(max_workers=min(worker_count, len(shards))) as ex:
+                future_to_idx = {
+                    ex.submit(_load_yaml_shard, shard): idx
+                    for idx, shard in enumerate(shards)
+                }
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        items = future.result()
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.warning(
+                            ("%s shard %d failed: %s; aborting %s execution"),
+                            execution_label.capitalize(), idx, exc,
+                            execution_label)
+                        return False
                     logger.info("Loaded shard %d/%d (%d files)", idx + 1,
                                 shard_count, len(shards[idx]))
                     _record_shard_items(idx, items)
-        if fallback_to_serial:
-            shard_items_by_idx.clear()
-            for spill_path in spilled_by_idx.values():
-                try:
-                    os.remove(spill_path)
-                except OSError:
-                    pass
-            spilled_by_idx.clear()
-            current_mem_bytes = 0
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.warning("Failed to initialize %s shard pool: %s",
+                           execution_label, exc)
+            return False
+        return True
+
+    if parallel_enabled and worker_count > 1 and len(shards) > 1:
+        use_process_pool = _parse_bool_env("FI_DEBUG_USE_PROCESS_POOL", True)
+        logger.info(
+            "Loading %d %s shards with %d workers (%s pool)",
+            len(shards),
+            category,
+            worker_count,
+            "process" if use_process_pool else "thread",
+        )
+        loaded_in_parallel = False
+        if use_process_pool:
+            loaded_in_parallel = _run_parallel_shards_with_executor(
+                ProcessPoolExecutor, "process")
+            if not loaded_in_parallel:
+                _reset_parallel_state()
+                logger.info(
+                    "Falling back to thread pool for %d %s shards",
+                    len(shards),
+                    category,
+                )
+                loaded_in_parallel = _run_parallel_shards_with_executor(
+                    ThreadPoolExecutor, "thread")
+        else:
+            loaded_in_parallel = _run_parallel_shards_with_executor(
+                ThreadPoolExecutor, "thread")
+
+        if not loaded_in_parallel:
+            _reset_parallel_state()
+            logger.info(
+                "Falling back to serial loading for %d %s shards",
+                len(shards),
+                category,
+            )
             _load_serial_shards()
     else:
         logger.info("Loading %d %s files serially (shard size %d)", len(paths),
