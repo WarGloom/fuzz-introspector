@@ -151,6 +151,11 @@ def test_load_debug_all_yaml_files_parallel_executor_failure_falls_back(
     def _fake_as_completed(futures):
         return list(futures)
 
+    def _fake_wait(futures, timeout=None, return_when=None):
+        del timeout
+        del return_when
+        return set(futures), set()
+
     with tempfile.TemporaryDirectory() as tmpdir:
         files = [
             _write_yaml(tmpdir, "f0.yaml", [{
@@ -166,8 +171,10 @@ def test_load_debug_all_yaml_files_parallel_executor_failure_falls_back(
         monkeypatch.setenv("FI_DEBUG_PARALLEL", "1")
         monkeypatch.setenv("FI_DEBUG_MAX_WORKERS", "2")
         monkeypatch.setenv("FI_DEBUG_SHARD_FILES", "1")
+        monkeypatch.setenv("FI_DEBUG_USE_PROCESS_POOL", "0")
         monkeypatch.setattr(debug_info, "ThreadPoolExecutor", _Executor)
         monkeypatch.setattr(debug_info, "as_completed", _fake_as_completed)
+        monkeypatch.setattr(debug_info, "wait", _fake_wait)
         items = debug_info.load_debug_all_yaml_files(files)
 
     assert items == [{"idx": 0}, {"idx": 1}, {"idx": 2}]

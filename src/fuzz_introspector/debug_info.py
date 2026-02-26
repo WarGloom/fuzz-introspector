@@ -750,6 +750,37 @@ def _estimate_list_bytes(items: list[Any]) -> int:
     return sys.getsizeof(items) + (avg_item_bytes * len(items))
 
 
+def _get_process_rss_mb() -> float | None:
+    try:
+        with open("/proc/self/statm", "r", encoding="utf-8") as statm_file:
+            rss_pages = int(statm_file.read().split()[1])
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        return rss_pages * page_size / (1024 * 1024)
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _select_debug_parallel_backend(category: str, shard_count: int) -> str:
+    legacy_backend_raw = os.environ.get("FI_DEBUG_USE_PROCESS_POOL", "")
+    if legacy_backend_raw:
+        legacy_process = _parse_bool_env("FI_DEBUG_USE_PROCESS_POOL", False)
+        return "process" if legacy_process else "thread"
+
+    configured_backend = (os.environ.get("FI_DEBUG_PARALLEL_BACKEND",
+                                         "auto").strip().lower() or "auto")
+    if configured_backend not in ("auto", "thread", "process"):
+        logger.warning(
+            "Invalid FI_DEBUG_PARALLEL_BACKEND=%r; using default 'auto'",
+            configured_backend)
+        configured_backend = "auto"
+
+    if configured_backend != "auto":
+        return configured_backend
+    if category == "debug-info" and shard_count > 1:
+        return "process"
+    return "thread"
+
+
 def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
     try:
         yaml.SafeLoader = yaml.CSafeLoader  # type: ignore[assignment, misc]
@@ -767,10 +798,29 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
     shard_size = _parse_int_env("FI_DEBUG_SHARD_FILES", 4, 1)
     spill_mb = _parse_int_env("FI_DEBUG_SPILL_MB", 0, 0)
     max_inmem_mb = _parse_int_env("FI_DEBUG_MAX_INMEM_MB", 0, 0)
+    rss_soft_limit_mb = _parse_int_env("FI_DEBUG_RSS_SOFT_LIMIT_MB", 0, 0)
+    stall_warn_seconds = _parse_int_env("FI_DEBUG_SHARD_STALL_WARN_SEC", 180,
+                                        0)
     shards = _build_yaml_shards(list(paths), shard_size)
     shard_count = len(shards)
+    selected_backend = _select_debug_parallel_backend(category, shard_count)
+    process_workers_default = min(os.cpu_count() or 1, 4)
+    process_worker_count = _parse_int_env("FI_DEBUG_PROCESS_WORKERS",
+                                          process_workers_default, 1)
+    executor_worker_count = worker_count
+    if selected_backend == "process":
+        executor_worker_count = min(process_worker_count, worker_count)
+
+    raw_max_inflight = os.environ.get("FI_DEBUG_MAX_INFLIGHT_SHARDS", "").strip()
+    if raw_max_inflight:
+        max_inflight_default = shard_count
+    elif category == "debug-info":
+        max_inflight_default = min(max(1, executor_worker_count), 2,
+                                   shard_count)
+    else:
+        max_inflight_default = shard_count
     max_inflight_shards = _parse_int_env("FI_DEBUG_MAX_INFLIGHT_SHARDS",
-                                         shard_count, 1, shard_count)
+                                         max_inflight_default, 1, shard_count)
     adaptive_workers_enabled = _parse_bool_env("FI_DEBUG_ADAPTIVE_WORKERS",
                                                False)
     spill_policy = os.environ.get("FI_DEBUG_SPILL_POLICY",
@@ -847,7 +897,8 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
         current_mem_bytes = 0
 
     def _run_parallel_shards_with_executor(executor_cls: Any,
-                                           execution_label: str) -> bool:
+                                           execution_label: str,
+                                           max_workers: int) -> bool:
         run_start = time.perf_counter()
         shard_start_elapsed: dict[int, float] = {}
         shard_end_elapsed: dict[int, float] = {}
@@ -855,6 +906,9 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
         spill_streak = 0
         tail_latency_streak = 0
         shard_elapsed_seconds: list[float] = []
+        rss_relief_streak = 0
+        last_progress = run_start
+        next_stall_warn = run_start + stall_warn_seconds
 
         def _log_parallel_shard_telemetry() -> None:
             for shard_idx in sorted(shard_end_elapsed):
@@ -873,8 +927,7 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                 )
 
         try:
-            with executor_cls(
-                    max_workers=min(worker_count, len(shards))) as ex:
+            with executor_cls(max_workers=min(max_workers, len(shards))) as ex:
                 future_to_idx: dict[Any, int] = {}
 
                 def _submit_shard(shard_idx: int) -> None:
@@ -896,7 +949,19 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                 loaded_count = 0
                 while future_to_idx:
                     done_futures, _ = wait(set(future_to_idx),
+                                           timeout=1.0,
                                            return_when=FIRST_COMPLETED)
+                    if not done_futures:
+                        if stall_warn_seconds > 0:
+                            now = time.perf_counter()
+                            if now >= next_stall_warn:
+                                logger.warning(
+                                    ("No shard completion for %s in %.1fs "
+                                     "(progress: %d/%d, in-flight: %d)"),
+                                    category, now - last_progress, loaded_count,
+                                    shard_count, len(future_to_idx))
+                                next_stall_warn = now + stall_warn_seconds
+                        continue
                     for future in done_futures:
                         idx = future_to_idx.pop(future)
                         shard_end_elapsed[idx] = time.perf_counter(
@@ -916,6 +981,48 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                         loaded_count += 1
                         logger.info("Shard load progress for %s: %d/%d",
                                     category, loaded_count, shard_count)
+                        last_progress = time.perf_counter()
+                        if stall_warn_seconds > 0:
+                            next_stall_warn = last_progress + stall_warn_seconds
+
+                        if rss_soft_limit_mb > 0:
+                            rss_mb = _get_process_rss_mb()
+                            if rss_mb is not None:
+                                if rss_mb > rss_soft_limit_mb:
+                                    rss_relief_streak = 0
+                                    previous_cap = adaptive_inflight_cap
+                                    if rss_mb >= rss_soft_limit_mb * 1.10:
+                                        adaptive_inflight_cap = 1
+                                    else:
+                                        adaptive_inflight_cap = min(
+                                            adaptive_inflight_cap, 2)
+                                    if adaptive_inflight_cap < previous_cap:
+                                        logger.info(
+                                            ("Memory pressure downshift for %s: "
+                                             "rss=%.2fMB limit=%dMB "
+                                             "max in-flight %d -> %d"),
+                                            category, rss_mb,
+                                            rss_soft_limit_mb, previous_cap,
+                                            adaptive_inflight_cap)
+                                elif (rss_mb <= rss_soft_limit_mb * 0.85
+                                      and adaptive_inflight_cap <
+                                      max_inflight_shards):
+                                    rss_relief_streak += 1
+                                    if rss_relief_streak >= 2:
+                                        previous_cap = adaptive_inflight_cap
+                                        adaptive_inflight_cap = min(
+                                            max_inflight_shards,
+                                            adaptive_inflight_cap + 1)
+                                        rss_relief_streak = 0
+                                        logger.info(
+                                            ("Memory pressure recovery for %s: "
+                                             "rss=%.2fMB limit=%dMB "
+                                             "max in-flight %d -> %d"),
+                                            category, rss_mb,
+                                            rss_soft_limit_mb, previous_cap,
+                                            adaptive_inflight_cap)
+                                else:
+                                    rss_relief_streak = 0
                         if adaptive_workers_enabled:
                             if spill_count > 0:
                                 spill_streak += 1
@@ -962,19 +1069,22 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
 
     try:
         if parallel_enabled and worker_count > 1 and len(shards) > 1:
-            use_process_pool = _parse_bool_env("FI_DEBUG_USE_PROCESS_POOL",
-                                               False)
             logger.info(
-                "Loading %d %s shards with %d workers (%s pool)",
+                ("Loading %d %s shards with %d workers "
+                 "(backend=%s, pool=%s, max in-flight=%d, "
+                 "rss soft limit=%dMB)"),
                 len(shards),
                 category,
-                worker_count,
-                "process" if use_process_pool else "thread",
+                executor_worker_count,
+                selected_backend,
+                "process" if selected_backend == "process" else "thread",
+                max_inflight_shards,
+                rss_soft_limit_mb,
             )
             loaded_in_parallel = False
-            if use_process_pool:
+            if selected_backend == "process":
                 loaded_in_parallel = _run_parallel_shards_with_executor(
-                    ProcessPoolExecutor, "process")
+                    ProcessPoolExecutor, "process", executor_worker_count)
                 if not loaded_in_parallel:
                     _reset_parallel_state()
                     logger.info(
@@ -983,10 +1093,10 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                         category,
                     )
                     loaded_in_parallel = _run_parallel_shards_with_executor(
-                        ThreadPoolExecutor, "thread")
+                        ThreadPoolExecutor, "thread", worker_count)
             else:
                 loaded_in_parallel = _run_parallel_shards_with_executor(
-                    ThreadPoolExecutor, "thread")
+                    ThreadPoolExecutor, "thread", executor_worker_count)
 
             if not loaded_in_parallel:
                 _reset_parallel_state()

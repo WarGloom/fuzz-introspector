@@ -635,3 +635,156 @@ def test_load_yaml_collections_adaptive_workers_deterministic_output():
         assert ids_run_two == expected_ids
         assert downshifts_run_one > 0
         assert downshifts_run_one == downshifts_run_two
+
+
+def test_load_yaml_collections_auto_backend_prefers_process_with_fallback(
+        caplog):
+    """Auto backend should attempt process pool for debug-info shards."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        paths = []
+        for idx in range(3):
+            path = os.path.join(tmpdir, f"shard-{idx}.yaml")
+            with open(path, "w") as f:
+                f.write(json.dumps([{"id": f"item-{idx}"}]))
+            paths.append(path)
+
+        class _FailingProcessPool:
+
+            def __init__(self, *args, **kwargs):
+                del args
+                del kwargs
+                raise RuntimeError("process pool unavailable")
+
+        with mock.patch.dict(
+                os.environ, {
+                    "FI_DEBUG_PARALLEL": "1",
+                    "FI_DEBUG_PARALLEL_BACKEND": "auto",
+                    "FI_DEBUG_MAX_WORKERS": "2",
+                    "FI_DEBUG_SHARD_FILES": "1",
+                }, clear=False):
+            with mock.patch.object(debug_info, "ProcessPoolExecutor",
+                                   _FailingProcessPool):
+                with caplog.at_level("INFO"):
+                    result = debug_info._load_yaml_collections(
+                        paths, "debug-info")
+
+    assert [item["id"] for item in result] == ["item-0", "item-1", "item-2"]
+    assert any("Falling back to thread pool" in record.message
+               for record in caplog.records)
+
+
+def test_load_yaml_collections_legacy_process_pool_env_overrides_backend():
+    """Legacy FI_DEBUG_USE_PROCESS_POOL should still force thread mode."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        paths = []
+        for idx in range(2):
+            path = os.path.join(tmpdir, f"shard-{idx}.yaml")
+            with open(path, "w") as f:
+                f.write(json.dumps([{"id": f"item-{idx}"}]))
+            paths.append(path)
+
+        class _MustNotConstruct:
+
+            def __init__(self, *args, **kwargs):
+                del args
+                del kwargs
+                raise AssertionError("process pool should not be used")
+
+        with mock.patch.dict(
+                os.environ, {
+                    "FI_DEBUG_PARALLEL": "1",
+                    "FI_DEBUG_PARALLEL_BACKEND": "process",
+                    "FI_DEBUG_USE_PROCESS_POOL": "0",
+                    "FI_DEBUG_MAX_WORKERS": "2",
+                    "FI_DEBUG_SHARD_FILES": "1",
+                }, clear=False):
+            with mock.patch.object(debug_info, "ProcessPoolExecutor",
+                                   _MustNotConstruct):
+                result = debug_info._load_yaml_collections(paths, "debug-info")
+
+    assert [item["id"] for item in result] == ["item-0", "item-1"]
+
+
+def test_load_yaml_collections_rss_soft_limit_downshifts_inflight():
+    """RSS soft limit should reduce in-flight shard count under pressure."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        paths = []
+        for idx in range(4):
+            path = os.path.join(tmpdir, f"shard-{idx}.yaml")
+            with open(path, "w") as f:
+                f.write(json.dumps([{"id": f"item-{idx}"}]))
+            paths.append(path)
+
+        def _slow_load_yaml_shard(shard):
+            time.sleep(0.02)
+            idx = int(os.path.basename(shard[0]).split("-")[1].split(".")[0])
+            return [{"id": f"item-{idx}"}]
+
+        with mock.patch.dict(
+                os.environ, {
+                    "FI_DEBUG_PARALLEL": "1",
+                    "FI_DEBUG_PARALLEL_BACKEND": "thread",
+                    "FI_DEBUG_MAX_WORKERS": "4",
+                    "FI_DEBUG_SHARD_FILES": "1",
+                    "FI_DEBUG_MAX_INFLIGHT_SHARDS": "4",
+                    "FI_DEBUG_RSS_SOFT_LIMIT_MB": "1",
+                }, clear=False):
+            with mock.patch.object(debug_info,
+                                   "_load_yaml_shard",
+                                   side_effect=_slow_load_yaml_shard):
+                with mock.patch.object(debug_info,
+                                       "_get_process_rss_mb",
+                                       return_value=8.0):
+                    with mock.patch.object(debug_info.logger,
+                                           "info",
+                                           wraps=debug_info.logger.info) as info_mock:
+                        result = debug_info._load_yaml_collections(
+                            paths, "debug-info")
+
+    assert [item["id"] for item in result] == [f"item-{idx}" for idx in range(4)]
+    assert any(call.args and "Memory pressure downshift" in call.args[0]
+               for call in info_mock.call_args_list)
+
+
+def test_load_yaml_collections_rss_soft_limit_recovers_inflight_after_relief():
+    """Transient RSS spikes should not permanently clamp in-flight capacity."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        paths = []
+        for idx in range(6):
+            path = os.path.join(tmpdir, f"shard-{idx}.yaml")
+            with open(path, "w") as f:
+                f.write(json.dumps([{"id": f"item-{idx}"}]))
+            paths.append(path)
+
+        def _slow_load_yaml_shard(shard):
+            time.sleep(0.01)
+            idx = int(os.path.basename(shard[0]).split("-")[1].split(".")[0])
+            return [{"id": f"item-{idx}"}]
+
+        rss_samples = [8.0, 0.5, 0.5, 0.5, 0.5, 0.5]
+        with mock.patch.dict(
+                os.environ, {
+                    "FI_DEBUG_PARALLEL": "1",
+                    "FI_DEBUG_PARALLEL_BACKEND": "thread",
+                    "FI_DEBUG_MAX_WORKERS": "4",
+                    "FI_DEBUG_SHARD_FILES": "1",
+                    "FI_DEBUG_MAX_INFLIGHT_SHARDS": "4",
+                    "FI_DEBUG_RSS_SOFT_LIMIT_MB": "1",
+                }, clear=False):
+            with mock.patch.object(debug_info,
+                                   "_load_yaml_shard",
+                                   side_effect=_slow_load_yaml_shard):
+                with mock.patch.object(debug_info,
+                                       "_get_process_rss_mb",
+                                       side_effect=rss_samples):
+                    with mock.patch.object(debug_info.logger,
+                                           "info",
+                                           wraps=debug_info.logger.info) as info_mock:
+                        result = debug_info._load_yaml_collections(
+                            paths, "debug-info")
+
+    assert [item["id"] for item in result] == [f"item-{idx}" for idx in range(6)]
+    assert any(call.args and "Memory pressure downshift" in call.args[0]
+               for call in info_mock.call_args_list)
+    assert any(call.args and "Memory pressure recovery" in call.args[0]
+               for call in info_mock.call_args_list)
