@@ -14,15 +14,31 @@
 """Performs analysis on the profiles output from fuzz introspector LLVM pass"""
 
 import abc
+import bisect
+import concurrent.futures
 import logging
-import multiprocessing
 import os
+import re
 import shutil
+import time
 
-from typing import (Dict, List, Type, Set, Union)
+from typing import Any, Dict, List, Optional, Type, Set, Union
 
-from fuzz_introspector import (cfg_load, code_coverage, constants, data_loader,
-                               debug_info, html_helpers, json_report, utils)
+try:
+    import resource
+except ImportError:  # pragma: no cover
+    resource = None
+
+from fuzz_introspector import (
+    cfg_load,
+    code_coverage,
+    constants,
+    data_loader,
+    debug_info,
+    html_helpers,
+    json_report,
+    utils,
+)
 
 from fuzz_introspector.datatypes import (
     project_profile,
@@ -32,9 +48,225 @@ from fuzz_introspector.datatypes import (
 from fuzz_introspector.exceptions import DataLoaderError
 
 logger = logging.getLogger(name=__name__)
+FI_PROFILE_WORKERS_ENV = "FI_PROFILE_WORKERS"
+FI_PROFILE_WORKERS_DEFAULT_CAP = 0
+FI_DEBUG_STAGE_RSS_ENV = "FI_DEBUG_STAGE_RSS"
+FI_DEBUG_PERF_WARN_ENV = "FI_DEBUG_PERF_WARN"
+FI_STAGE_WARN_SECONDS_ENV = "FI_STAGE_WARN_SECONDS"
+FI_STAGE_WARN_SECONDS_DEFAULT = 0
+_BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
+_BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
 
 
-class IntrospectionProject():
+def _parse_profile_worker_count() -> int:
+    """Returns worker count for profile accumulation."""
+    cpu_count = os.cpu_count() or 1
+    raw_worker_count = os.environ.get(FI_PROFILE_WORKERS_ENV, "")
+    if not raw_worker_count:
+        if FI_PROFILE_WORKERS_DEFAULT_CAP > 0:
+            return max(1, min(cpu_count, FI_PROFILE_WORKERS_DEFAULT_CAP))
+        return cpu_count
+
+    try:
+        worker_count = int(raw_worker_count)
+    except ValueError:
+        logger.warning("Invalid %s=%r; defaulting to cpu count",
+                       FI_PROFILE_WORKERS_ENV, raw_worker_count)
+        return cpu_count
+
+    if worker_count < 1:
+        logger.warning("Invalid %s=%r; defaulting to cpu count",
+                       FI_PROFILE_WORKERS_ENV, raw_worker_count)
+        return cpu_count
+
+    return min(worker_count, cpu_count)
+
+
+def _parse_bool_env(env_name: str, default: bool) -> bool:
+    raw_value = os.environ.get(env_name, "").strip().lower()
+    if not raw_value:
+        return default
+    if raw_value in _BOOL_TRUE_VALUES:
+        return True
+    if raw_value in _BOOL_FALSE_VALUES:
+        return False
+    logger.warning("Invalid %s=%r; defaulting to %s", env_name, raw_value,
+                   default)
+    return default
+
+
+def _parse_stage_warn_seconds() -> int:
+    raw_value = os.environ.get(FI_STAGE_WARN_SECONDS_ENV, "")
+    if not raw_value:
+        return FI_STAGE_WARN_SECONDS_DEFAULT
+    try:
+        warn_seconds = int(raw_value)
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; defaulting to %d",
+            FI_STAGE_WARN_SECONDS_ENV,
+            raw_value,
+            FI_STAGE_WARN_SECONDS_DEFAULT,
+        )
+        return FI_STAGE_WARN_SECONDS_DEFAULT
+    if warn_seconds < 0:
+        logger.warning(
+            "Invalid %s=%r; defaulting to %d",
+            FI_STAGE_WARN_SECONDS_ENV,
+            raw_value,
+            FI_STAGE_WARN_SECONDS_DEFAULT,
+        )
+        return FI_STAGE_WARN_SECONDS_DEFAULT
+    return warn_seconds
+
+
+def _get_stage_rss_mb() -> float | None:
+    """Best-effort snapshot of process RSS in MiB."""
+    try:
+        with open("/proc/self/statm", "r", encoding="utf-8") as statm_file:
+            rss_pages = int(statm_file.read().split()[1])
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        return rss_pages * page_size / (1024 * 1024)
+    except (OSError, ValueError, IndexError):
+        pass
+
+    if resource is None:
+        return None
+
+    try:
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        if usage.ru_maxrss > 10**9:
+            return usage.ru_maxrss / (1024 * 1024)
+        return usage.ru_maxrss / 1024.0
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _get_debug_stage_tuning_hint(stage_name: str) -> str:
+    stage_hints = {
+        "debug_report":
+        "FI_DEBUG_REPORT_PARALLEL and FI_DEBUG_REPORT_WORKERS",
+        "debug_types_yaml": ("FI_DEBUG_MAX_WORKERS, FI_DEBUG_SHARD_FILES, "
+                             "FI_DEBUG_SPILL_MB, and FI_DEBUG_MAX_INMEM_MB"),
+        "debug_functions_yaml": ("FI_DEBUG_MAX_WORKERS, FI_DEBUG_SHARD_FILES, "
+                                 "FI_DEBUG_SPILL_MB, and FI_DEBUG_MAX_INMEM_MB"),
+        "type_correlation":
+        "FI_DEBUG_CORRELATE_PARALLEL and FI_DEBUG_CORRELATE_WORKERS",
+    }
+    return stage_hints.get(stage_name, "debug loader worker and shard knobs")
+
+
+def _log_debug_load_stage(
+    stage_name: str,
+    elapsed_seconds: float,
+    metrics: dict[str, int],
+    include_rss: bool,
+    perf_warn_enabled: bool,
+    warn_after_seconds: int,
+) -> None:
+    stage_fields: list[str] = [f"stage={stage_name}", f"elapsed={elapsed_seconds:.3f}s"]
+    for metric_name, metric_value in metrics.items():
+        stage_fields.append(f"{metric_name}={metric_value}")
+
+    if include_rss:
+        rss_mb = _get_stage_rss_mb()
+        if rss_mb is None:
+            stage_fields.append("rss_mb=n/a")
+        else:
+            stage_fields.append(f"rss_mb={rss_mb:.2f}")
+
+    logger.info("[debug-load] %s", " ".join(stage_fields))
+
+    if perf_warn_enabled and warn_after_seconds > 0 and elapsed_seconds > warn_after_seconds:
+        logger.warning(
+            ("[debug-load] stage=%s exceeded threshold=%ds with elapsed=%.3fs. "
+             "Tune %s."),
+            stage_name,
+            warn_after_seconds,
+            elapsed_seconds,
+            _get_debug_stage_tuning_hint(stage_name),
+        )
+
+
+def _accummulate_single_profile(
+    profile_index: int,
+    profile_payload: Dict[str, Any],
+    base_folder: str,
+) -> tuple[int, Dict[str, Any]]:
+    """Worker entrypoint for profile accumulation."""
+    profile = fuzzer_profile.FuzzerProfile.from_worker_payload(profile_payload)
+    profile.accummulate_profile(base_folder, None, None, None)
+    return profile_index, profile.to_worker_payload()
+
+
+def _accummulate_profiles(
+    profiles: List[fuzzer_profile.FuzzerProfile],
+    base_folder: str,
+    parallelise: bool,
+) -> List[fuzzer_profile.FuzzerProfile]:
+    """Accumulate profile metadata with deterministic output ordering."""
+    if not parallelise or len(profiles) <= 1:
+        logger.info("Accummulating profiles serially")
+        for profile in profiles:
+            profile.accummulate_profile(base_folder, None, None, None)
+        return profiles
+
+    worker_count = min(_parse_profile_worker_count(), len(profiles))
+    if worker_count <= 1:
+        logger.info("Accummulating profiles serially")
+        for profile in profiles:
+            profile.accummulate_profile(base_folder, None, None, None)
+        return profiles
+
+    logger.info(
+        "Accummulating profiles using ProcessPoolExecutor (%d workers)",
+        worker_count)
+    indexed_profiles: List[Optional[fuzzer_profile.FuzzerProfile]] = [
+        None for _ in profiles
+    ]
+    try:
+        with concurrent.futures.ProcessPoolExecutor(
+                max_workers=worker_count) as executor:
+            submitted_futures = {}
+            for idx, profile in enumerate(profiles):
+                future = executor.submit(
+                    _accummulate_single_profile,
+                    idx,
+                    profile.to_worker_payload(),
+                    base_folder,
+                )
+                submitted_futures[future] = (idx, profile.get_key())
+
+            for future in concurrent.futures.as_completed(submitted_futures):
+                expected_idx, profile_key = submitted_futures[future]
+                try:
+                    profile_idx, updated_profile_payload = future.result()
+                except Exception as err:
+                    raise DataLoaderError(
+                        "Failed accumulating profile %s at index %d: %s" %
+                        (profile_key, expected_idx, err)) from err
+                indexed_profiles[profile_idx] = (
+                    fuzzer_profile.FuzzerProfile.from_worker_payload(
+                        updated_profile_payload))
+    except (OSError, RuntimeError) as err:
+        logger.warning(
+            "Falling back to serial profile accumulation after executor setup failure: %s",
+            err,
+        )
+        for profile in profiles:
+            profile.accummulate_profile(base_folder, None, None, None)
+        return profiles
+
+    for idx, profile in enumerate(indexed_profiles):
+        if profile is None:
+            raise DataLoaderError(
+                f"Profile accumulation failed to return result for index {idx}"
+            )
+
+    return [profile for profile in indexed_profiles if profile is not None]
+
+
+class IntrospectionProject:
     """Wrapper class for managing Fuzz Introspector analysis.
 
     The most important two elments of this class are
@@ -50,30 +282,78 @@ class IntrospectionProject():
         self.base_folder = target_folder
         self.coverage_url = coverage_url
         self.optional_analyses = []
+        self.exclude_patterns = []
+        self.exclude_function_patterns = []
 
-    def load_data_files(self,
-                        parallelise=True,
-                        correlation_file=None,
-                        out_dir: str = '',
-                        harness_lists=None):
+    def load_data_files(
+        self,
+        parallelise=True,
+        correlation_file=None,
+        out_dir: str = "",
+        harness_lists=None,
+        exclude_patterns: Optional[List[str]] = None,
+        exclude_function_patterns: Optional[List[str]] = None,
+    ):
         """Generates the `proj_profile` and `profiles` elements of this class
         based on the raw data given as arguments. This function must be called
         before any real use of `IntrospectionProject` can happen.
         """
+        self.exclude_patterns = exclude_patterns if exclude_patterns else []
+        self.exclude_function_patterns = (exclude_function_patterns
+                                          if exclude_function_patterns else [])
 
         if harness_lists:
-            logger.info('Loading profiles using harness list')
+            logger.info("Loading profiles using harness list")
             self.profiles = []
             for report_yaml, calltree_text in harness_lists:
                 self.profiles.append(
-                    fuzzer_profile.FuzzerProfile('cfg_file',
-                                                 report_yaml,
-                                                 self.language,
-                                                 cfg_content=calltree_text))
+                    fuzzer_profile.FuzzerProfile(
+                        "cfg_file",
+                        report_yaml,
+                        self.language,
+                        cfg_content=calltree_text,
+                        exclude_patterns=self.exclude_patterns,
+                        exclude_function_patterns=self.
+                        exclude_function_patterns,
+                    ))
         else:
-            logger.info('Loading profiles using files')
+            logger.info("Loading profiles using files")
             self.profiles = data_loader.load_all_profiles(
                 self.base_folder, self.language, parallelise)
+
+        # Apply exclude patterns to filter out entire profiles and their functions
+        if self.exclude_patterns or self.exclude_function_patterns:
+            filtered_profiles = []
+            for profile in self.profiles:
+                # Set the exclude patterns on the profile so the matching logic works
+                profile.set_exclude_patterns(
+                    self.exclude_patterns,
+                    self.exclude_function_patterns,
+                )
+
+                # Drop the entire profile if the fuzzer itself is a system path
+                if profile._matches_exclude_pattern(
+                        profile.fuzzer_source_file):
+                    logger.info(
+                        "Skipping profile for excluded fuzzer source: %s",
+                        profile.fuzzer_source_file,
+                    )
+                    continue
+
+                # Filter functions within the profile
+                profile.all_class_functions = {
+                    name: func
+                    for name, func in profile.all_class_functions.items()
+                    if not profile._should_exclude_function_profile(func)
+                }
+                profile.all_class_constructors = {
+                    name: func
+                    for name, func in profile.all_class_constructors.items()
+                    if not profile._should_exclude_function_profile(func)
+                }
+                filtered_profiles.append(profile)
+
+            self.profiles = filtered_profiles
 
         logger.info("Found %d profiles", len(self.profiles))
         if len(self.profiles) == 0:
@@ -87,29 +367,8 @@ class IntrospectionProject():
                 profile.correlate_executable_name(correlation_dict)
 
         logger.info("[+] Accummulating profiles")
-        logger.info("Accummulating using multiprocessing")
-        manager = multiprocessing.Manager()
-        semaphore = multiprocessing.Semaphore(10)
-
-        return_dict = manager.dict()
-
-        jobs = []
-        idx = 0
-        for profile in self.profiles:
-            p = multiprocessing.Process(
-                target=fuzzer_profile.FuzzerProfile.accummulate_profile,
-                args=(profile, self.base_folder, return_dict, f"uniq-{idx}",
-                      semaphore))
-            jobs.append(p)
-            idx += 1
-            p.start()
-        for proc in jobs:
-            proc.join()
-
-        new_profiles = []
-        for idx in return_dict:
-            new_profiles.append(return_dict[idx])
-        self.profiles = new_profiles
+        self.profiles = _accummulate_profiles(self.profiles, self.base_folder,
+                                              parallelise)
 
         logger.info("[+] Creating project profile")
         self.proj_profile = project_profile.MergedProjectProfile(
@@ -135,43 +394,108 @@ class IntrospectionProject():
 
     def load_debug_report(self, out_dir, dump_files=True):
         """Load and digest debug information."""
+        include_stage_rss = _parse_bool_env(FI_DEBUG_STAGE_RSS_ENV, False)
+        perf_warn_enabled = _parse_bool_env(FI_DEBUG_PERF_WARN_ENV, True)
+        warn_after_seconds = _parse_stage_warn_seconds()
+
+        load_started = time.perf_counter()
         self.debug_report = debug_info.load_debug_report(self.debug_files)
+        _log_debug_load_stage(
+            "debug_report",
+            time.perf_counter() - load_started,
+            {"files": len(self.debug_files)},
+            include_stage_rss,
+            perf_warn_enabled,
+            warn_after_seconds,
+        )
 
         # Load the yaml  content of debug files holding type information and
         # function information.
+        type_load_started = time.perf_counter()
         self.debug_all_types = debug_info.load_debug_all_yaml_files(
             self.debug_type_files)
+        _log_debug_load_stage(
+            "debug_types_yaml",
+            time.perf_counter() - type_load_started,
+            {
+                "files": len(self.debug_type_files),
+                "types": len(self.debug_all_types),
+            },
+            include_stage_rss,
+            perf_warn_enabled,
+            warn_after_seconds,
+        )
+
+        function_load_started = time.perf_counter()
         self.debug_all_functions = debug_info.load_debug_all_yaml_files(
             self.debug_function_files)
+        _log_debug_load_stage(
+            "debug_functions_yaml",
+            time.perf_counter() - function_load_started,
+            {
+                "files": len(self.debug_function_files),
+                "functions": len(self.debug_all_functions),
+            },
+            include_stage_rss,
+            perf_warn_enabled,
+            warn_after_seconds,
+        )
 
         # Index the functions based on file locations. This is useful for
         # quickly looking up debug function details based on their file
         # locations, which we can get from the function data collected by
         # the LLVM module.
+        dedupe_rewrite_started = time.perf_counter()
         tmp_debug_functions = {}
         no_path_debug_funcs = []
+        original_function_count = len(self.debug_all_functions)
         for func in self.debug_all_functions:
-            if func['file_location'].strip() == '':
+            if func["file_location"].strip() == "":
                 no_path_debug_funcs.append(func)
             else:
-                tmp_debug_functions[func['file_location']] = func
+                tmp_debug_functions[func["file_location"]] = func
 
         # Cleanup some debug values that we know have weird names and
         # not the names fro the source.
         for debug_type in self.debug_all_types:
-            if debug_type['name'] == '_Bool':
-                debug_type['name'] = 'bool'
+            if debug_type["name"] == "_Bool":
+                debug_type["name"] = "bool"
 
         self.debug_all_functions = no_path_debug_funcs + list(
             tmp_debug_functions.values())
+        _log_debug_load_stage(
+            "dedupe_rewrite",
+            time.perf_counter() - dedupe_rewrite_started,
+            {
+                "types": len(self.debug_all_types),
+                "functions_before": original_function_count,
+                "functions_after": len(self.debug_all_functions),
+            },
+            include_stage_rss,
+            perf_warn_enabled,
+            warn_after_seconds,
+        )
 
         # Extract the raw function signature. This propagates types into all of
         # the debug functions.
+        type_correlation_started = time.perf_counter()
         debug_info.correlate_debugged_function_to_debug_types(
             self.debug_all_types,
             self.debug_all_functions,
             out_dir,
-            dump_files=dump_files)
+            dump_files=dump_files,
+        )
+        _log_debug_load_stage(
+            "type_correlation",
+            time.perf_counter() - type_correlation_started,
+            {
+                "types": len(self.debug_all_types),
+                "functions": len(self.debug_all_functions),
+            },
+            include_stage_rss,
+            perf_warn_enabled,
+            warn_after_seconds,
+        )
 
     def dump_debug_report(self, out_dir):
         if self.debug_report is not None:
@@ -180,6 +504,7 @@ class IntrospectionProject():
 
 class AnalysisInterface(abc.ABC):
     """Plugin interface class."""
+
     name: str = ""
     json_string_result: str = ""
     display_html: bool = False
@@ -190,14 +515,17 @@ class AnalysisInterface(abc.ABC):
         self.properties = properties
 
     @abc.abstractmethod
-    def analysis_func(self,
-                      table_of_contents: html_helpers.HtmlTableOfContents,
-                      tables: List[str],
-                      proj_profile: project_profile.MergedProjectProfile,
-                      profiles: List[fuzzer_profile.FuzzerProfile],
-                      basefolder: str, coverage_url: str,
-                      conclusions: List[html_helpers.HTMLConclusion],
-                      out_dir: str) -> str:
+    def analysis_func(
+        self,
+        table_of_contents: html_helpers.HtmlTableOfContents,
+        tables: List[str],
+        proj_profile: project_profile.MergedProjectProfile,
+        profiles: List[fuzzer_profile.FuzzerProfile],
+        basefolder: str,
+        coverage_url: str,
+        conclusions: List[html_helpers.HTMLConclusion],
+        out_dir: str,
+    ) -> str:
         """Entrypoint for analysis instance. This function can have side
         effects on many of the arguments passed to it.
 
@@ -233,10 +561,12 @@ class AnalysisInterface(abc.ABC):
                    html report.
         """
 
-    def standalone_analysis(self,
-                            proj_profile: project_profile.MergedProjectProfile,
-                            profiles: List[fuzzer_profile.FuzzerProfile],
-                            out_dir: str) -> None:
+    def standalone_analysis(
+        self,
+        proj_profile: project_profile.MergedProjectProfile,
+        profiles: List[fuzzer_profile.FuzzerProfile],
+        out_dir: str,
+    ) -> None:
         """Second entrypoint for analysis instance which are meant to run
         alone without html or json report generation.
         :param proj_profile: project profile involved in the analysis.
@@ -275,9 +605,21 @@ def instantiate_analysis_interface(cls: Type[AnalysisInterface]):
 
 class FuzzBranchBlocker:
 
-    def __init__(self, side, unique_not_cov_comp, unique_reach_comp,
-                 unique_funcs, not_cov_comp, reach_comp, hitcount_diff,
-                 filename, b_line, s_line, fname, link) -> None:
+    def __init__(
+        self,
+        side,
+        unique_not_cov_comp,
+        unique_reach_comp,
+        unique_funcs,
+        not_cov_comp,
+        reach_comp,
+        hitcount_diff,
+        filename,
+        b_line,
+        s_line,
+        fname,
+        link,
+    ) -> None:
         self.blocked_side = side
         self.blocked_unique_not_covered_complexity = unique_not_cov_comp
         self.blocked_unique_reachable_complexity = unique_reach_comp
@@ -294,11 +636,13 @@ class FuzzBranchBlocker:
 
 def get_all_analyses() -> List[Type[AnalysisInterface]]:
     from fuzz_introspector import analyses
+
     return analyses.all_analyses
 
 
 def get_all_standalone_analyses() -> List[Type[AnalysisInterface]]:
     from fuzz_introspector import analyses
+
     return analyses.standalone_analyses
 
 
@@ -317,10 +661,13 @@ def callstack_set_curr_node(n: cfg_load.CalltreeCallsite, name: str,
     c[int(n.depth)] = name
 
 
-def get_node_coverage_hitcount(demangled_name: str, callstack: Dict[int, str],
-                               node: cfg_load.CalltreeCallsite,
-                               profile: fuzzer_profile.FuzzerProfile,
-                               is_first: bool) -> int:
+def get_node_coverage_hitcount(
+    demangled_name: str,
+    callstack: Dict[int, str],
+    node: cfg_load.CalltreeCallsite,
+    profile: fuzzer_profile.FuzzerProfile,
+    is_first: bool,
+) -> int:
     """Extracts the runtime coverage hitcount of a node in the calltree"""
     if profile.coverage is None:
         return -1
@@ -333,7 +680,7 @@ def get_node_coverage_hitcount(demangled_name: str, callstack: Dict[int, str],
         if not profile.func_is_entrypoint(demangled_name):
             logger.warning("First node in calltree is non-fuzzer function")
             return 0
-        if profile.coverage.get_type() == 'kernel':
+        if profile.coverage.get_type() == "kernel":
             # For now, assume EP is hit. TODO(David) adjust this.
             return 100
 
@@ -344,7 +691,7 @@ def get_node_coverage_hitcount(demangled_name: str, callstack: Dict[int, str],
         node.cov_parent = "EP"
 
         node_hitcount = 0
-        for (n_line_number, hit_count_cov) in coverage_data:
+        for n_line_number, hit_count_cov in coverage_data:
             node_hitcount = max(hit_count_cov, node_hitcount)
         is_first = False
     elif callstack_has_parent(node, callstack):
@@ -354,13 +701,13 @@ def get_node_coverage_hitcount(demangled_name: str, callstack: Dict[int, str],
                      f"{node.cov_ct_idx} -- {node.src_linenumber}")
 
         if profile.target_lang == "c-cpp":
-            if profile.coverage.get_type() == 'kernel':
+            if profile.coverage.get_type() == "kernel":
                 # Handle coverage
                 return profile.coverage.get_kernel_hitcount(node)
             else:
                 coverage_data = profile.coverage.get_hit_details(
                     callstack_get_parent(node, callstack))
-                for (n_line_number, hit_count_cov) in coverage_data:
+                for n_line_number, hit_count_cov in coverage_data:
                     logger.debug("  - iterating %d : %d", n_line_number,
                                  hit_count_cov)
                     if n_line_number == node.src_linenumber and hit_count_cov > 0:
@@ -374,7 +721,7 @@ def get_node_coverage_hitcount(demangled_name: str, callstack: Dict[int, str],
         elif profile.target_lang == "jvm":
             coverage_data = profile.coverage.get_hit_details(
                 callstack_get_parent(node, callstack))
-            for (n_line_number, hit_count_cov) in coverage_data:
+            for n_line_number, hit_count_cov in coverage_data:
                 logger.debug("  - iterating %d : %d", n_line_number,
                              hit_count_cov)
                 if n_line_number == node.src_linenumber and hit_count_cov > 0:
@@ -382,7 +729,7 @@ def get_node_coverage_hitcount(demangled_name: str, callstack: Dict[int, str],
         elif profile.target_lang == "rust":
             coverage_data = profile.coverage.get_hit_details(
                 callstack_get_parent(node, callstack))
-            for (n_line_number, hit_count_cov) in coverage_data:
+            for n_line_number, hit_count_cov in coverage_data:
                 logger.debug("  - iterating %d : %d", n_line_number,
                              hit_count_cov)
                 if n_line_number == node.src_linenumber and hit_count_cov > 0:
@@ -390,7 +737,7 @@ def get_node_coverage_hitcount(demangled_name: str, callstack: Dict[int, str],
         elif profile.target_lang == "go":
             coverage_data = profile.coverage.get_hit_details(
                 callstack_get_parent(node, callstack))
-            for (n_line_number, hit_count_cov) in coverage_data:
+            for n_line_number, hit_count_cov in coverage_data:
                 logger.debug("  - iterating %d : %d", n_line_number,
                              hit_count_cov)
                 if n_line_number == node.src_linenumber and hit_count_cov > 0:
@@ -413,30 +760,34 @@ def get_hit_count_color(hit_count: int) -> str:
 
 
 def get_url_to_cov_report(profile, node, target_coverage_url):
-    """ Get URL to coverage report for the node. """
+    """Get URL to coverage report for the node."""
     dst_options = [
         node.dst_function_name,
         utils.demangle_cpp_func(node.dst_function_name),
         utils.demangle_rust_func(node.dst_function_name),
         utils.demangle_jvm_func(node.dst_function_source_file,
-                                node.dst_function_name)
+                                node.dst_function_name),
     ]
     for dst in dst_options:
         try:
             fd = profile.dst_to_fd_cache[dst]
-            return profile.resolve_coverage_link(target_coverage_url,
-                                                 fd.function_source_file,
-                                                 fd.function_linenumber,
-                                                 fd.function_name)
+            return profile.resolve_coverage_link(
+                target_coverage_url,
+                fd.function_source_file,
+                fd.function_linenumber,
+                fd.function_name,
+            )
         except KeyError:
             pass
 
         try:
             fd = profile.dst_to_fd_cache[utils.normalise_str(dst)]
-            return profile.resolve_coverage_link(target_coverage_url,
-                                                 fd.function_source_file,
-                                                 fd.function_linenumber,
-                                                 fd.function_name)
+            return profile.resolve_coverage_link(
+                target_coverage_url,
+                fd.function_source_file,
+                fd.function_linenumber,
+                fd.function_name,
+            )
         except KeyError:
             pass
 
@@ -457,8 +808,11 @@ def get_parent_callsite_link(node, callstack, profile, target_coverage_url):
             try:
                 fd = profile.dst_to_fd_cache[dst]
                 callsite_link = profile.resolve_coverage_link(
-                    target_coverage_url, fd.function_source_file,
-                    node.src_linenumber, fd.function_name)
+                    target_coverage_url,
+                    fd.function_source_file,
+                    node.src_linenumber,
+                    fd.function_name,
+                )
                 return callsite_link
             except KeyError:
                 pass
@@ -466,8 +820,11 @@ def get_parent_callsite_link(node, callstack, profile, target_coverage_url):
             try:
                 fd = profile.dst_to_fd_cache[utils.normalise_str(dst)]
                 callsite_link = profile.resolve_coverage_link(
-                    target_coverage_url, fd.function_source_file,
-                    node.src_linenumber, fd.function_name)
+                    target_coverage_url,
+                    fd.function_source_file,
+                    node.src_linenumber,
+                    fd.function_name,
+                )
                 return callsite_link
             except KeyError:
                 pass
@@ -475,9 +832,12 @@ def get_parent_callsite_link(node, callstack, profile, target_coverage_url):
 
 
 def overlay_calltree_with_coverage(
-        profile: fuzzer_profile.FuzzerProfile,
-        proj_profile: project_profile.MergedProjectProfile, coverage_url: str,
-        basefolder: str, out_dir) -> None:
+    profile: fuzzer_profile.FuzzerProfile,
+    proj_profile: project_profile.MergedProjectProfile,
+    coverage_url: str,
+    basefolder: str,
+    out_dir,
+) -> None:
     # We use the callstack to keep track of all function parents. We need this
     # when looking up if a callsite was hit or not. This is because the coverage
     # information about a callsite is located in coverage data of the function
@@ -594,39 +954,40 @@ def overlay_calltree_with_coverage(
     branch_blockers_list = []
     for blk in profile.branch_blockers:
         branch_blockers_list.append({
-            'blocked_side':
+            "blocked_side":
             repr(blk.blocked_side),
-            'blocked_unique_not_covered_complexity':
+            "blocked_unique_not_covered_complexity":
             blk.blocked_unique_not_covered_complexity,
-            'blocked_unique_reachable_complexity':
+            "blocked_unique_reachable_complexity":
             blk.blocked_unique_reachable_complexity,
-            'blocked_unique_functions':
+            "blocked_unique_functions":
             blk.blocked_unique_funcs,
-            'blocked_not_covered_complexity':
+            "blocked_not_covered_complexity":
             blk.blocked_not_covered_complexity,
-            'blocked_reachable_complexity':
+            "blocked_reachable_complexity":
             blk.blocked_reachable_complexity,
-            'sides_hitcount_diff':
+            "sides_hitcount_diff":
             blk.sides_hitcount_diff,
-            'source_file':
+            "source_file":
             blk.source_file,
-            'branch_line_number':
+            "branch_line_number":
             blk.branch_line_number,
-            'blocked_side_line_numder':
+            "blocked_side_line_numder":
             blk.blocked_side_line_numder,
-            'function_name':
-            blk.function_name
+            "function_name":
+            blk.function_name,
         })
 
     json_report.add_branch_blocker_key_value_to_report(profile.identifier,
-                                                       'branch_blockers',
+                                                       "branch_blockers",
                                                        branch_blockers_list,
                                                        out_dir)
 
 
 def update_branch_complexities(
-        all_functions: Dict[str, function_profile.FunctionProfile],
-        coverage: code_coverage.CoverageProfile) -> None:
+    all_functions: Dict[str, function_profile.FunctionProfile],
+    coverage: code_coverage.CoverageProfile,
+) -> None:
     """
     Traverse every branch profile and update the side complexities based on reached funcs
     complexity.
@@ -661,15 +1022,17 @@ def update_branch_complexities(
 
 
 def detect_branch_level_blockers(
-        functions_profile: Dict[str, function_profile.FunctionProfile],
-        fuzz_profile: fuzzer_profile.FuzzerProfile,
-        target_coverage_url: str) -> List[FuzzBranchBlocker]:
+    functions_profile: Dict[str, function_profile.FunctionProfile],
+    fuzz_profile: fuzzer_profile.FuzzerProfile,
+    target_coverage_url: str,
+) -> List[FuzzBranchBlocker]:
     fuzz_blockers = []
 
     if fuzz_profile.coverage is None:
         logger.error(
             "No coverage for fuzzer %s. Skipping branch blocker detection.",
-            fuzz_profile.binary_executable)
+            fuzz_profile.binary_executable,
+        )
         return []
     coverage = fuzz_profile.coverage
 
@@ -679,7 +1042,7 @@ def detect_branch_level_blockers(
         sides_hitcount = coverage.branch_cov_map[branch_string]
         if len(sides_hitcount) > 2:
             logger.debug(
-                f'SPECIAL: switch statement {branch_string} {sides_hitcount}')
+                f"SPECIAL: switch statement {branch_string} {sides_hitcount}")
             # The first two elements are associated with the switch statement
             # line coverage. Here to update sides_hitcount and set branch_hitcount.
             branch_hitcount = max(sides_hitcount[:2])
@@ -687,8 +1050,8 @@ def detect_branch_level_blockers(
 
         # Catch exceptions in case some of the string splitting fails
         try:
-            function_name, rest_string = branch_string.rsplit(':', maxsplit=1)
-            line_number, column_number = rest_string.split(',')
+            function_name, rest_string = branch_string.rsplit(":", maxsplit=1)
+            line_number, column_number = rest_string.split(",")
         except ValueError:
             logger.debug(
                 "branch-profiling: error getting function name from %s",
@@ -706,7 +1069,7 @@ def detect_branch_level_blockers(
             function_name].function_source_file
         # Just extract the file name and skip the path
         source_file_name = os.path.basename(source_file_path)
-        llvm_branch_string = f'{source_file_name}:{line_number},{column_number}'
+        llvm_branch_string = f"{source_file_name}:{line_number},{column_number}"
 
         if llvm_branch_string not in llvm_branch_profile:
             # TODO: there are cases that the column number of the branch is not consistent between
@@ -734,23 +1097,25 @@ def detect_branch_level_blockers(
         if len(sides_hitcount) != len(llvm_branch.sides):
             logger.debug(
                 "Branch-blocker: inconsistent data found between COV vs LLVM:\n%s %s",
-                llvm_branch_string, branch_string)
+                llvm_branch_string,
+                branch_string,
+            )
             logger.debug("llvm_branch.sides: %s", str(llvm_branch.sides))
             logger.debug("blocked_idx: %s", sides_hitcount)
             continue
         # We have some sides taken and some not taken sides => there are blockers.
         for blocked_idx in not_taken_sides:
             blocked_side = blocked_idx
-            blocked_unique_not_covered_com = (
-                llvm_branch.sides[blocked_idx].unique_not_covered_complexity)
-            blocked_unique_reachable_com = (
-                llvm_branch.sides[blocked_idx].unique_reachable_complexity)
+            blocked_unique_not_covered_com = llvm_branch.sides[
+                blocked_idx].unique_not_covered_complexity
+            blocked_unique_reachable_com = llvm_branch.sides[
+                blocked_idx].unique_reachable_complexity
             blocked_reachable_com = llvm_branch.sides[
                 blocked_idx].reachable_complexity
             blocked_not_covered_com = llvm_branch.sides[
                 blocked_idx].not_covered_complexity
             side_line = llvm_branch.sides[blocked_idx].pos
-            side_line_number = side_line.split(':')[1].split(',')[0]
+            side_line_number = side_line.split(":")[1].split(",")[0]
             blocked_unique_funcs = list(
                 llvm_branch.get_side_unique_reachable_funcnames(blocked_idx))
 
@@ -758,7 +1123,10 @@ def detect_branch_level_blockers(
             if int(line_number) > int(side_line_number):
                 logger.debug(
                     "Branch-blocker: Anomalous branch sides line nubmers: %s:%s -> %s",
-                    source_file_path, line_number, side_line_number)
+                    source_file_path,
+                    line_number,
+                    side_line_number,
+                )
                 continue
 
             # Sanity check for fall through cases: checks if the branch side has coverage or not
@@ -767,14 +1135,16 @@ def detect_branch_level_blockers(
                                                int(side_line_number)):
                     logger.debug(
                         "Branch-blocker: fall through branch side is not blocked: %s",
-                        side_line)
+                        side_line,
+                    )
                     continue
             else:
                 if coverage.is_func_lineno_hit(function_name,
                                                int(side_line_number)):
                     logger.debug(
                         "Branch-blocker: fall through branch side is not blocked: %s",
-                        side_line)
+                        side_line,
+                    )
                     continue
 
             hitcount_diff = max(sides_hitcount + [branch_hitcount])
@@ -783,20 +1153,30 @@ def detect_branch_level_blockers(
                                                       int(line_number),
                                                       function_name)
             new_blk = FuzzBranchBlocker(
-                blocked_side, blocked_unique_not_covered_com,
-                blocked_unique_reachable_com, blocked_unique_funcs,
-                blocked_not_covered_com, blocked_reachable_com, hitcount_diff,
-                source_file_path, line_number, side_line_number, function_name,
-                link)
+                blocked_side,
+                blocked_unique_not_covered_com,
+                blocked_unique_reachable_com,
+                blocked_unique_funcs,
+                blocked_not_covered_com,
+                blocked_reachable_com,
+                hitcount_diff,
+                source_file_path,
+                line_number,
+                side_line_number,
+                function_name,
+                link,
+            )
             fuzz_blockers.append(new_blk)
 
     fuzz_blockers.sort(
         reverse=True,
         key=lambda x: [
-            x.blocked_unique_not_covered_complexity, x.
-            blocked_unique_reachable_complexity, x.
-            blocked_not_covered_complexity, x.blocked_reachable_complexity
-        ])
+            x.blocked_unique_not_covered_complexity,
+            x.blocked_unique_reachable_complexity,
+            x.blocked_not_covered_complexity,
+            x.blocked_reachable_complexity,
+        ],
+    )
 
     return fuzz_blockers
 
@@ -808,7 +1188,8 @@ def extract_namespace(mangled_function_name, return_type=None):
     # logger.info("Demangled name: %s" % (demangled_func_name))
     if return_type is not None and demangled_func_name.startswith(
             f"{return_type} "):
-        demangled_func_name = demangled_func_name[len(return_type) + 1:]
+        return_type_offset = len(return_type) + 1
+        demangled_func_name = demangled_func_name[return_type_offset:]
         # logger.info("Removed function type: %s" % (demangled_func_name))
     if "::" not in demangled_func_name:
         return []
@@ -818,9 +1199,9 @@ def extract_namespace(mangled_function_name, return_type=None):
     for elem in split_namespace:
         if len(elem) > 0:
             # Check: (anonymous namespace)
-            if elem[0] == '(':
+            if elem[0] == "(":
                 name_spaces.append(elem)
-            elif '(' in elem:
+            elif "(" in elem:
                 name_spaces.append(elem.split("(")[0])
                 break
             else:
@@ -831,15 +1212,15 @@ def extract_namespace(mangled_function_name, return_type=None):
 
 
 def convert_debug_info_to_signature_v2(function, introspector_func):
-    function['return_type'] = 'N/A'
-    function['args'] = []
+    function["return_type"] = "N/A"
+    function["args"] = []
     try:
         return_type = convert_param_list_to_str_v2(
-            function['func_signature_elems']['return_type'])
-        function['return_type'] = return_type
+            function["func_signature_elems"]["return_type"])
+        function["return_type"] = return_type
         func_signature = return_type + " "
     except KeyError:
-        return 'N/A'
+        return "N/A"
 
     # Assess if there is a namespace and if we have more args than what there
     # should be, e.g. if this is a method on an object. We need to identify
@@ -851,34 +1232,34 @@ def convert_debug_info_to_signature_v2(function, introspector_func):
     # 2) identify namespace
     # 3) identify if namespace last part matches first argument
     # 4) assemble
-    namespace = extract_namespace(introspector_func['raw-function-name'],
+    namespace = extract_namespace(introspector_func["raw-function-name"],
                                   return_type)
 
-    func_name = ''
+    func_name = ""
     param_idx = 0
     # Is this a class function?
-    if len(function['func_signature_elems']['params']) > 0:
+    if len(function["func_signature_elems"]["params"]) > 0:
         if len(namespace) > 1:
             # Constructor handling
             if namespace[-1] == convert_param_list_to_str_v2(
-                    function['func_signature_elems']['params'][0]).replace(
+                    function["func_signature_elems"]["params"][0]).replace(
                         " *", ""):
                 func_name = "::".join(namespace[0:-1]) + "::"
                 param_idx += 1
             # Destructor handling
             elif "~" in namespace[-1] and namespace[-1].replace(
                     "~", "") == convert_param_list_to_str_v2(
-                        function['func_signature_elems']['params'][0]).replace(
+                        function["func_signature_elems"]["params"][0]).replace(
                             " *", ""):
                 func_name = "::".join(namespace[0:-1]) + "::"
 
-                if not convert_param_list_to_str_v2(
-                        function['func_signature_elems']['params'][0]) == '~':
-                    function['name'] = '~' + function['name']
+                if (not convert_param_list_to_str_v2(
+                        function["func_signature_elems"]["params"][0]) == "~"):
+                    function["name"] = "~" + function["name"]
                 param_idx += 1
             # Class object handling
             elif namespace[-2] == convert_param_list_to_str_v2(
-                    function['func_signature_elems']['params'][0]).replace(
+                    function["func_signature_elems"]["params"][0]).replace(
                         " *", "").replace("const ", ""):
                 func_name = "::".join(namespace[0:-1]) + "::"
                 param_idx += 1
@@ -887,19 +1268,19 @@ def convert_debug_info_to_signature_v2(function, introspector_func):
                 # No increasae in param_idx, since we don't eat the object
                 # instance pointer.
                 func_name = "::".join(namespace[0:-1]) + "::"
-    func_name += function['name']
+    func_name += function["name"]
 
     func_signature += func_name
-    func_signature += '('
+    func_signature += "("
     for idx in range(param_idx,
-                     len(function['func_signature_elems']['params'])):
+                     len(function["func_signature_elems"]["params"])):
         param_string = convert_param_list_to_str_v2(
-            function['func_signature_elems']['params'][idx])
-        function['args'].append(param_string)
+            function["func_signature_elems"]["params"][idx])
+        function["args"].append(param_string)
         func_signature += param_string
-        if idx < len(function['func_signature_elems']['params']) - 1:
-            func_signature += ', '
-    func_signature += ')'
+        if idx < len(function["func_signature_elems"]["params"]) - 1:
+            func_signature += ", "
+    func_signature += ")"
     return func_signature
 
 
@@ -911,73 +1292,143 @@ def convert_param_list_to_str_v2(param_list):
     for param in param_list:
         if param == "DW_TAG_pointer_type":
             post += "*"
-        elif param == 'DW_TAG_reference_type':
-            post += '&'
-        elif param == 'DW_TAG_structure_type':
+        elif param == "DW_TAG_reference_type":
+            post += "&"
+        elif param == "DW_TAG_structure_type":
             is_struct = True
         elif param == "DW_TAG_base_type":
             continue
         elif param == "DW_TAG_typedef":
             continue
-        elif param == 'DW_TAG_class_type':
+        elif param == "DW_TAG_class_type":
             continue
         elif param == "DW_TAG_const_type":
             pre += "const "
         else:
             med += param
             if is_struct:
-                med = 'struct ' + med
+                med = "struct " + med
 
     raw_sig = pre.strip() + " " + med + " " + post
     return raw_sig.strip()
 
 
-def correlate_introspector_func_to_debug_information(if_func,
-                                                     all_debug_functions,
-                                                     debug_dict_by_name,
-                                                     debug_dict_by_filename):
+def _safe_int(value, default=None):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_debug_function_indexes(debug_all_functions, header_index_by_name):
+    debug_dict_by_name = {}
+    debug_dict_by_filename = {}
+    debug_lines_by_filename = {}
+
+    for debug_function in debug_all_functions:
+        source_dict = debug_function.get("source", {})
+        normalized_source_file = os.path.normpath(
+            source_dict.get("source_file", ""))
+        source_dict["source_file"] = normalized_source_file
+        debug_function["possible-header-files"] = list(
+            header_index_by_name.get(debug_function.get("name", ""), set()))
+
+        parsed_line_number = _safe_int(source_dict.get("source_line", "-1"),
+                                       default=None)
+
+        debug_dict_by_name.setdefault(debug_function.get("name", ""),
+                                      []).append(debug_function)
+        debug_dict_by_filename.setdefault(normalized_source_file,
+                                          []).append(debug_function)
+        if parsed_line_number is None:
+            continue
+        debug_lines_by_filename.setdefault(normalized_source_file, []).append(
+            (parsed_line_number, debug_function))
+
+    for source_file, line_debug_pairs in debug_lines_by_filename.items():
+        line_debug_pairs.sort(key=lambda item: item[0])
+        debug_lines_by_filename[source_file] = {
+            "lines": [line for line, _ in line_debug_pairs],
+            "functions": [func for _, func in line_debug_pairs],
+        }
+
+    return debug_dict_by_name, debug_dict_by_filename, debug_lines_by_filename
+
+
+def correlate_introspector_func_to_debug_information(
+    if_func,
+    all_debug_functions,
+    debug_dict_by_name,
+    debug_dict_by_filename,
+    debug_lines_by_filename=None,
+):
     """Correlate a single LLVM-based function to a given function in the
     collected debug information."""
     # Check if name matches. If so, this one is easy.
-    same_name_dfs = debug_dict_by_name.get(if_func['Func name'], [])
+    same_name_dfs = debug_dict_by_name.get(if_func["Func name"], [])
 
     for debug_function in same_name_dfs:
-        if debug_function.get('name', '') == if_func['Func name']:
+        if debug_function.get("name", "") == if_func["Func name"]:
             func_signature = convert_debug_info_to_signature_v2(
                 debug_function, if_func)
             return func_signature, debug_function
 
     # We could not find the right one, let's search more broadly for it.
+    del all_debug_functions
+    source_file = os.path.normpath(if_func.get("Functions filename", ""))
+    source_line_begin = _safe_int(if_func.get("source_line_begin"),
+                                  default=None)
+    if source_line_begin is None:
+        return None, None
+
+    indexed_debug_lines = None
+    if debug_lines_by_filename is not None:
+        indexed_debug_lines = debug_lines_by_filename.get(source_file)
+    if indexed_debug_lines is not None:
+        line_values = indexed_debug_lines["lines"]
+        matching_debug_functions = indexed_debug_lines["functions"]
+        exact_line_idx = bisect.bisect_left(line_values, source_line_begin)
+        if (exact_line_idx < len(line_values)
+                and line_values[exact_line_idx] == source_line_begin
+                and source_line_begin != 0):
+            matched_debug_func = matching_debug_functions[exact_line_idx]
+            func_signature = convert_debug_info_to_signature_v2(
+                matched_debug_func, if_func)
+            return func_signature, matched_debug_func
+
+        preceding_line_idx = exact_line_idx - 1
+        if preceding_line_idx >= 0:
+            matched_debug_func = matching_debug_functions[preceding_line_idx]
+            func_signature = convert_debug_info_to_signature_v2(
+                matched_debug_func, if_func)
+            return func_signature, matched_debug_func
+
     target_minimum = 999999
     tfunc_signature = None
     most_likely_func = None
 
-    for dfunction in debug_dict_by_filename.get(
-            os.path.normpath(if_func['Functions filename']), []):
-        try:
-            dline = int(dfunction['source'].get('source_line', '-1'))
-        except ValueError:
+    for dfunction in debug_dict_by_filename.get(source_file, []):
+        dline = _safe_int(dfunction["source"].get("source_line", "-1"),
+                          default=None)
+        if dline is None:
             continue
 
-        if dfunction['source'].get('source_file', '') == os.path.normpath(
-                if_func['Functions filename']):
+        # Match based on containment, as there can be discrepancies between function
+        # signatur start (as from frunc_to_match) and the lines of code of the first
+        # instruction.
+        distance_between_beginnings = source_line_begin - dline
 
-            # Match based on containment, as there can be discrepancies between function
-            # signatur start (as from frunc_to_match) and the lines of code of the first
-            # instruction.
-            distance_between_beginnings = int(
-                if_func['source_line_begin']) - dline
+        if distance_between_beginnings == 0 and dline != 0:
+            func_signature = convert_debug_info_to_signature_v2(
+                dfunction, if_func)
+            return func_signature, dfunction
 
-            if distance_between_beginnings == 0 and dline != 0:
-                func_signature = convert_debug_info_to_signature_v2(
-                    dfunction, if_func)
-                return func_signature, dfunction
-
-            elif distance_between_beginnings > 0 and distance_between_beginnings < target_minimum:
-                tfunc_signature = convert_debug_info_to_signature_v2(
-                    dfunction, if_func)
-                most_likely_func = dfunction
-                target_minimum = distance_between_beginnings
+        if (distance_between_beginnings > 0
+                and distance_between_beginnings < target_minimum):
+            tfunc_signature = convert_debug_info_to_signature_v2(
+                dfunction, if_func)
+            most_likely_func = dfunction
+            target_minimum = distance_between_beginnings
 
     if most_likely_func is not None:
         return tfunc_signature, most_likely_func
@@ -998,263 +1449,390 @@ def correlate_introspection_functions_to_debug_info(all_functions_json_report,
 
     # Find header files
     normalized_paths = set()
-    for header_file in report_dict.get('all_files_in_project', []):
-        normalized_paths.add(os.path.normpath(header_file['source_file']))
+    for header_file in report_dict.get("all_files_in_project", []):
+        normalized_paths.add(os.path.normpath(header_file["source_file"]))
+
+    # Load and index header content once to avoid repeated per-function scans.
+    header_index_by_name = {}
+    header_name_pattern = re.compile(r"([A-Za-z_~][A-Za-z0-9_:~]*)\s*\(")
+    for header_src_file in normalized_paths:
+        if not (header_src_file.endswith(".h")
+                or header_src_file.endswith(".hpp")):
+            continue
+        if not os.path.isfile(header_src_file):
+            continue
+        try:
+            with open(header_src_file, "r") as header_file_fd:
+                for line in header_file_fd:
+                    for match in header_name_pattern.findall(line):
+                        entry = header_index_by_name.get(match, set())
+                        entry.add(header_src_file)
+                        header_index_by_name[match] = entry
+                        if "::" in match:
+                            short_match = match.rsplit("::", maxsplit=1)[-1]
+                            entry = header_index_by_name.get(
+                                short_match, set())
+                            entry.add(header_src_file)
+                            header_index_by_name[short_match] = entry
+        except UnicodeDecodeError:
+            continue
 
     # A lot of look-ups are needed when matching LLVM functions to debug
     # functions. Start with creating two indexes to make these look-ups
     # faster.
-    debug_dict_by_name = {}
-    debug_dict_by_filename = {}
-    for df in debug_all_functions:
-        # Normalize the source file
-        df['source']['source_file'] = os.path.normpath(df['source'].get(
-            'source_file', ''))
+    (debug_dict_by_name, debug_dict_by_filename,
+     debug_lines_by_filename) = (_build_debug_function_indexes(
+         debug_all_functions, header_index_by_name))
 
-        # Find the header file of this debug function.
-        possible_header_files = set()
-        for header_src_file in normalized_paths:
-            if not (header_src_file.endswith(".h")
-                    or header_src_file.endswith(".hpp")):
-                continue
-            if not os.path.isfile(header_src_file):
-                continue
-            try:
-                with open(header_src_file, 'r') as header_file_fd:
-                    content = header_file_fd.read()
-            except UnicodeDecodeError:
-                content = ""
-
-            name = df.get('name', 'TOTALLYRANDOMNOTFUNCNAME123')
-            for line_idx, line in enumerate(content.split("\n")):
-                if f'{name}(' in line:
-                    possible_header_files.add(header_src_file)
-        df['possible-header-files'] = list(possible_header_files)
-
-        # Append debug function to name-index.
-        entry_list1 = debug_dict_by_name.get(df.get('name', ''), [])
-        entry_list1.append(df)
-        debug_dict_by_name[df.get('name', '')] = entry_list1
-
-        # Append debug function to file-index.
-        entry_list2 = debug_dict_by_filename.get(
-            df['source'].get('source_file', ''), [])
-        entry_list2.append(df)
-        debug_dict_by_filename[df['source'].get('source_file',
-                                                '')] = entry_list2
-
-    for dl3 in debug_dict_by_filename:
-        print("%s ------- %d" % (dl3, len(debug_dict_by_filename[dl3])))
+    logger.debug("Indexed debug functions by file: %d entries",
+                 len(debug_dict_by_filename))
 
     # Now correlate signatures
     for if_func in all_functions_json_report:
-        func_sig, correlated_debug_function = correlate_introspector_func_to_debug_information(
-            if_func, debug_all_functions, debug_dict_by_name,
-            debug_dict_by_filename)
+        func_sig, correlated_debug_function = (
+            correlate_introspector_func_to_debug_information(
+                if_func,
+                debug_all_functions,
+                debug_dict_by_name,
+                debug_dict_by_filename,
+                debug_lines_by_filename,
+            ))
 
         if func_sig is not None:
-            if_func['function_signature'] = func_sig
-            if_func['debug_function_info'] = correlated_debug_function
+            if_func["function_signature"] = func_sig
+            if_func["debug_function_info"] = correlated_debug_function
         else:
-            if proj_lang == 'jvm':
-                if_func['function_signature'] = if_func['Func name']
-            elif not if_func.get('function_signature'):
-                if_func['function_signature'] = 'N/A'
-            if_func['debug_function_info'] = {}
+            if proj_lang == "jvm":
+                if_func["function_signature"] = if_func["Func name"]
+            elif not if_func.get("function_signature"):
+                if_func["function_signature"] = "N/A"
+            if_func["debug_function_info"] = {}
 
 
-def extract_all_sources(language):
-    all_files = set()
-    for root, dirs, files in os.walk('/src/'):
-        for f in files:
-            all_files.add(os.path.join(root, f))
-    interesting_source_files = set()
+def extract_all_sources(
+    language: str,
+    exclude_patterns: list[str] | None = None,
+) -> set[str]:
+    """List all source files in /src with project language filters."""
+    # Compile regex patterns once and ignore invalid entries consistently.
+    compiled_exclude_patterns = []
+    for pattern in exclude_patterns or []:
+        try:
+            compiled_exclude_patterns.append(re.compile(pattern))
+        except re.error as err:
+            logger.warning("Invalid exclude pattern %s: %s", pattern, err)
 
-    if language == 'jvm':
-        test_extensions = ['.java', '.scala', '.sc', '.groovy', '.kt', '.kts']
-    elif language == 'python':
-        test_extensions = ['.py']
-    elif language == 'rust':
-        test_extensions = ['.rs']
-    elif language == 'go':
-        test_extensions = ['.go', '.cgo']
+    return _scan_source_tree(language, compiled_exclude_patterns)
+
+
+def _scan_source_tree(
+    language: str,
+    compiled_exclude_patterns: list[re.Pattern[str]],
+) -> set[str]:
+    interesting_source_files: set[str] = set()
+
+    if language == "jvm":
+        source_extensions = [
+            ".java", ".scala", ".sc", ".groovy", ".kt", ".kts"
+        ]
+    elif language == "python":
+        source_extensions = [".py"]
+    elif language == "rust":
+        source_extensions = [".rs"]
+    elif language == "go":
+        source_extensions = [".go", ".cgo"]
     else:
-        test_extensions = ['.cc', '.cpp', '.cxx', '.c++', '.c', '.h', '.hpp']
+        source_extensions = [".cc", ".cpp", ".cxx", ".c++", ".c", ".h", ".hpp"]
 
     to_avoid = [
-        'fuzztest', 'aflplusplus', 'libfuzzer', 'googletest', 'thirdparty',
-        'third_party', '/build/', '/usr/local/', '/fuzz-introspector/',
-        '/root/.cache/', 'honggfuzz', '/src/inspector/', '/src/.venv',
-        '/src/source-code/'
+        "fuzztest",
+        "aflplusplus",
+        "libfuzzer",
+        "googletest",
+        "thirdparty",
+        "third_party",
+        "/build/",
+        "/usr/local/",
+        "/fuzz-introspector/",
+        "/root/.cache/",
+        "honggfuzz",
+        "/src/inspector/",
+        "/src/.venv",
+        "/src/source-code/",
     ]
 
-    for file in all_files:
-        if not any(file.endswith(ext) for ext in test_extensions):
-            continue
+    def is_excluded_by_pattern(path):
+        normalized_path = os.path.normpath(path)
+        for pattern in compiled_exclude_patterns:
+            if pattern.search(normalized_path):
+                return True
+        return False
 
-        # Absolute path
-        if any([avoid in file for avoid in to_avoid]):
-            continue
-        if file.startswith('/src/source-code'):
-            continue
-        if file.startswith('/src/inspector/'):
-            continue
+    def is_interesting_source_file(path):
+        if not any(path.endswith(ext) for ext in source_extensions):
+            return False
+        if is_excluded_by_pattern(path):
+            return False
+        if any([avoid in path for avoid in to_avoid]):
+            return False
+        if path.startswith("/src/source-code"):
+            return False
+        if path.startswith("/src/inspector/"):
+            return False
+        return True
 
-        interesting_source_files.add(file)
+    for root, dirs, files in os.walk("/src/"):
+        dirs[:] = [
+            d for d in dirs
+            if not is_excluded_by_pattern(os.path.join(root, d)) and not any(
+                avoid in os.path.join(root, d) for avoid in to_avoid)
+        ]
+        for f in files:
+            path = os.path.join(root, f)
+            if not is_interesting_source_file(path):
+                continue
+
+            interesting_source_files.add(path)
+
     return interesting_source_files
 
 
-def extract_test_information(report_dict=None, language='c-cpp', out_dir='/'):
+def extract_test_information(report_dict=None,
+                             language="c-cpp",
+                             out_dir="/",
+                             exclude_patterns=None,
+                             source_files: set[str] | None = None):
     """Extract test information for different project language."""
     if not report_dict:
         report_dict = {}
-    if language == 'c-cpp':
-        return _extract_test_information_cpp(report_dict, out_dir)
-    elif language == 'jvm':
+    if language == "c-cpp":
+        return _extract_test_information_cpp(
+            report_dict,
+            out_dir,
+            exclude_patterns=exclude_patterns,
+            source_files=source_files,
+        )
+    elif language == "jvm":
         return _extract_test_information_jvm()
     else:
         # Currently only support c-cpp or jvm project
         return set()
 
 
-def _extract_test_information_cpp(report_dict, out_dir):
+def _extract_test_information_cpp(
+    report_dict,
+    out_dir,
+    exclude_patterns=None,
+    source_files: set[str] | None = None,
+):
     """Correlates function data collected by debug information to function
     data collected by LLVMs module, and uses the correlated data to generate
     function signatures for each function based on debug information."""
 
     # Find header files
     normalized_paths = set()
-    for header_file in report_dict.get('all_files_in_project', []):
-        normalized_paths.add(os.path.normpath(header_file['source_file']))
+    for header_file in report_dict.get("all_files_in_project", []):
+        normalized_paths.add(os.path.normpath(header_file["source_file"]))
 
     directories = set()
 
-    # If this is run locally and not in OSS-Fuzz, let's skip for now.
-    if not os.path.isdir('/src/'):
-        return directories
-
     # All directories added
     for path in normalized_paths:
-        if path.startswith('/usr/'):
+        if path.startswith("/usr/"):
             continue
-        if path.startswith('/tmp/inspector-saved/'):
+        if path.startswith("/tmp/inspector-saved/"):
             continue
-        directories.add('/'.join(path.split('/')[:-1]))
-    return extract_tests_from_directories(directories, 'c-cpp', out_dir)
+        directories.add("/".join(path.split("/")[:-1]))
+    return extract_tests_from_directories(
+        directories,
+        "c-cpp",
+        out_dir,
+        pre_scanned_files=source_files,
+        exclude_patterns=exclude_patterns,
+    )
 
 
-def extract_tests_from_directories(directories,
-                                   language,
-                                   out_dir,
-                                   need_copy=True) -> Set[str]:
+def extract_tests_from_directories(
+    directories,
+    language,
+    out_dir,
+    need_copy=True,
+    exclude_patterns=None,
+    pre_scanned_files: set[str] | None = None,
+) -> Set[str]:
     """Extracts test files from a given collection of directory paths and also
     copies them to the `constants.SAVED_SOURCE_FOLDER` folder with the same
     absolute path appended."""
-    all_directories = set()
-    all_files_in_subtree = set()
-    for directory in directories:
-        for root, _, files in os.walk(directory):
-            for f in files:
-                file_path = os.path.join(root, f)
-                all_files_in_subtree.add(file_path)
-
-                assembled_dir = '/'
-                for dd2 in file_path.split('/'):
-                    # Skip empty dd2
-                    if not dd2:
-                        continue
-
-                    # Skip hidden directories
-                    if dd2.startswith('.'):
-                        break
-
-                    assembled_dir += dd2
-                    if os.path.isdir(assembled_dir
-                                     ) and assembled_dir.startswith(directory):
-                        all_directories.add(assembled_dir)
-                    assembled_dir += '/'
+    file_count = 0
 
     inspirations = ["sample", "test", "example"]
-    all_inspiration_dirs = set()
-    for directory in all_directories:
-        if any(ins in directory for ins in inspirations):
-            all_inspiration_dirs.add(directory)
 
-    if language == 'jvm':
+    normalized_directories = set()
+    for directory in directories:
+        normalized_directories.add(os.path.normpath(directory))
+
+    seed_directories: list[str] = []
+    for directory in sorted(normalized_directories, key=len):
+        is_sub_directory = False
+        for seed_directory in seed_directories:
+            if directory == seed_directory or directory.startswith(
+                    seed_directory + os.sep):
+                is_sub_directory = True
+                break
+        if not is_sub_directory:
+            seed_directories.append(directory)
+
+    if language == "jvm":
         # Get all jvm source files
-        test_extensions = ['.java', '.scala', '.sc', '.groovy', '.kt', '.kts']
-    elif language == 'python':
+        test_extensions = [".java", ".scala", ".sc", ".groovy", ".kt", ".kts"]
+    elif language == "python":
         # Get all python source files
-        test_extensions = ['.py']
-    elif language == 'rust':
+        test_extensions = [".py"]
+    elif language == "rust":
         # Get all rust source files
-        test_extensions = ['.rs']
-    elif language == 'go':
-        test_extensions = ['.go', '.cgo']
+        test_extensions = [".rs"]
+    elif language == "go":
+        test_extensions = [".go", ".cgo"]
     else:
         # Get all c/cpp source files
-        test_extensions = ['.cc', '.cpp', '.cxx', '.c++', '.c']
+        test_extensions = [".cc", ".cpp", ".cxx", ".c++", ".c"]
 
     all_test_files = set()
-    to_avoid = [
-        'fuzztest', 'aflplusplus', 'libfuzzer', 'googletest', 'thirdparty',
-        'third_party', '/build/', '/usr/local/', '/fuzz-introspector/',
-        '/root/.cache/', '/usr/', '/tmp/', '/src/inspector'
-    ]
-    for directory in all_inspiration_dirs:
-        for root, dirs, files in os.walk(directory):
-            for f in files:
-                if not any(f.endswith(ext) for ext in test_extensions):
-                    continue
-                # Absolute path
-                absolute_path = os.path.join(root, f)
-                if any([avoid in absolute_path for avoid in to_avoid]):
-                    continue
-                if absolute_path.startswith('/out/'):
-                    continue
-                if absolute_path.startswith('/src/inspector/'):
-                    continue
-                try:
-                    with open(absolute_path, 'r') as file_fp:
-                        if 'LLVMFuzzerTestOneInput' in file_fp.read():
-                            continue
-                        # For rust projects
-                        if 'fuzz_target' in file_fp.read():
-                            continue
-                        # For python projects
-                        if '.Fuzz()' in file_fp.read():
-                            continue
-                        # For jvm projects
-                        if 'fuzzerTestOneInput' in file_fp.read():
-                            continue
-                        # For go projects
-                        if 'Fuzz' in file_fp.read():
-                            continue
-                except UnicodeDecodeError:
-                    continue
-                all_test_files.add(absolute_path)
+    compiled_exclude_patterns = []
+    for pattern in exclude_patterns or []:
+        try:
+            compiled_exclude_patterns.append(re.compile(pattern))
+        except re.error as err:
+            logger.warning("Invalid exclude pattern %s: %s", pattern, err)
 
-    # Iterate through all directories and search for files with test in them.
-    for directory in all_directories:
-        for root, dirs, files in os.walk(directory):
-            for f in files:
-                if not any(f.endswith(ext) for ext in test_extensions):
-                    continue
-                # Absolute path
-                absolute_path = os.path.join(root, f)
-                if any([avoid in absolute_path for avoid in to_avoid]):
-                    continue
-                if absolute_path.startswith('/out/'):
-                    continue
-                if absolute_path.startswith('/src/inspector/'):
-                    continue
-                if absolute_path.startswith('/usr/'):
-                    continue
-                if "test" in f:
-                    all_test_files.add(absolute_path)
+    to_avoid = [
+        "fuzztest",
+        "aflplusplus",
+        "libfuzzer",
+        "googletest",
+        "thirdparty",
+        "third_party",
+        "/build/",
+        "/usr/local/",
+        "/fuzz-introspector/",
+        "/root/.cache/",
+        "/usr/",
+        "/tmp/",
+        "/src/inspector",
+    ]
+
+    def is_excluded_by_pattern(path):
+        normalized_path = os.path.normpath(path)
+        for pattern in compiled_exclude_patterns:
+            if pattern.search(normalized_path):
+                return True
+        return False
+
+    def is_candidate_source(absolute_path):
+        if is_excluded_by_pattern(absolute_path):
+            return False
+        if any([avoid in absolute_path for avoid in to_avoid]):
+            return False
+        if absolute_path.startswith("/out/"):
+            return False
+        if absolute_path.startswith("/src/inspector/"):
+            return False
+        if absolute_path.startswith("/usr/"):
+            return False
+        return True
+
+    def is_non_fuzz_harness(absolute_path):
+        max_read_bytes = 64 * 1024
+        try:
+            with open(absolute_path, "r") as file_fp:
+                content = file_fp.read(max_read_bytes)
+                if "LLVMFuzzerTestOneInput" in content:
+                    return False
+                # For rust projects
+                if "fuzz_target" in content:
+                    return False
+                # For python projects
+                if ".Fuzz()" in content:
+                    return False
+                # For jvm projects
+                if "fuzzerTestOneInput" in content:
+                    return False
+                # For go projects
+                if "Fuzz" in content:
+                    return False
+        except UnicodeDecodeError:
+            return False
+        return True
+
+    file_extensions = tuple(test_extensions)
+
+    def _is_in_seed_directory(path: str) -> bool:
+        if not path:
+            return False
+        for directory in seed_directories:
+            normalized_directory = os.path.normpath(directory)
+            directory_prefix = (normalized_directory
+                                if normalized_directory.endswith(os.sep) else
+                                normalized_directory + os.sep)
+            if path == normalized_directory or path.startswith(
+                    directory_prefix):
+                return True
+        return False
+
+    if pre_scanned_files is not None:
+        for absolute_path in pre_scanned_files:
+            normalized_path = os.path.normpath(absolute_path)
+            if not _is_in_seed_directory(normalized_path):
+                continue
+            if not normalized_path.endswith(file_extensions):
+                continue
+            if not is_candidate_source(normalized_path):
+                continue
+
+            file_name = os.path.basename(normalized_path)
+            if "test" in file_name:
+                all_test_files.add(normalized_path)
+                continue
+
+            root = os.path.dirname(normalized_path)
+            if any(ins in root for ins in
+                   inspirations) and is_non_fuzz_harness(normalized_path):
+                all_test_files.add(normalized_path)
+    else:
+        # Traverse each seed directory once and apply both matching heuristics.
+        for directory in seed_directories:
+            for root, dirs, files in os.walk(directory):
+                dirs[:] = [
+                    d for d in dirs if not d.startswith(".")
+                    and is_candidate_source(os.path.join(root, d))
+                ]
+
+                # Progress logging for long scans
+                file_count += len(files)
+                if file_count % 5000 == 0:
+                    logger.info(
+                        "extract_tests_from_directories: scanned %d files...",
+                        file_count)
+
+                is_inspiration_root = any(ins in root for ins in inspirations)
+                for f in files:
+                    if not f.endswith(file_extensions):
+                        continue
+                    # Absolute path
+                    absolute_path = os.path.join(root, f)
+                    if not is_candidate_source(absolute_path):
+                        continue
+
+                    if "test" in f:
+                        all_test_files.add(absolute_path)
+                        continue
+
+                    if is_inspiration_root and is_non_fuzz_harness(
+                            absolute_path):
+                        all_test_files.add(absolute_path)
     new_test_files = set()
     for test_file in all_test_files:
-        if test_file.startswith('//'):
+        if test_file.startswith("//"):
             test_file = test_file[1:]
         new_test_files.add(test_file)
     all_test_files = new_test_files
@@ -1264,7 +1842,7 @@ def extract_tests_from_directories(directories,
         logger.info(test_file)
         if need_copy:
             dst = os.path.join(out_dir,
-                               constants.SAVED_SOURCE_FOLDER + '/' + test_file)
+                               constants.SAVED_SOURCE_FOLDER + "/" + test_file)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy(test_file, dst)
 
@@ -1279,12 +1857,12 @@ def _extract_test_information_jvm():
     code to locate extra example source files."""
 
     all_test_files = set()
-    source_code_extensions = ('.java', '.scala', '.sc', '.kt', '.kts',
-                              '.groovy')
-    inspirations = ['sample', 'example', 'documentation', 'demo']
+    source_code_extensions = (".java", ".scala", ".sc", ".kt", ".kts",
+                              ".groovy")
+    inspirations = ["sample", "example", "documentation", "demo"]
 
     # Java project source code is meant to exist in the $SRC directory
-    base_dir = os.path.abspath(os.environ.get('SRC', '/src'))
+    base_dir = os.path.abspath(os.environ.get("SRC", "/src"))
 
     # Walk through all directories under $SRC and locate all standard directories
     # of /src/main/java and /src/test/java for Java source and test files. Also
@@ -1293,9 +1871,9 @@ def _extract_test_information_jvm():
     test_paths = set()
     sample_paths = set()
     for root, _, _ in os.walk(base_dir):
-        if root.endswith('src/main/java'):
+        if root.endswith("src/main/java"):
             source_paths.add(root)
-        if root.endswith('src/test/java'):
+        if root.endswith("src/test/java"):
             test_paths.add(root)
         if any(inspiration in root for inspiration in inspirations):
             sample_paths.add(root)
@@ -1306,7 +1884,7 @@ def _extract_test_information_jvm():
             for file in files:
                 if file.endswith(source_code_extensions):
                     path = os.path.join(root,
-                                        file).replace(f'{test_path}/', '')
+                                        file).replace(f"{test_path}/", "")
                     all_test_files.add(path)
 
     # Walk through all the packages under source paths and locate example sources
@@ -1316,7 +1894,7 @@ def _extract_test_information_jvm():
                 if file.endswith(source_code_extensions) and any(
                         inspiration in file for inspiration in inspirations):
                     path = os.path.join(root,
-                                        file).replace(f'{source_path}/', '')
+                                        file).replace(f"{source_path}/", "")
                     all_test_files.add(path)
 
     # Walk through all the files under possible sample path and locate example sources
@@ -1325,32 +1903,32 @@ def _extract_test_information_jvm():
             for file in files:
                 if file.endswith(source_code_extensions):
                     path = os.path.join(root,
-                                        file).replace(f'{sample_path}/', '')
+                                        file).replace(f"{sample_path}/", "")
                     all_test_files.add(path)
 
     return all_test_files
 
 
-def light_correlate_source_to_executable(language):
+def light_correlate_source_to_executable(language, exclude_patterns=None):
     """Extracts pairs of harness source/executable"""
-    if language == 'jvm' or language == 'python':
+    if language == "jvm" or language == "python":
         # Skip this step for jvm or python projects
         return []
 
-    out_dir = os.getenv('OUT', '/out/')
-    textcov_dir = os.path.join(out_dir, 'textcov_reports')
+    out_dir = os.getenv("OUT", "/out/")
+    textcov_dir = os.path.join(out_dir, "textcov_reports")
 
     if not os.path.isdir(textcov_dir):
         return []
 
     cov_reports = []
     for cov_report in os.listdir(textcov_dir):
-        if cov_report.endswith('.covreport'):
+        if cov_report.endswith(".covreport"):
             cov_reports.append(os.path.join(textcov_dir, cov_report))
     for cov_report in cov_reports:
-        print('- cov report: %s' % (cov_report))
+        print("- cov report: %s" % (cov_report))
 
-    all_source_files = extract_all_sources(language)
+    all_source_files = extract_all_sources(language, exclude_patterns)
     pairs = []
     # Match based on file names. This should be the most primitive but
     # will catch a large number of targets
@@ -1364,8 +1942,8 @@ def light_correlate_source_to_executable(language):
                 matches.add(cov_report_base)
         if len(matches) == 1:
             pairs.append({
-                'harness_source': source_file,
-                'harness_executable': matches.pop()
+                "harness_source": source_file,
+                "harness_executable": matches.pop()
             })
 
     return pairs

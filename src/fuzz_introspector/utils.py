@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Utility functions """
+"""Utility functions"""
 
 import cxxfilt
 import rust_demangler
@@ -31,6 +31,10 @@ from fuzz_introspector import constants
 
 logger = logging.getLogger(name=__name__)
 
+_PYTHON_HTML_STATUS_CACHE: dict[str, Any] = {}
+_PYTHON_HTML_STATUS_INDEX_CACHE: dict[str, str] = {}
+_GO_COVERAGE_OPTIONS_CACHE: dict[str, Any] = {}
+
 
 def longest_common_prefix(strs: list[str]) -> str:
     """
@@ -40,12 +44,12 @@ def longest_common_prefix(strs: list[str]) -> str:
     try:
         return os.path.commonpath(strs)
     except ValueError:
-        return '/'
+        return "/"
 
 
 def normalise_str(s1: str) -> str:
-    return s1.replace('\t', '').replace('\r', '').replace('\n',
-                                                          '').replace(' ', '')
+    return s1.replace("\t", "").replace("\r", "").replace("\n",
+                                                          "").replace(" ", "")
 
 
 def safe_decode(data) -> Optional[str]:
@@ -55,7 +59,7 @@ def safe_decode(data) -> Optional[str]:
     except Exception:
         pass
     try:
-        return data.decode('unicode-escape')
+        return data.decode("unicode-escape")
     except Exception:
         pass
 
@@ -82,21 +86,21 @@ def data_file_read_yaml(filename: str) -> Optional[dict[Any, Any]]:
     Reads a file as a yaml file. This is used to load data
     from fuzz-introspectors compiler plugin output.
     """
-    if filename == '':
+    if filename == "":
         return None
     if not os.path.isfile(filename):
         return None
 
     try:
         yaml.SafeLoader = yaml.CSafeLoader  # type: ignore[assignment, misc]
-        logger.info('Set base loader to use CSafeLoader')
+        logger.info("Set base loader to use CSafeLoader")
     except Exception:
-        logger.info('Could not set CSafeLoader as base loader')
+        logger.info("Could not set CSafeLoader as base loader")
 
     try:
-        with open(filename, 'r') as stream:
+        with open(filename, "r") as stream:
             data_dict: dict[Any, Any] = yaml.safe_load(stream)
-            logger.info('Loaded single yaml module')
+            logger.info("Loaded single yaml module")
             return data_dict
     except Exception:
         # YAML library does not completely wrap exceptions, so unless
@@ -107,15 +111,15 @@ def data_file_read_yaml(filename: str) -> Optional[dict[Any, Any]]:
 
     # Try loading multiple yaml files in the fuzz introspector format
     # We need this because we have different formats for each language.
-    logger.info('Trying to load multiple file formats together.')
+    logger.info("Trying to load multiple file formats together.")
     try:
-        with open(filename, 'r') as yaml_f:
+        with open(filename, "r") as yaml_f:
             data = yaml_f.read()
             docs = yaml.safe_load_all(data)
     except Exception as e:
         # YAML library does not completely wrap exceptions, so unless
         # we catch all exceptions here we might end up in a crashing state.
-        logger.info('Failed loading YAML: %s', str(e))
+        logger.info("Failed loading YAML: %s", str(e))
         return None
 
     content = {}
@@ -123,30 +127,30 @@ def data_file_read_yaml(filename: str) -> Optional[dict[Any, Any]]:
         for doc in docs:
             if not doc or not isinstance(doc, dict):
                 return None
-            if 'Fuzzer filename' in doc and 'Fuzzer filename' not in content:
-                content['Fuzzer filename'] = doc['Fuzzer filename']
-            if 'All functions' in doc:
-                if 'All functions' not in content:
-                    content['All functions'] = doc['All functions']
+            if "Fuzzer filename" in doc and "Fuzzer filename" not in content:
+                content["Fuzzer filename"] = doc["Fuzzer filename"]
+            if "All functions" in doc:
+                if "All functions" not in content:
+                    content["All functions"] = doc["All functions"]
                 else:
-                    content['All functions']['Elements'].extend(
-                        doc['All functions']['Elements'])
+                    content["All functions"]["Elements"].extend(
+                        doc["All functions"]["Elements"])
     except Exception as e:
         # YAML library does not completely wrap exceptions, so unless
         # we catch all exceptions here we might end up in a crashing state.
-        logger.info('Failed loading YAML: %s', str(e))
+        logger.info("Failed loading YAML: %s", str(e))
         return None
 
-    if 'Fuzzer filename' not in content:
+    if "Fuzzer filename" not in content:
         return None
-    if 'All functions' not in content:
+    if "All functions" not in content:
         return None
     return content
 
 
 def demangle_cpp_func(funcname: str) -> str:
     try:
-        demangled: str = cxxfilt.demangle(funcname.replace(' ', ''))
+        demangled: str = cxxfilt.demangle(funcname.replace(" ", ""))
         return demangled
     except Exception:
         return funcname
@@ -156,12 +160,12 @@ def demangle_rust_func(funcname: str) -> str:
     """Demangle the mangled rust function names."""
     # Ignore all non-mangled rust function names
     # All mangled rust function names started with _R
-    if not funcname.startswith('_R'):
+    if not funcname.startswith("_R"):
         return funcname
 
     try:
-        demangled: str = rust_demangler.demangle(funcname.replace(' ', ''))
-        demangled = demangled.replace('<', '').replace('>', '')
+        demangled: str = rust_demangler.demangle(funcname.replace(" ", ""))
+        demangled = demangled.replace("<", "").replace(">", "")
         return demangled
     except Exception:
         return funcname
@@ -169,16 +173,16 @@ def demangle_rust_func(funcname: str) -> str:
 
 def demangle_jvm_func(package: str, funcname: str) -> str:
     """Add package class name to uniquly identify jvm functons"""
-    if funcname.startswith('['):
+    if funcname.startswith("["):
         return funcname
 
-    return f'[{package}].{funcname}'
+    return f"[{package}].{funcname}"
 
 
 def remove_jvm_generics(funcname: str) -> str:
     """Remove generic arguments from the full jvm method name."""
-    pattern = r'<[\s.,a-zA-Z0-9]+>|\\u003C[\s.,a-zA-Z0-9]+\\u003E'
-    return re.sub(pattern, '', funcname)
+    pattern = r"<[\s.,a-zA-Z0-9]+>|\\u003C[\s.,a-zA-Z0-9]+\\u003E"
+    return re.sub(pattern, "", funcname)
 
 
 def scan_executables_for_fuzz_introspector_logs(
@@ -200,25 +204,25 @@ def scan_executables_for_fuzz_introspector_logs(
     for f in os.listdir(exec_dir):
         full_path = os.path.join(exec_dir, f)
         if os.access(full_path, os.X_OK) and os.path.isfile(full_path):
-            logger.info('File: %s is executable', full_path)
+            logger.info("File: %s is executable", full_path)
             executable_files.append(full_path)
 
     # Filter all executables containing "fuzzerLogFile" string
     executable_to_fuzz_reports = []
-    text_pattern = re.compile('[A-Za-z0-9_-]{10,}')
+    text_pattern = re.compile("[A-Za-z0-9_-]{10,}")
     for executable_path in executable_files:
-        with open(executable_path, 'rb') as fp:
-            all_ascii_data = fp.read().decode('ascii', 'ignore')
+        with open(executable_path, "rb") as fp:
+            all_ascii_data = fp.read().decode("ascii", "ignore")
 
         # Check if file contains fuzzerLogFile string
         for re_match in text_pattern.finditer(all_ascii_data):
             found_str = re_match.group(0)
-            if 'fuzzerLogFile' not in found_str:
+            if "fuzzerLogFile" not in found_str:
                 continue
-            logger.info('Found match %s', found_str)
+            logger.info("Found match %s", found_str)
             executable_to_fuzz_reports.append({
-                'executable_path': executable_path,
-                'fuzzer_log_file': found_str
+                "executable_path": executable_path,
+                "fuzzer_log_file": found_str
             })
             # Break when a string is found to avoid scanning the whole binary.
             break
@@ -232,19 +236,19 @@ def approximate_python_coverage_files_list(
         resolve_inits=False) -> Optional[str]:
     """Approximate python coverage file list from source."""
     # Remove prefixed .....
-    src1 = src1.lstrip('.')
+    src1 = src1.lstrip(".")
 
     # Generate list of potential candidates
     possible_candidates = []
     possible_init_candidates = []
-    splits = src1.split('.')
-    curr_str = ''
+    splits = src1.split(".")
+    curr_str = ""
     for s2 in splits:
         curr_str = curr_str + s2
-        possible_candidates.append(curr_str + '.py')
-        possible_init_candidates.append(curr_str + '/__init__.py')
-        curr_str = curr_str + '/'
-    logger.debug('[%s] -- Created init candidates: %s', src1,
+        possible_candidates.append(curr_str + ".py")
+        possible_init_candidates.append(curr_str + "/__init__.py")
+        curr_str = curr_str + "/"
+    logger.debug("[%s] -- Created init candidates: %s", src1,
                  str(possible_init_candidates))
 
     # Start from backwards to find te longest possible candidate
@@ -253,9 +257,9 @@ def approximate_python_coverage_files_list(
             if src2.endswith(candidate):
                 # Ensure the entire filename is matched in the event
                 # of not slashes
-                if '/' not in candidate and src2.split('/')[-1] != candidate:
+                if "/" not in candidate and src2.split("/")[-1] != candidate:
                     continue
-                logger.debug('Found target: %s', candidate)
+                logger.debug("Found target: %s", candidate)
                 return fl
 
     # Will only get to hear if none of the above candidates matched. This
@@ -266,12 +270,12 @@ def approximate_python_coverage_files_list(
                 if src2.endswith(init_candidate):
                     # Ensure the entire filename is matched in the event
                     # of not slashes
-                    split = src2.split('/')[-1]
-                    if '/' not in init_candidate and split != init_candidate:
+                    split = src2.split("/")[-1]
+                    if "/" not in init_candidate and split != init_candidate:
                         continue
-                    logger.debug('Found target: %s', init_candidate)
+                    logger.debug("Found target: %s", init_candidate)
                     return fl
-    logger.debug('Could not find target')
+    logger.debug("Could not find target")
     return None
 
 
@@ -283,16 +287,16 @@ def get_target_coverage_url(coverage_url: str, target_name: str,
         to
         https://storage.googleapis.com/oss-fuzz-coverage/<project>/reports-by-target/<report-date>/<target-name>/linux
     """
-    logger.info('Extracting coverage for %s -- %s', coverage_url, target_name)
-    if os.environ.get('FUZZ_INTROSPECTOR'):
-        if target_lang == 'c-cpp':
-            return coverage_url.replace('reports',
-                                        'reports-by-target').replace(
-                                            '/linux', f'/{target_name}/linux')
-        if target_lang == 'python':
+    logger.info("Extracting coverage for %s -- %s", coverage_url, target_name)
+    if os.environ.get("FUZZ_INTROSPECTOR"):
+        if target_lang == "c-cpp":
+            return coverage_url.replace("reports",
+                                        "reports-by-target").replace(
+                                            "/linux", f"/{target_name}/linux")
+        if target_lang == "python":
             # TODO ADD python coverage link
             return coverage_url
-        if target_lang == 'jvm':
+        if target_lang == "jvm":
             # TODO Add jvm coverage link
             return coverage_url
     # (TODO) This is temporary for local runs.
@@ -307,8 +311,8 @@ def load_func_names(input_list: list[str],
     """
     loaded = []
     for reached in input_list:
-        if (check_for_blocking
-                and constants.BLOCKLISTED_FUNCTION_NAMES.match(reached)):
+        if check_for_blocking and constants.BLOCKLISTED_FUNCTION_NAMES.match(
+                reached):
             continue
         loaded.append(demangle_rust_func(demangle_cpp_func(reached)))
     return loaded
@@ -317,79 +321,155 @@ def load_func_names(input_list: list[str],
 def resolve_coverage_link(cov_url: str, source_file: str, lineno: int,
                           function_name: str, target_lang: str) -> str:
     """Resolves link to HTML coverage report for different languages"""
-    result = '#'
-    if target_lang in ['c-cpp', 'rust']:
-        result = source_file + '.html#L' + str(lineno)
-    elif target_lang == 'python':
+    result = "#"
+    if target_lang in ["c-cpp", "rust"]:
+        result = source_file + ".html#L" + str(lineno)
+    elif target_lang == "python":
         # Temporarily for debugging purposes. TODO: David remove this later
         # Find the html_status.json file. This is a file generated by the Python
         # coverate utility and contains mappings from source to html file. We
         # need this mapping in order to create links from the data extracted
         # during AST analysis, as there we only have the source code.
-        html_summaries = get_all_files_in_tree_with_regex(
-            '.', '.*html_status.json$')
-        logger.debug(str(html_summaries))
-        if len(html_summaries) > 0:
-            html_idx = html_summaries[0]
-            with open(html_idx, 'r') as jf:
-                data = json.load(jf)
-            possible_targets = []
-            for fl in data['files']:
-                possible_targets.append(
-                    (fl, data['files'][fl]['index']['relative_filename']))
-
+        possible_targets = _load_python_html_status_targets()
+        if len(possible_targets) > 0:
             found_target = approximate_python_coverage_files_list(
                 function_name, possible_targets, True)
             if found_target is not None:
-                result = found_target + '.html' + '#t' + str(lineno)
+                result = found_target + ".html" + "#t" + str(lineno)
         else:
-            logger.info('Could not find any html_status.json file')
-    elif target_lang == 'jvm':
+            logger.info("Could not find any html_status.json file")
+    elif target_lang == "jvm":
         # Retrieve class name for jvm function
-        match = re.search(r'\[(.*?)\]\.', function_name)
+        match = re.search(r"\[(.*?)\]\.", function_name)
         source_file = match.group(1) if match else source_file
 
         # Handle source class for jvm
-        if '.' in source_file:
+        if "." in source_file:
             # Source file has package, change package.class to package/class
-            source_file = os.sep.join(source_file.rsplit('.', 1))
+            source_file = os.sep.join(source_file.rsplit(".", 1))
         else:
             # Source file has no package, add in default package
-            source_file = os.path.join('default', source_file)
+            source_file = os.path.join("default", source_file)
 
         # Handle subclass definition in the same source file
-        source_file = source_file.split('$')[0]
+        source_file = source_file.split("$")[0]
 
-        result = source_file + '.java.html#L' + str(lineno)
-    elif target_lang == 'go':
+        result = source_file + ".java.html#L" + str(lineno)
+    elif target_lang == "go":
         # Go coverage report only have a single page with no line index
-        result = 'index.html'
+        result = "index.html"
 
         # Read the single coverage report html for processing
-        report_html = ''
-        report_path = os.path.join(os.environ.get('OUT', ''), 'report',
-                                   'linux', 'index.html')
-        if os.path.isfile(report_path):
-            with open(report_path, 'r') as f:
-                report_html = f.read()
-
-        # Obtain the correct file value for the needed source code file
-        if report_html:
-            soup = BeautifulSoup(report_html, 'html.parser')
-            select_element = soup.find('select', id='files')
-            for option in select_element.find_all('option'):
-                key = option['value']
-                file = option.text.strip().split(' ')[0]
-                if file.endswith(source_file):
-                    result = f'{result}#{key}'
-                    break
+        report_path = os.path.join(os.environ.get("OUT", ""), "report",
+                                   "linux", "index.html")
+        go_options = _load_go_coverage_options(report_path)
+        for file_name, file_key in go_options:
+            if file_name.endswith(source_file):
+                result = f"{result}#{file_key}"
+                break
     else:
-        logger.info('Unsupported language for coverage link resolve')
+        logger.info("Unsupported language for coverage link resolve")
 
-    if result != '#':
-        result = cov_url.rstrip('/') + '/' + result.lstrip('/')
+    if result != "#":
+        result = cov_url.rstrip("/") + "/" + result.lstrip("/")
 
     return result
+
+
+def _load_python_html_status_targets() -> list[tuple[str, str]]:
+    html_idx = _load_python_html_status_index(".")
+    if html_idx is None:
+        return []
+
+    cache_key = _get_file_cache_key(html_idx)
+    if cache_key is None:
+        return []
+
+    cached = _PYTHON_HTML_STATUS_CACHE.get(html_idx)
+    if cached is not None and cached.get("cache_key") == cache_key:
+        return cached["possible_targets"]
+
+    with open(html_idx, "r") as jf:
+        data = json.load(jf)
+
+    possible_targets = []
+    for fl in data.get("files", {}):
+        target = data["files"][fl].get("index", {}).get("relative_filename")
+        if target is not None:
+            possible_targets.append((fl, target))
+
+    _PYTHON_HTML_STATUS_CACHE[html_idx] = {
+        "cache_key": cache_key,
+        "possible_targets": possible_targets,
+    }
+    return possible_targets
+
+
+def _load_python_html_status_index(search_root: str) -> Optional[str]:
+    cached_html_idx = _PYTHON_HTML_STATUS_INDEX_CACHE.get(search_root)
+    if cached_html_idx is not None:
+        if os.path.isfile(cached_html_idx):
+            return cached_html_idx
+        del _PYTHON_HTML_STATUS_INDEX_CACHE[search_root]
+
+    html_summaries = get_all_files_in_tree_with_regex(search_root,
+                                                      ".*html_status.json$")
+    logger.debug(str(html_summaries))
+    if len(html_summaries) == 0:
+        return None
+
+    html_idx = html_summaries[0]
+    _PYTHON_HTML_STATUS_INDEX_CACHE[search_root] = html_idx
+    return html_idx
+
+
+def _load_go_coverage_options(report_path: str) -> list[tuple[str, str]]:
+    if not os.path.isfile(report_path):
+        return []
+
+    cache_key = _get_file_cache_key(report_path)
+    if cache_key is None:
+        return []
+
+    cached = _GO_COVERAGE_OPTIONS_CACHE.get(report_path)
+    if cached is not None and cached.get("cache_key") == cache_key:
+        return cached["options"]
+
+    with open(report_path, "r") as report_file:
+        report_html = report_file.read()
+
+    if not report_html:
+        return []
+
+    options: list[tuple[str, str]] = []
+    soup = BeautifulSoup(report_html, "html.parser")
+    select_element = soup.find("select", id="files")
+    if select_element is None:
+        return []
+
+    for option in select_element.find_all("option"):
+        file_key = option.get("value")
+        file_name = str(option.text).strip().split(" ")[0]
+        if file_key is None:
+            continue
+        options.append((file_name, str(file_key)))
+
+    _GO_COVERAGE_OPTIONS_CACHE[report_path] = {
+        "cache_key": cache_key,
+        "options": options,
+    }
+    return options
+
+
+def _get_file_cache_key(file_path: str) -> Optional[tuple[int, int]]:
+    if not os.path.isfile(file_path):
+        return None
+
+    try:
+        stat_result = os.stat(file_path)
+    except OSError:
+        return None
+    return stat_result.st_mtime_ns, stat_result.st_size
 
 
 def group_path_list_by_target(
@@ -414,8 +494,8 @@ def group_path_list_by_target(
 
 
 def check_coverage_link_existence(link: str) -> bool:
-    link = link.split('#')[0]
-    if link.startswith('/'):
+    link = link.split("#")[0]
+    if link.startswith("/"):
         link = link[1:]
     return os.path.exists(link) and os.path.isfile(link)
 
@@ -426,16 +506,16 @@ def _find_all_source_path(extension: str) -> set[str]:
     source_path_list = set()
 
     # Retrieve $OUT and $SRC from environment variables
-    out_dir = os.environ.get('OUT', None)
-    src_dir = os.environ.get('SRC', None)
-    logger.info('%s/%s', out_dir, src_dir)
+    out_dir = os.environ.get("OUT", None)
+    src_dir = os.environ.get("SRC", None)
+    logger.info("%s/%s", out_dir, src_dir)
     if out_dir and src_dir:
         # OSS-Fuzz store the source code in $OUT/$SRC directory
         path_to_search = os.path.join(out_dir, src_dir)
         if os.path.isdir(path_to_search):
             # Confirm that the source directory does exist
             for root, _, files in os.walk(path_to_search):
-                if '/.' in root:
+                if "/." in root:
                     # Skipping hidden directory
                     continue
                 for file in files:
@@ -447,20 +527,20 @@ def _find_all_source_path(extension: str) -> set[str]:
 
 def _copy_java_source_files(required_class_list: list[str], out_dir):
     """Copy the needed java source files."""
-    logger.info('Copying java source files to %s',
+    logger.info("Copying java source files to %s",
                 constants.SAVED_SOURCE_FOLDER)
 
     count = 0
-    java_source_path_set = _find_all_source_path('.java')
+    java_source_path_set = _find_all_source_path(".java")
 
     copied_source_path_list = []
     for required_class in set(required_class_list):
         # Remove inner class name
-        required_file = required_class.split('$', 1)[0]
+        required_file = required_class.split("$", 1)[0]
 
         # Transform class name to java source file name
-        if not required_file.endswith('.java'):
-            required_file = f'{required_file.replace(".", "/")}.java'
+        if not required_file.endswith(".java"):
+            required_file = f"{required_file.replace('.', '/')}.java"
 
         for java_source_path in java_source_path_set:
             if java_source_path.endswith(required_file):
@@ -480,26 +560,26 @@ def _copy_java_source_files(required_class_list: list[str], out_dir):
                 break
 
     if not count:
-        logger.info('No java source files copied.')
+        logger.info("No java source files copied.")
         return
 
     # Store a list of existing source file paths for reference
     with open(
-            os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER, 'index.json'),
-            'w') as f:
+            os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER, "index.json"),
+            "w") as f:
         f.write(json.dumps(copied_source_path_list))
 
-    logger.info('Copied %d java source files to %s', count,
+    logger.info("Copied %d java source files to %s", count,
                 constants.SAVED_SOURCE_FOLDER)
 
 
 def _copy_python_source_files(out_dir):
     """Copy the needed python source files."""
-    logger.info('Copying python source files to %s',
+    logger.info("Copying python source files to %s",
                 constants.SAVED_SOURCE_FOLDER)
 
     count = 0
-    python_source_path_set = _find_all_source_path('.py')
+    python_source_path_set = _find_all_source_path(".py")
     os.makedirs(os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER),
                 exist_ok=True)
 
@@ -518,26 +598,26 @@ def _copy_python_source_files(out_dir):
 
     # Store a list of existing source file paths for reference
     with open(
-            os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER, 'index.json'),
-            'w') as f:
+            os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER, "index.json"),
+            "w") as f:
         f.write(json.dumps(copied_source_path_list))
 
-    logger.info('Copied %d python source files to %s', count,
+    logger.info("Copied %d python source files to %s", count,
                 constants.SAVED_SOURCE_FOLDER)
 
 
 def copy_source_files(required_class_list: list[str],
                       language: str,
-                      out_dir: str = ''):
+                      out_dir: str = ""):
     """Copy the needed source files for different project.
     Currently only support Python and Java projects."""
 
-    if language == 'jvm':
+    if language == "jvm":
         _copy_java_source_files(required_class_list, out_dir)
-    elif language == 'python':
+    elif language == "python":
         _copy_python_source_files(out_dir)
     else:
-        logger.debug('Language: %s not support. Skipping source file copy.',
+        logger.debug("Language: %s not support. Skipping source file copy.",
                      language)
 
 
@@ -550,11 +630,11 @@ def locate_rust_fuzz_key(funcname: str, fuzz_map: dict[str,
         match = next((key for key in fuzz_map if key.endswith(funcname)), None)
         # Ensure the matched key contains crate information which is
         # unique for rust
-        if match and '::' in match:
+        if match and "::" in match:
             return match
 
-        if '::' in funcname:
-            funcname = funcname.split('::', 1)[1]
+        if "::" in funcname:
+            funcname = funcname.split("::", 1)[1]
         else:
             break
 
@@ -569,22 +649,25 @@ def locate_rust_fuzz_item(funcname: str, item_list: list[str]) -> str:
 
     while funcname:
         for item in item_list:
-            if item.endswith(funcname) and '::' in item:
+            if item.endswith(funcname) and "::" in item:
                 return item
 
-        if '::' in funcname:
-            funcname = funcname.split('::', 1)[1]
+        if "::" in funcname:
+            funcname = funcname.split("::", 1)[1]
         else:
             break
 
-    return ''
+    return ""
 
 
 def detect_language(directory) -> str:
     """Given a folder finds the likely programming language of the project"""
 
     paths_to_avoid = [
-        '/src/aflplusplus', '/src/honggfuzz', '/src/libfuzzer', '/src/fuzztest'
+        "/src/aflplusplus",
+        "/src/honggfuzz",
+        "/src/libfuzzer",
+        "/src/fuzztest",
     ]
 
     language_counts: dict[str, int] = {}
@@ -598,7 +681,7 @@ def detect_language(directory) -> str:
                     curr_count = language_counts.get(language, 0)
                     language_counts[language] = curr_count + 1
 
-    max_lang = ''
+    max_lang = ""
     max_count = -1
     for language, count in language_counts.items():
         if count >= max_count:

@@ -18,6 +18,7 @@ import sys
 import json
 import logging
 import re
+import threading
 
 from typing import (
     Any,
@@ -32,11 +33,14 @@ from fuzz_introspector import utils
 from fuzz_introspector import exceptions
 from fuzz_introspector.datatypes import function_profile
 
-COVERAGE_SWITCH_REGEX = re.compile(r'.*\|.*\sswitch.*\(.*\)')
-COVERAGE_CASE_REGEX = re.compile(r'.*\|.*\scase.*:')
-COVERAGE_BRANCH_REGEX = re.compile(r'.*\|.*\sBranch.*\(.*:.*\):')
+COVERAGE_SWITCH_REGEX = re.compile(r".*\|.*\sswitch.*\(.*\)")
+COVERAGE_CASE_REGEX = re.compile(r".*\|.*\scase.*:")
+COVERAGE_BRANCH_REGEX = re.compile(r".*\|.*\sBranch.*\(.*:.*\):")
 
 logger = logging.getLogger(name=__name__)
+LLVM_COVERAGE_CACHE_ENV = "FI_LLVM_COVERAGE_CACHE"
+_LLVM_COVERAGE_PROFILE_CACHE: Dict[Tuple[Any, ...], "CoverageProfile"] = {}
+_LLVM_COVERAGE_PROFILE_CACHE_LOCK = threading.Lock()
 
 
 class CoverageProfile:
@@ -62,6 +66,8 @@ class CoverageProfile:
         self.covmap: Dict[str, List[Tuple[int, int]]] = dict()
         self.file_map: Dict[str, List[Tuple[int, int]]] = dict()
         self.branch_cov_map: Dict[str, List[int]] = dict()
+        self._func_cov_key_cache: Dict[str, str] = dict()
+        self._func_cov_key_miss_cache: Dict[str, int] = dict()
         self._cov_type = ""
         self.coverage_files: List[str] = []
         self.dual_file_map: Dict[str, Dict[str, List[int]]] = dict()
@@ -69,6 +75,18 @@ class CoverageProfile:
 
     def set_type(self, cov_type: str) -> None:
         self._cov_type = cov_type
+
+    def clone_with_shared_data(self) -> "CoverageProfile":
+        """Create a lightweight profile that shares immutable coverage maps."""
+        profile = CoverageProfile()
+        profile.covmap = self.covmap
+        profile.file_map = self.file_map
+        profile.branch_cov_map = self.branch_cov_map
+        profile._cov_type = self._cov_type
+        profile.coverage_files = list(self.coverage_files)
+        profile.dual_file_map = self.dual_file_map
+        profile.kernel_coverage = self.kernel_coverage
+        return profile
 
     def get_type(self) -> str:
         return self._cov_type
@@ -83,21 +101,20 @@ class CoverageProfile:
             return 0
         lineno = node.src_linenumber
 
-        if target_file.startswith('../'):
+        if target_file.startswith("../"):
             target_file = target_file[3:]
 
         for cov_module in self.kernel_coverage:
-            if cov_module['Filename'].endswith(target_file):
+            if cov_module["Filename"].endswith(target_file):
                 # Check if the line is hit
                 for i in range(10):
-                    if lineno + i in cov_module.get('Covered', []):
+                    if lineno + i in cov_module.get("Covered", []):
                         return 100
         return 0
 
-    def is_file_lineno_hit(self,
-                           target_file: str,
-                           lineno: int,
-                           resolve_name: bool = False) -> bool:
+    def is_file_lineno_hit(
+        self, target_file: str, lineno: int, resolve_name: bool = False
+    ) -> bool:
         """Checks if a given linenumber in a file is hit.
 
         :param target_file: file to inspect
@@ -171,24 +188,55 @@ class CoverageProfile:
             was covered.
         """
         logger.debug(f"Getting coverage of {funcname}")
-        fuzz_key = None
-        if funcname in self.covmap:
-            fuzz_key = funcname
-        elif utils.demangle_cpp_func(funcname) in self.covmap:
-            fuzz_key = utils.demangle_cpp_func(funcname)
-        elif utils.normalise_str(funcname) in self.covmap:
-            fuzz_key = utils.normalise_str(funcname)
-        elif utils.remove_jvm_generics(funcname) in self.covmap:
-            fuzz_key = utils.remove_jvm_generics(funcname)
-        else:
-            # Handle special case for rust where crate is missing from function name
-            fuzz_key = utils.locate_rust_fuzz_key(
-                utils.demangle_rust_func(funcname), self.covmap)
+        fuzz_key = self._resolve_covmap_function_key(funcname)
 
         if fuzz_key is None or fuzz_key not in self.covmap:
             return []
 
         return self.covmap[fuzz_key]
+
+    def _resolve_covmap_function_key(self, funcname: str) -> Optional[str]:
+        covmap_size = len(self.covmap)
+        if self._func_cov_key_miss_cache.get(funcname) == covmap_size:
+            return None
+
+        cached_key = self._func_cov_key_cache.get(funcname)
+        if cached_key is not None and cached_key in self.covmap:
+            return cached_key
+
+        if funcname in self.covmap:
+            self._func_cov_key_cache[funcname] = funcname
+            self._func_cov_key_miss_cache.pop(funcname, None)
+            return funcname
+
+        candidate_key = utils.demangle_cpp_func(funcname)
+        if candidate_key in self.covmap:
+            self._func_cov_key_cache[funcname] = candidate_key
+            self._func_cov_key_miss_cache.pop(funcname, None)
+            return candidate_key
+
+        candidate_key = utils.normalise_str(funcname)
+        if candidate_key in self.covmap:
+            self._func_cov_key_cache[funcname] = candidate_key
+            self._func_cov_key_miss_cache.pop(funcname, None)
+            return candidate_key
+
+        candidate_key = utils.remove_jvm_generics(funcname)
+        if candidate_key in self.covmap:
+            self._func_cov_key_cache[funcname] = candidate_key
+            self._func_cov_key_miss_cache.pop(funcname, None)
+            return candidate_key
+
+        # Handle special case for rust where crate is missing from function name
+        rust_funcname = utils.demangle_rust_func(funcname)
+        rust_key = utils.locate_rust_fuzz_key(rust_funcname, self.covmap)
+        if rust_key is not None:
+            self._func_cov_key_cache[funcname] = rust_key
+            self._func_cov_key_miss_cache.pop(funcname, None)
+            return rust_key
+
+        self._func_cov_key_miss_cache[funcname] = covmap_size
+        return None
 
     def _python_ast_funcname_to_cov_file(self, function_name) -> Optional[str]:
         """Convert a Python module path to a given file, and searches the
@@ -235,8 +283,7 @@ class CoverageProfile:
             for potential_key in self.file_map:
                 logger.debug("Scanning %s", str(potential_key))
                 if potential_key.endswith(potential_init_path):
-                    logger.debug("Found __init__ match: %s",
-                                 str(potential_key))
+                    logger.debug("Found __init__ match: %s", str(potential_key))
                     init_matches.append(potential_key)
 
         # Return the last match, as this signals the path with most precise
@@ -258,8 +305,7 @@ class CoverageProfile:
         function_internals: Dict[str, List[Tuple[str, int, int]]] = dict()
         for cov_file, function_specs in file_and_function_mappings.items():
             # Sort by line number
-            sorted_func_specs = list(sorted(function_specs,
-                                            key=lambda x: x[1]))
+            sorted_func_specs = list(sorted(function_specs, key=lambda x: x[1]))
 
             function_internals[cov_file] = []
             for i in range(len(sorted_func_specs)):
@@ -269,7 +315,8 @@ class CoverageProfile:
                 if i < len(sorted_func_specs) - 1:
                     fnext_name, fnext_start = sorted_func_specs[i + 1]
                     function_internals[cov_file].append(
-                        (fname, fstart, fnext_start - 1))
+                        (fname, fstart, fnext_start - 1)
+                    )
                 else:
                     # Last function identified by end lineno being -1
                     function_internals[cov_file].append((fname, fstart, -1))
@@ -295,16 +342,14 @@ class CoverageProfile:
                     continue
 
                 # Create the covmap
-                for exec_line in self.dual_file_map[filename][
-                        'executed_lines']:
-                    if (exec_line > fstart) and (exec_line < fend
-                                                 or fend == -1):
+                for exec_line in self.dual_file_map[filename]["executed_lines"]:
+                    if (exec_line > fstart) and (exec_line < fend or fend == -1):
                         logger.debug("E: %s", exec_line)
                         self.covmap[fname].append((exec_line, 1000))
-                for non_exec_line in self.dual_file_map[filename][
-                        'missing_lines']:
-                    if (non_exec_line > fstart) and (non_exec_line < fend
-                                                     or fend == -1):
+                for non_exec_line in self.dual_file_map[filename]["missing_lines"]:
+                    if (non_exec_line > fstart) and (
+                        non_exec_line < fend or fend == -1
+                    ):
                         logger.debug("N: %s", non_exec_line)
                         self.covmap[fname].append((non_exec_line, 0))
 
@@ -324,8 +369,7 @@ class CoverageProfile:
             function_name = func.function_name
             function_line = func.function_linenumber
 
-            logger.debug(
-                f"Correlated init: {function_name} ---- {function_line}")
+            logger.debug(f"Correlated init: {function_name} ---- {function_line}")
             cov_file = self._python_ast_funcname_to_cov_file(function_name)
             if cov_file is None:
                 continue
@@ -338,12 +382,10 @@ class CoverageProfile:
             if cov_file not in file_and_function_mappings:
                 file_and_function_mappings[cov_file] = []
 
-            file_and_function_mappings[cov_file].append(
-                (function_name, function_line))
+            file_and_function_mappings[cov_file].append((function_name, function_line))
 
         # Sort and retrieve line range of all functions
-        function_internals = self._retrieve_func_line(
-            file_and_function_mappings)
+        function_internals = self._retrieve_func_line(file_and_function_mappings)
 
         # Map the source codes of each line with coverage information.
         # Store the result in covmap to be compatible with other languages.
@@ -351,8 +393,7 @@ class CoverageProfile:
 
         return
 
-    def get_hit_summary(self,
-                        funcname: str) -> Tuple[Optional[int], Optional[int]]:
+    def get_hit_summary(self, funcname: str) -> Tuple[Optional[int], Optional[int]]:
         """Returns the hit summary of a give function.
 
         This should only be used for coverage profiles that are non-file type.
@@ -365,19 +406,7 @@ class CoverageProfile:
             the total amount of lines in a function and second element is the
             amount of lines in the function that are hit.
         """
-        fuzz_key = None
-        if funcname in self.covmap:
-            fuzz_key = funcname
-        elif utils.demangle_cpp_func(funcname) in self.covmap:
-            fuzz_key = utils.demangle_cpp_func(funcname)
-        elif utils.normalise_str(funcname) in self.covmap:
-            fuzz_key = utils.normalise_str(funcname)
-        elif utils.remove_jvm_generics(funcname) in self.covmap:
-            fuzz_key = utils.remove_jvm_generics(funcname)
-        else:
-            # Handle special case for rust where crate is missing from function name
-            fuzz_key = utils.locate_rust_fuzz_key(
-                utils.demangle_rust_func(funcname), self.covmap)
+        fuzz_key = self._resolve_covmap_function_key(funcname)
 
         if fuzz_key is None:
             return None, None
@@ -408,6 +437,14 @@ def extract_hitcount(coverage_line: str) -> int:
     coverage_line = coverage_line.strip()
     if len(coverage_line) == 0:
         return -1
+
+    # Handle scientific notation (e.g., 18.4E7, 1.5e6)
+    if "e" in coverage_line.lower():
+        try:
+            return int(float(coverage_line))
+        except Exception:
+            return -1
+
     unit = coverage_line[-1]
     if not unit.isalpha():
         try:
@@ -415,23 +452,22 @@ def extract_hitcount(coverage_line: str) -> int:
         except Exception:
             return -1
 
-    if unit not in ['k', 'M', 'G']:
-        logger.error(
-            f'Unexpected coverage count unit: {unit} as in {coverage_line}')
+    if unit not in ["k", "M", "G"]:
+        logger.error(f"Unexpected coverage count unit: {unit} as in {coverage_line}")
         return -1
     num = float(coverage_line[:-1])
-    if unit == 'k':
+    if unit == "k":
         num *= 1000
-    elif unit == 'M':
+    elif unit == "M":
         num *= 1000000
-    elif unit == 'G':
+    elif unit == "G":
         num *= 1000000000
     return int(num)
 
 
-def load_llvm_coverage(target_dir: str,
-                       target_name: Optional[str] = None,
-                       is_rust: bool = False) -> CoverageProfile:
+def load_llvm_coverage(
+    target_dir: str, target_name: Optional[str] = None, is_rust: bool = False
+) -> CoverageProfile:
     """
     Scans a directory to read one or more coverage reports, and returns a CoverageProfile
 
@@ -461,8 +497,9 @@ def load_llvm_coverage(target_dir: str,
         logger.info(f"Loading LLVM coverage for directory {target_dir}")
 
     all_coverage_reports = utils.get_all_files_in_tree_with_regex(
-        target_dir, ".*\.covreport$")
-    logger.info(f"Found {len(all_coverage_reports)} coverage reports")
+        target_dir, r".*\.covreport$"
+    )
+    logger.info(f"Found {len(all_coverage_reports)} coverage reports in {target_dir}")
 
     coverage_reports = list()
 
@@ -477,13 +514,39 @@ def load_llvm_coverage(target_dir: str,
     if len(coverage_reports) == 0:
         coverage_reports = all_coverage_reports
 
+    cache_enabled = os.getenv(LLVM_COVERAGE_CACHE_ENV, "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+    cache_key: Optional[Tuple[Any, ...]] = None
+    if cache_enabled:
+        cache_entries = []
+        for coverage_report in coverage_reports:
+            try:
+                stat_result = os.stat(coverage_report)
+            except OSError:
+                cache_entries = []
+                break
+            cache_entries.append((coverage_report, stat_result.st_mtime_ns,
+                                  stat_result.st_size))
+        if cache_entries:
+            cache_key = (tuple(cache_entries), is_rust)
+            with _LLVM_COVERAGE_PROFILE_CACHE_LOCK:
+                cached_profile = _LLVM_COVERAGE_PROFILE_CACHE.get(cache_key)
+            if cached_profile is not None:
+                logger.info("Reusing cached LLVM coverage for %d reports",
+                            len(coverage_reports))
+                return cached_profile.clone_with_shared_data()
+
     cp = CoverageProfile()
     logger.info(f"Using the following coverages {coverage_reports}")
     cp.set_type("function")
     for profile_file in coverage_reports:
         cp.coverage_files.append(profile_file)
         logger.info(f"Reading coverage report: {profile_file}")
-        with open(profile_file, 'rb') as pf:
+        with open(profile_file, "rb") as pf:
             curr_func = None
             switch_string = str()
             switch_line_number = None
@@ -494,7 +557,7 @@ def load_llvm_coverage(target_dir: str,
                     continue
 
                 line = line.replace("\n", "")
-                logger.debug(f"cov-readline: { line }")
+                logger.debug(f"cov-readline: {line}")
 
                 # Parse lines that signal function names. These linse indicate that the
                 # lines following this line will be the specific source code lines of
@@ -503,9 +566,7 @@ def load_llvm_coverage(target_dir: str,
                 #  "LLVMFuzzerTestOneInput:\n"
                 if len(line) > 0 and line[-1] == ":" and "|" not in line:
                     if len(line.split(":")) == 3:
-                        curr_func = line.split(":")[1].replace(" ",
-                                                               "").replace(
-                                                                   ":", "")
+                        curr_func = line.split(":")[1].replace(" ", "").replace(":", "")
                     else:
                         curr_func = line.replace(" ", "").replace(":", "")
                     if is_rust:
@@ -513,7 +574,7 @@ def load_llvm_coverage(target_dir: str,
                     else:
                         curr_func = utils.demangle_cpp_func(curr_func)
                     cp.covmap[curr_func] = list()
-                    switch_string = ''
+                    switch_string = ""
                     switch_line_number = None
                 # Special treatment for switch statement coverage:
                 # The line for switch MAY get one Branch entry; We use it for collecting
@@ -529,36 +590,38 @@ def load_llvm_coverage(target_dir: str,
 
                     try:
                         # Calculate the column of the switch keyword.
-                        column_number = line_segs[2].find('switch') + 1
+                        column_number = line_segs[2].find("switch") + 1
                     except Exception:
                         continue
                     case_line_numbers = set()  # To keep track of switch cases.
                     # This string may be updated if there is Branch pattern for this line.
-                    switch_string = f'{curr_func}:{switch_line_number},{column_number}'
-                    logger.debug(f'Seen switch in coverage: {switch_string}')
+                    switch_string = f"{curr_func}:{switch_line_number},{column_number}"
+                    logger.debug(f"Seen switch in coverage: {switch_string}")
 
                 # This parses Branch cov info in the form of:
                 #  |  Branch (81:7): [True: 1.2k, False: 0]
                 if curr_func and COVERAGE_BRANCH_REGEX.match(line):
                     try:
-                        line_number = int(line.split('(')[1].split(':')[0])
+                        line_number = int(line.split("(")[1].split(":")[0])
                     except Exception:
                         continue
                     try:
-                        column_number = int(line.split(':')[1].split(')')[0])
+                        column_number = int(line.split(":")[1].split(")")[0])
                     except Exception:
                         continue
 
                     try:
                         true_hit = extract_hitcount(
-                            line.split('True:')[1].split(',')[0])
+                            line.split("True:")[1].split(",")[0]
+                        )
                         if true_hit == -1:
                             continue
                     except Exception:
                         continue
                     try:
                         false_hit = extract_hitcount(
-                            line.split('False:')[1].replace("]", ""))
+                            line.split("False:")[1].replace("]", "")
+                        )
                         if false_hit == -1:
                             continue
                     except Exception:
@@ -568,9 +631,7 @@ def load_llvm_coverage(target_dir: str,
                         # This Branch pattern belongs to switch line.
                         # Note that the column number is inacurrate as it belongs to
                         # the variable inside pranthesis. Should not use it for switch_string.
-                        cp.branch_cov_map[switch_string] = [
-                            true_hit, false_hit
-                        ]
+                        cp.branch_cov_map[switch_string] = [true_hit, false_hit]
                     elif line_number in case_line_numbers:
                         # This Branch pattern belongs to a `case`.
                         try:
@@ -580,17 +641,17 @@ def load_llvm_coverage(target_dir: str,
                             # Taking care of anomalies where the coverage report has no
                             # Branch pattern for switch line.
                             logger.debug(
-                                f'The switch had no Branch pattern {switch_string}'
+                                f"The switch had no Branch pattern {switch_string}"
                             )
                             cp.branch_cov_map[switch_string] = [
-                                true_hit, false_hit, true_hit
+                                true_hit,
+                                false_hit,
+                                true_hit,
                             ]
                     else:
                         # This Branch pattern belongs to a conditional branch.
-                        branch_string = f'{curr_func}:{line_number},{column_number}'
-                        cp.branch_cov_map[branch_string] = [
-                            true_hit, false_hit
-                        ]
+                        branch_string = f"{curr_func}:{line_number},{column_number}"
+                        cp.branch_cov_map[branch_string] = [true_hit, false_hit]
                 # Parse lines that signal specific line of code. These lines only
                 # offer after the function names parsed above.
                 # Example line:
@@ -606,8 +667,7 @@ def load_llvm_coverage(target_dir: str,
                         if switch_string:
                             case_line_numbers.add(line_number)
                         else:
-                            logger.info('found case outside a switch?! \n%s',
-                                        line)
+                            logger.info("found case outside a switch?! \n%s", line)
 
                     # Extract hit count
                     # Write out numbers e.g. 1.2k into 1200 and 5.99M to 5990000
@@ -622,14 +682,18 @@ def load_llvm_coverage(target_dir: str,
                         else:
                             continue
                     # Add source code line and hitcount to coverage map of current function
-                    logger.debug(f"reading coverage: {curr_func} "
-                                 f"-- {line_number} -- {hit_times}")
+                    logger.debug(
+                        f"reading coverage: {curr_func} -- {line_number} -- {hit_times}"
+                    )
                     cp.covmap[curr_func].append((line_number, hit_times))
+    if cache_key is not None:
+        with _LLVM_COVERAGE_PROFILE_CACHE_LOCK:
+            _LLVM_COVERAGE_PROFILE_CACHE[cache_key] = cp
+        return cp.clone_with_shared_data()
     return cp
 
 
-def load_python_json_coverage(json_file: str,
-                              strip_pyinstaller_prefix: bool = True):
+def load_python_json_coverage(json_file: str, strip_pyinstaller_prefix: bool = True):
     """Loads a python json coverage file.
 
     The specific json file that is handled by the coverage output from:
@@ -638,11 +702,13 @@ def load_python_json_coverage(json_file: str,
     Return a CoverageProfile
     """
     import json
+
     cp = CoverageProfile()
     cp.set_type("file")
 
     coverage_reports = utils.get_all_files_in_tree_with_regex(
-        json_file, ".*all_cov.json$")
+        json_file, ".*all_cov.json$"
+    )
     logger.info(f"FOUND JSON FILES: {str(coverage_reports)}")
 
     if len(coverage_reports) > 0:
@@ -655,7 +721,7 @@ def load_python_json_coverage(json_file: str,
     with open(json_file, "r") as f:
         data = json.load(f)
 
-    for entry in data['files']:
+    for entry in data["files"]:
         cov_entry = entry
 
         # Strip any directories added by pyinstaller or oss-fuzz coverage handling
@@ -663,18 +729,21 @@ def load_python_json_coverage(json_file: str,
             prefixed_entry = entry.replace("/pythoncovmergedfiles", "")
             prefixed_entry = prefixed_entry.replace("/medio", "")
             cov_entry = prefixed_entry
-        cp.file_map[cov_entry] = data['files'][entry]['executed_lines']
+        cp.file_map[cov_entry] = data["files"][entry]["executed_lines"]
         cp.dual_file_map[cov_entry] = dict()
-        cp.dual_file_map[cov_entry]['executed_lines'] = data['files'][entry][
-            'executed_lines']
-        cp.dual_file_map[cov_entry]['missing_lines'] = data['files'][entry][
-            'missing_lines']
+        cp.dual_file_map[cov_entry]["executed_lines"] = data["files"][entry][
+            "executed_lines"
+        ]
+        cp.dual_file_map[cov_entry]["missing_lines"] = data["files"][entry][
+            "missing_lines"
+        ]
     return cp
 
 
-def load_go_coverage(target_dir: str,
-                     functions: Dict[str, function_profile.FunctionProfile],
-                     target_name: Optional[str] = None) -> CoverageProfile:
+def load_go_coverage(
+    target_dir: str,
+    functions: Dict[str, function_profile.FunctionProfile],
+) -> CoverageProfile:
     """Find and load fuzz.cov, a go coverage summary generated by the
     gocovmerge tool used in oss-fuzz.
 
@@ -702,11 +771,10 @@ def load_go_coverage(target_dir: str,
     return a Coverage Profile
     """
     cp = CoverageProfile()
-    cp.set_type('function')
+    cp.set_type("function")
 
     # Retrieve all fuzz.cov coverage summary
-    coverage_summary = utils.get_all_files_in_tree_with_regex(
-        target_dir, 'fuzz.cov')
+    coverage_summary = utils.get_all_files_in_tree_with_regex(target_dir, "fuzz.cov")
     logger.info(f"FOUND fuzz.cov COVERAGE FILES: {str(coverage_summary)}")
 
     if len(coverage_summary) > 0:
@@ -717,7 +785,7 @@ def load_go_coverage(target_dir: str,
 
     # Extract the fuzz.cov coverage line information
     cp.coverage_files.append(cov_file)
-    with open(cov_file, 'r') as f:
+    with open(cov_file, "r") as f:
         cov_line = f.readlines()[1:]
 
     # Process line coverage from fuzz.cov
@@ -725,8 +793,8 @@ def load_go_coverage(target_dir: str,
     for line in cov_line:
         # Line format
         # <file>:<start_line>.<start_col>,<end_line>.<end_col> <stmts> <hit>
-        file_name, data = line.split(':', 1)
-        line_split = re.split('[:., ]', data)
+        file_name, data = line.split(":", 1)
+        line_split = re.split("[:., ]", data)
         start_line = int(line_split[0])
         end_line = int(line_split[2])
         hit_count = int(line_split[5])
@@ -743,7 +811,7 @@ def load_go_coverage(target_dir: str,
         name = function.function_name
         start_line = int(function.function_linenumber)
         end_line = int(function.function_line_number_end)
-        source_file = function.function_source_file.split('/source-files')[-1]
+        source_file = function.function_source_file.split("/source-files")[-1]
 
         # Only process when we have correct start and end line number
         # for the function
@@ -752,14 +820,14 @@ def load_go_coverage(target_dir: str,
             for file, coverage in line_coverage.items():
                 if file.endswith(source_file):
                     for line_no in range(start_line, end_line + 1):
-                        cp.covmap[name].append(
-                            (line_no, coverage.get(line_no, 0)))
+                        cp.covmap[name].append((line_no, coverage.get(line_no, 0)))
 
     return cp
 
 
-def load_jvm_coverage(target_dir: str,
-                      target_name: Optional[str] = None) -> CoverageProfile:
+def load_jvm_coverage(
+    target_dir: str,
+) -> CoverageProfile:
     """Find and load jacoco.xml, a jvm xml coverage report file
 
     The xml file is generated from Jacoco plugin. The specific dtd of the xml can
@@ -769,12 +837,12 @@ def load_jvm_coverage(target_dir: str,
     Return a CoverageProfile
     """
     import xml.etree.ElementTree as ET
+
     cp = CoverageProfile()
     cp.set_type("function")
 
     # Retrieve jacoco.xml coverage report
-    coverage_reports = utils.get_all_files_in_tree_with_regex(
-        target_dir, "jacoco.xml")
+    coverage_reports = utils.get_all_files_in_tree_with_regex(target_dir, "jacoco.xml")
     logger.info(f"FOUND XML COVERAGE FILES: {str(coverage_reports)}")
 
     if len(coverage_reports) > 0:
@@ -792,7 +860,7 @@ def load_jvm_coverage(target_dir: str,
         raise exceptions.DataLoaderError("Error %s as xml file" % (xml_file))
 
     # Handles package by package
-    for package in root.findall('package'):
+    for package in root.findall("package"):
         # Extract all source lines mapping
         # In jacoco.xml, each packages contains a list of source files and classes.
         # In each of the source file tag, it contains a list of line child elements
@@ -801,31 +869,29 @@ def load_jvm_coverage(target_dir: str,
         # are extracting them as a map for further reference when processing all
         # the methods.
         source_file_map = {}
-        for src in package.findall('sourcefile'):
+        for src in package.findall("sourcefile"):
             line_list = []
-            for line in src.findall('line'):
+            for line in src.findall("line"):
                 # Process each line
-                line_list.append(
-                    (int(line.attrib['nr']), int(line.attrib['ci'])))
+                line_list.append((int(line.attrib["nr"]), int(line.attrib["ci"])))
             if line_list:
                 source_file_map[src.attrib["name"]] = line_list
 
         # Process all methods in all classes within this package
-        for cl in package.findall('class'):
-            class_name = cl.attrib.get('name', '').replace('/', '.')
-            line_list = source_file_map.get(
-                cl.attrib.get('sourcefilename', ''), [])
+        for cl in package.findall("class"):
+            class_name = cl.attrib.get("name", "").replace("/", ".")
+            line_list = source_file_map.get(cl.attrib.get("sourcefilename", ""), [])
             if not class_name or not line_list:
                 # Fail safe for malformed or invalid jacoco.xml report or
                 # no source file found because target class not compiled
                 # with correct debug information.
                 continue
 
-            for method in cl.findall('method'):
+            for method in cl.findall("method"):
                 # Determine method full signaturre
-                name = method.attrib.get('name', '')
-                desc = method.attrib.get('desc', '')
-                start_line = int(method.attrib.get('line', '-1'))
+                name = method.attrib.get("name", "")
+                desc = method.attrib.get("desc", "")
+                start_line = int(method.attrib.get("line", "-1"))
 
                 if not name or not desc or start_line < 0:
                     # Fail safe for malformed or invalid jacoco.xml report with
@@ -833,14 +899,14 @@ def load_jvm_coverage(target_dir: str,
                     continue
 
                 args = _interpret_jvm_arguments_type(desc)
-                name = f'[{class_name}].{method.attrib["name"]}({",".join(args)})'
+                name = f"[{class_name}].{method.attrib['name']}({','.join(args)})"
 
                 # Get total valid lines count of this method
                 total_line = 0
-                for counter in method.findall('counter'):
-                    if counter.attrib['type'] == 'LINE':
-                        missed_line = int(counter.attrib['missed'])
-                        covered_line = int(counter.attrib['covered'])
+                for counter in method.findall("counter"):
+                    if counter.attrib["type"] == "LINE":
+                        missed_line = int(counter.attrib["missed"])
+                        covered_line = int(counter.attrib["covered"])
                         total_line = missed_line + covered_line
                         break
 
@@ -870,93 +936,93 @@ def load_jvm_coverage(target_dir: str,
 
 def _interpret_jvm_arguments_type(desc: str) -> List[str]:
     """
-      Interpret list of jvm arguments type for each method.
-      The desc tag for each jvm method in the jacoco.xml coverage
-      report is in basic Java class name specification following
-      the format of "({Arguments}){ReturnType}". The basic java
-      class name specification use single upper case letter for
-      primitive types (and void type) and L{full_class_name}; for
-      object arguments. The JVM_CLASS_MAPPING give the mapping of
-      the single upper case letter of each primitive types.
-      Arrays are specified with a [ character before the arugment
-      type. The number of [ character determine the dimention of
-      the array.
-      For example, for a method
-      "public void test(String,int,String[][],boolean[],int...)"
-      The desc value of the above method will be
-      "(Ljava.lang.String;I[[Ljava.lang.String;[Z[I)V".
-      This method is necessary to match the full method name with
-      the one given in the jacoco.xml report with full argument list.
+    Interpret list of jvm arguments type for each method.
+    The desc tag for each jvm method in the jacoco.xml coverage
+    report is in basic Java class name specification following
+    the format of "({Arguments}){ReturnType}". The basic java
+    class name specification use single upper case letter for
+    primitive types (and void type) and L{full_class_name}; for
+    object arguments. The JVM_CLASS_MAPPING give the mapping of
+    the single upper case letter of each primitive types.
+    Arrays are specified with a [ character before the arugment
+    type. The number of [ character determine the dimention of
+    the array.
+    For example, for a method
+    "public void test(String,int,String[][],boolean[],int...)"
+    The desc value of the above method will be
+    "(Ljava.lang.String;I[[Ljava.lang.String;[Z[I)V".
+    This method is necessary to match the full method name with
+    the one given in the jacoco.xml report with full argument list.
     """
     JVM_CLASS_MAPPING = {
-        'Z': 'boolean',
-        'B': 'byte',
-        'C': 'char',
-        'D': 'double',
-        'F': 'float',
-        'I': 'int',
-        'J': 'long',
-        'S': 'short'
+        "Z": "boolean",
+        "B": "byte",
+        "C": "char",
+        "D": "double",
+        "F": "float",
+        "I": "int",
+        "J": "long",
+        "S": "short",
     }
 
     # Extract arguments and remove return value from description
-    desc = desc.split('(', 1)[1].split(')', 1)[0]
+    desc = desc.split("(", 1)[1].split(")", 1)[0]
 
     args = []
-    arg = ''
+    arg = ""
     start = False
-    next_arg = ''
+    next_arg = ""
     array_count = 0
     for c in desc:
-        if c == '(':
+        if c == "(":
             continue
-        if c == ')':
+        if c == ")":
             break
 
         if start:
-            if c == ';':
+            if c == ";":
                 start = False
-                next_arg = arg.replace('/', '.')
+                next_arg = arg.replace("/", ".")
             else:
                 arg = arg + c
         else:
-            if c == 'L':
+            if c == "L":
                 start = True
                 if next_arg:
-                    next_arg = f'{next_arg}{"[]" * array_count}'
+                    next_arg = f"{next_arg}{'[]' * array_count}"
                     array_count = 0
                     args.append(next_arg)
-                arg = ''
-                next_arg = ''
-            elif c == '[':
+                arg = ""
+                next_arg = ""
+            elif c == "[":
                 array_count += 1
             else:
                 if c in JVM_CLASS_MAPPING:
                     if next_arg:
-                        next_arg = f'{next_arg}{"[]" * array_count}'
+                        next_arg = f"{next_arg}{'[]' * array_count}"
                         array_count = 0
                         args.append(next_arg)
                     next_arg = JVM_CLASS_MAPPING[c]
 
     if next_arg:
-        next_arg = f'{next_arg}{"[]" * array_count}'
+        next_arg = f"{next_arg}{'[]' * array_count}"
         args.append(next_arg)
     return args
 
 
 def load_kernel_cov(filename):
     """Loads a .json code coverage file from Syzkaller."""
-    print('Loading kernel coverage')
-    with open(filename, 'r') as f:
+    print("Loading kernel coverage")
+    with open(filename, "r") as f:
         json_coverage = json.loads(f.read())
 
     private_modules = []
     for elem in json_coverage:
-        if '/private/' in elem.get('Filename', ''):
+        if "/private/" in elem.get("Filename", ""):
             private_modules.append(elem)
 
     cp = CoverageProfile()
-    cp.set_type('kernel')
+    cp.set_type("kernel")
     cp.kernel_coverage = private_modules
     return cp
 

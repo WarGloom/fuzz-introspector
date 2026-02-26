@@ -92,7 +92,7 @@ def html_table_add_row(elems: List[Any]) -> str:
 def html_get_header(title: str = "Fuzz introspector") -> str:
     gtag_tracking = ""
     try:
-        gtag = os.environ['G_ANALYTICS_TAG']
+        gtag = os.environ["G_ANALYTICS_TAG"]
         gtag_tracking += f"""<!-- Google tag (gtag.js) -->
                 <script async src="https://www.googletagmanager.com/gtag/js?id={gtag}"></script>
                 <script>
@@ -143,7 +143,7 @@ def html_get_navbar(title: str) -> str:
     <div class="top-navbar">
         <div class="top-navbar-title-wrapper">
             <div class="top-navbar-title" style="margin-bottom: 10px; font-size:25px">
-                { title }
+                {title}
             </div>
             <div style="margin:0; font-size: 10px">
               For issues and ideas:
@@ -214,7 +214,7 @@ def html_get_table_of_contents(table_of_contents: HtmlTableOfContents,
     elif introspection_proj.proj_profile.target_lang == "go":
         cov_index = "index.html"
     else:
-        cov_index = 'report.html'
+        cov_index = "report.html"
 
     html_toc_string = ""
     html_toc_string += f"""<div class="left-sidebar">\
@@ -240,20 +240,24 @@ def html_get_table_of_contents(table_of_contents: HtmlTableOfContents,
     for toc_entry in table_of_contents.entries:
         indentation = (toc_entry.heading_type.value - 1) * 16
         html_toc_string += "<div style='margin-left: %spx'>" % indentation
-        html_toc_string += "    <a href=\"#%s\">%s</a>\n" % (
-            toc_entry.href_link, toc_entry.entry_title)
+        html_toc_string += '    <a href="#%s">%s</a>\n' % (
+            toc_entry.href_link,
+            toc_entry.entry_title,
+        )
         html_toc_string += "</div>\n"
-    html_toc_string += '    </div>\
-                        </div>'
+    html_toc_string += "    </div>\
+                        </div>"
 
     return html_toc_string
 
 
-def html_add_header_with_link(header_title: str,
-                              title_type: HTML_HEADING,
-                              table_of_contents: HtmlTableOfContents,
-                              link: Optional[str] = None,
-                              experimental: Optional[bool] = False) -> str:
+def html_add_header_with_link(
+    header_title: str,
+    title_type: HTML_HEADING,
+    table_of_contents: HtmlTableOfContents,
+    link: Optional[str] = None,
+    experimental: Optional[bool] = False,
+) -> str:
     if link is None:
         link = header_title.replace(" ", "-")
 
@@ -262,19 +266,21 @@ def html_add_header_with_link(header_title: str,
 
     html_attributes = ""
     if title_type == HTML_HEADING.H1 or experimental:
-        html_attributes += " class=\"report-title\""
+        html_attributes += ' class="report-title"'
 
-    html_string = f"<a id=\"{link}\">"
+    html_string = f'<a id="{link}">'
     html_string += (
         f"<h{title_type.value} {html_attributes}>{header_title}</h{title_type.value}>\n"
     )
     return html_string
 
 
-def html_create_table_head(table_head: str,
-                           items: List[Tuple[str, str]],
-                           sort_by_column: int = 0,
-                           sort_order: str = "asc") -> str:
+def html_create_table_head(
+    table_head: str,
+    items: List[Tuple[str, str]],
+    sort_by_column: int = 0,
+    sort_order: str = "asc",
+) -> str:
     html_str = (
         f"<table id='{table_head}' class='cell-border compact stripe' "
         f"data-sort-by-column='{sort_by_column}' data-sort-order='{sort_order}'>"
@@ -312,7 +318,7 @@ def create_collapsible_element(non_collapsed: str, collapsed: str,
     too large to display by default for all items, but we still want the user
     to be able to see the full substance of the item on demand.
     """
-    return f"""{ non_collapsed } : <div
+    return f"""{non_collapsed} : <div
     class='wrap-collabsible'>
         <input id='{collapsible_id}'
                class='toggle'
@@ -376,7 +382,7 @@ def create_conclusions_box(conclusions: List[HTMLConclusion]) -> str:
     bottom).
     """
     html_string = ""
-    html_string += "<div class=\"high-level-conclusions-wrapper\">"
+    html_string += '<div class="high-level-conclusions-wrapper">'
 
     # Sort conclusions to show highest level (positive conclusion) first
     conclusions = list(reversed(sorted(conclusions)))
@@ -388,10 +394,10 @@ def create_conclusions_box(conclusions: List[HTMLConclusion]) -> str:
         else:
             conclusion_color = "green"
         html_string += f"""<div class="line-wrapper">
-    <div class="high-level-conclusion { conclusion_color }-conclusion collapsed">
-    { conclusion.title }
+    <div class="high-level-conclusion {conclusion_color}-conclusion collapsed">
+    {conclusion.title}
         <div class="high-level-extended" style="background:transparent; overflow:hidden">
-            { conclusion.description }
+            {conclusion.description}
         </div>
     </div>
 </div>"""
@@ -408,23 +414,23 @@ def create_calltree_color_distribution_table(color_list: List[str]) -> str:
     for color in color_list:
         color_dictionary[color] = color_dictionary.get(color, 0) + 1
 
-    html_string += ("<p>The distribution of callsites in terms of coloring is")
+    html_string += "<p>The distribution of callsites in terms of coloring is"
     html_string += ("<table><tr>"
-                    "<th style=\"text-align: left;\">Color</th>"
-                    "<th style=\"text-align: left;\">Runtime hitcount</th>"
-                    "<th style=\"text-align: left;\">Callsite count</th>"
-                    "<th style=\"text-align: left;\">Percentage</th>"
+                    '<th style="text-align: left;">Color</th>'
+                    '<th style="text-align: left;">Runtime hitcount</th>'
+                    '<th style="text-align: left;">Callsite count</th>'
+                    '<th style="text-align: left;">Percentage</th>'
                     "</tr>")
     for _min, _max, color, rgb_code in constants.COLOR_CONSTANTS:
-        html_string += (f"<tr><td style=\"color:{color}; "
+        html_string += (f'<tr><td style="color:{color}; '
                         f"text-shadow: -1px 0 black, 0 1px black, "
-                        f"1px 0 black, 0 -1px black;\"><b>{color}</b></td>")
+                        f'1px 0 black, 0 -1px black;"><b>{color}</b></td>')
         if _max == 1:
             interval = "0"
         elif _max > 1000:
             interval = f"{_min}+"
         else:
-            interval = f"[{_min}:{_max-1}]"
+            interval = f"[{_min}:{_max - 1}]"
         html_string += f"<td>{interval}</td>"
         cover_count = color_dictionary.get(color, 0)
         html_string += f"<td>{cover_count}</td>"
@@ -472,51 +478,57 @@ def create_horisontal_calltree_image(image_name: str,
     # Show one read rectangle if the list is empty. An alternative is
     # to not include the image at all.
     if len(color_list) == 0:
-        color_list = ['red']
+        color_list = ["red"]
 
-    # Create a plot
-    fig, ax = plt.subplots()
-    ax.clear()
-    fig.set_size_inches(15, 2.5)
-    ax.plot()
+    fig = None
+    try:
+        # Create a plot
+        fig, ax = plt.subplots()
+        ax.clear()
+        fig.set_size_inches(15, 2.5)
+        ax.plot()
 
-    # Create our rectangles
-    curr_x = 0.0
-    curr_size = 1.0
-    curr_color = color_list[0]
-    for i in range(1, len(color_list)):
-        if curr_color == color_list[i]:
-            curr_size += 1.0
-        else:
-            ax.add_patch(
-                Rectangle((curr_x, 0.0), curr_size, 1.0, color=curr_color))
+        # Create our rectangles
+        curr_x = 0.0
+        curr_size = 1.0
+        curr_color = color_list[0]
+        for i in range(1, len(color_list)):
+            if curr_color == color_list[i]:
+                curr_size += 1.0
+            else:
+                ax.add_patch(
+                    Rectangle((curr_x, 0.0), curr_size, 1.0, color=curr_color))
 
-            # Start next color area
-            curr_x += curr_size
-            curr_color = color_list[i]
-            curr_size = 1.0
-    # Plot the last case
-    ax.add_patch(Rectangle((curr_x, 0.0), curr_size, 1.0, color=curr_color))
-    logger.info("- iterated over color list")
+                # Start next color area
+                curr_x += curr_size
+                curr_color = color_list[i]
+                curr_size = 1.0
+        # Plot the last case
+        ax.add_patch(Rectangle((curr_x, 0.0), curr_size, 1.0,
+                               color=curr_color))
+        logger.info("- iterated over color list")
 
-    # Save the image
-    if dump_files:
-        logger.info("- saving image")
-        ax.set_yticklabels([])
-        ax.set_yticks([])
-        xlabel = ax.set_xlabel("Callsite index")
+        # Save the image
+        if dump_files:
+            logger.info("- saving image")
+            ax.set_yticklabels([])
+            ax.set_yticks([])
+            xlabel = ax.set_xlabel("Callsite index")
 
-        plt.title(image_name.replace(".png", "").replace("_colormap", ""))
-        fig.tight_layout()
-        fig.savefig(os.path.join(out_dir, image_name),
-                    bbox_extra_artists=[xlabel])
-        logger.info("- image saved")
-    return color_list
+            plt.title(image_name.replace(".png", "").replace("_colormap", ""))
+            fig.tight_layout()
+            fig.savefig(os.path.join(out_dir, image_name),
+                        bbox_extra_artists=[xlabel])
+            logger.info("- image saved")
+        return color_list
+    finally:
+        if fig is not None:
+            plt.close(fig)
 
 
 def html_get_report_creation_tag() -> str:
     html_overview = "<b>Report generation date:</b>"
-    html_overview += datetime.today().strftime('%Y-%m-%d')
+    html_overview += datetime.today().strftime("%Y-%m-%d")
     html_overview += "<br>"
     return html_overview
 

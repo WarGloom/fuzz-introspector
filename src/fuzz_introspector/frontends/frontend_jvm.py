@@ -21,6 +21,7 @@ from tree_sitter import Language, Node
 
 import logging
 
+from fuzz_introspector.frontends import tree_sitter_utils
 from fuzz_introspector.frontends.datatypes import Project, SourceCodeFile
 
 logger = logging.getLogger(name=__name__)
@@ -98,9 +99,10 @@ class JvmSourceCodeFile(SourceCodeFile):
 
     def _set_package_declaration(self):
         """Internal helper for retrieving the source package."""
-        query = self.tree_sitter_lang.query('( package_declaration ) @fd ')
-        res = query.captures(self.root)
-        for _, nodes in res.items():
+        query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                            '( package_declaration ) @fd ')
+        res = tree_sitter_utils.query_captures(query, self.root)
+        for nodes in res.values():
             for node in nodes:
                 for package in node.children:
                     if package.type in ['scoped_identifier', 'identifier']:
@@ -117,9 +119,10 @@ class JvmSourceCodeFile(SourceCodeFile):
     def _set_import_declaration(self):
         """Internal helper for retrieving all import."""
         # Process by import statements
-        query = self.tree_sitter_lang.query('( import_declaration ) @fd ')
-        res = query.captures(self.root)
-        for _, nodes in res.items():
+        query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                            '( import_declaration ) @fd ')
+        res = tree_sitter_utils.query_captures(query, self.root)
+        for nodes in res.values():
             for node in nodes:
                 package = ''
                 wildcard = False
@@ -1073,6 +1076,9 @@ class JvmProject(Project[JvmSourceCodeFile]):
     def __init__(self, source_code_files: list[JvmSourceCodeFile]):
         super().__init__(source_code_files)
         self.all_classes = []
+        self._method_metric_cache_key: tuple[int, int] | None = None
+        self._method_uses_cache: dict[str, int] = {}
+        self._method_depth_cache: dict[str, int] = {}
         for source_code in self.source_code_files:
             self.all_classes.extend(source_code.classes)
 
@@ -1117,6 +1123,9 @@ class JvmProject(Project[JvmSourceCodeFile]):
         for method in project_methods:
             method.extract_callsites(all_classes)
 
+        method_uses_map = self._build_method_uses_map(project_methods)
+        method_depth_map = self._build_method_depth_map(project_methods)
+
         # Process all project methods
         method_list = []
         for method in project_methods:
@@ -1145,10 +1154,8 @@ class JvmProject(Project[JvmSourceCodeFile]):
             method_dict['returnType'] = method.return_type
             method_dict['BranchProfiles'] = []
             method_dict['Callsites'] = method.detailed_callsites
-            method_dict['functionUses'] = self.calculate_method_uses(
-                method.name, project_methods)
-            method_dict['functionDepth'] = self.calculate_method_depth(
-                method, project_methods)
+            method_dict['functionUses'] = method_uses_map.get(method.name, 0)
+            method_dict['functionDepth'] = method_depth_map.get(method.name, 0)
             method_dict['constantsTouched'] = []
             method_dict['BBCount'] = 0
             method_dict['signature'] = method.sig
@@ -1192,6 +1199,56 @@ class JvmProject(Project[JvmSourceCodeFile]):
         # Store report to avoid regeneration
         self.report = report
 
+    def _build_method_uses_map(self,
+                               methods: list[JavaMethod]) -> dict[str, int]:
+        """Build reverse call graph based use counts."""
+        method_uses: dict[str, set[str]] = {
+            method.name: set()
+            for method in methods
+        }
+        method_names = set(method_uses.keys())
+
+        for method in methods:
+            for callsite_name, _ in method.base_callsites:
+                if callsite_name in method_names:
+                    method_uses[callsite_name].add(method.name)
+
+        return {
+            method_name: len(caller_names)
+            for method_name, caller_names in method_uses.items()
+        }
+
+    def _build_method_depth_map(self,
+                                methods: list[JavaMethod]) -> dict[str, int]:
+        """Build depth cache for all methods in project report."""
+        method_dict = {method.name: method for method in methods}
+        depth_cache: dict[str, int] = {}
+        recursion_stack: set[str] = set()
+
+        def _compute_depth(method: JavaMethod) -> int:
+            if method.name in depth_cache:
+                return depth_cache[method.name]
+
+            if method.name in recursion_stack:
+                return 1
+
+            recursion_stack.add(method.name)
+            depth = 0
+            for target_name, _ in method.base_callsites:
+                target = method_dict.get(target_name)
+                if not target:
+                    continue
+                depth = max(depth, _compute_depth(target) + 1)
+
+            recursion_stack.remove(method.name)
+            depth_cache[method.name] = depth
+            return depth
+
+        for method in methods:
+            _compute_depth(method)
+
+        return depth_cache
+
     def find_source_with_method(self,
                                 name: str) -> Optional[JvmSourceCodeFile]:
         """Finds the source code with a given method name."""
@@ -1204,45 +1261,24 @@ class JvmProject(Project[JvmSourceCodeFile]):
     def calculate_method_uses(self, target_name: str,
                               all_methods: list[JavaMethod]) -> int:
         """Calculate how many method called the target method."""
-        method_use_count = 0
-        for method in all_methods:
-            found = False
-            for callsite in method.base_callsites:
-                if callsite[0] == target_name:
-                    found = True
-                    break
-            if found:
-                method_use_count += 1
-
-        return method_use_count
+        self._ensure_method_metric_cache(all_methods)
+        return self._method_uses_cache.get(target_name, 0)
 
     def calculate_method_depth(self, target_method: JavaMethod,
                                all_methods: list[JavaMethod]) -> int:
         """Calculate method depth of the target method."""
+        self._ensure_method_metric_cache(all_methods)
+        return self._method_depth_cache.get(target_method.name, 0)
 
-        def _recursive_method_depth(method: JavaMethod) -> int:
-            callsites = method.base_callsites
-            if len(callsites) == 0:
-                return 0
+    def _ensure_method_metric_cache(self, methods: list[JavaMethod]) -> None:
+        """Ensure uses/depth caches exist for method helper lookups."""
+        cache_key = (id(methods), len(methods))
+        if self._method_metric_cache_key == cache_key:
+            return
 
-            depth = 0
-            visited.append(method.name)
-            for callsite in callsites:
-                target = method_dict.get(callsite[0])
-                if callsite[0] in visited:
-                    depth = max(depth, 1)
-                elif target:
-                    depth = max(depth, _recursive_method_depth(target) + 1)
-                else:
-                    visited.append(callsite[0])
-
-            return depth
-
-        visited: list[str] = []
-        method_dict = {method.name: method for method in all_methods}
-        method_depth = _recursive_method_depth(target_method)
-
-        return method_depth
+        self._method_uses_cache = self._build_method_uses_map(methods)
+        self._method_depth_cache = self._build_method_depth_map(methods)
+        self._method_metric_cache_key = cache_key
 
     def extract_calltree(self,
                          source_file: str = '',

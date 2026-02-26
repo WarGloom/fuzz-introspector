@@ -19,10 +19,9 @@ import com.github.javaparser.JavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.Parameter;
-import java.io.File;
 import java.io.FileInputStream;
-import java.io.InputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -36,9 +35,9 @@ public class GenericUtils {
   private static Map<String, Path> sourcePaths = new HashMap<String, Path>();
 
   /**
-   * This method adds mapping to the sourcePaths hash map to allow the
-   * discovering the generic of certain methods return type nad argument
-   * types through source code analysis.
+   * This method adds mapping to the sourcePaths hash map to allow the discovering the generic of
+   * certain methods return type nad argument types through source code analysis.
+   *
    * @param sourceName the name of the public class of the source file
    * @param sourcePath the absolute path of the source file
    */
@@ -47,12 +46,11 @@ public class GenericUtils {
   }
 
   /**
-   * This method analyse the return type and the argument types of a method.
-   * If source code of the target method is found. It parses the source code
-   * and retrieves the return type and the argument types and determine if
-   * generic has been used. If generic has been used, the generic types is
-   * then added to additional fields in the FunctionElement instance to
-   * indicate its generic types as additional information.
+   * This method analyse the return type and the argument types of a method. If source code of the
+   * target method is found. It parses the source code and retrieves the return type and the
+   * argument types and determine if generic has been used. If generic has been used, the generic
+   * types is then added to additional fields in the FunctionElement instance to indicate its
+   * generic types as additional information.
    *
    * @param m the target SootMethod object to be processed
    * @param element the target FunctionElement object to be processed
@@ -66,7 +64,7 @@ public class GenericUtils {
         InputStream is = new FileInputStream(sourcePaths.get(className).toFile());
         Optional<CompilationUnit> optional = new JavaParser().parse(is).getResult();
         if (optional.isPresent()) {
-          for(MethodDeclaration md : optional.get().findAll(MethodDeclaration.class)) {
+          for (MethodDeclaration md : optional.get().findAll(MethodDeclaration.class)) {
             if (md.getName().asString().equals(m.getName())) {
               if (handleArgumentGeneric(md, element)) {
                 // There could be overloading method with the same name in the same class

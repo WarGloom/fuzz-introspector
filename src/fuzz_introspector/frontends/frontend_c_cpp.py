@@ -23,6 +23,7 @@ import os
 import copy
 import logging
 
+from fuzz_introspector.frontends import tree_sitter_utils
 from fuzz_introspector.frontends.datatypes import SourceCodeFile, Project
 
 logger = logging.getLogger(name=__name__)
@@ -164,9 +165,11 @@ class CppSourceCodeFile(SourceCodeFile):
             # Skip anonymous enum or forward declaration
             return
 
-        enum_item_query = self.tree_sitter_lang.query('( enumerator ) @en')
+        enum_item_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                                      '( enumerator ) @en')
         enumerator_list = []
-        for _, enumerators in enum_item_query.captures(enum_body).items():
+        for enumerators in tree_sitter_utils.query_captures(
+                enum_item_query, enum_body).values():
             for enumerator in enumerators:
                 item_dict = {}
                 enum_item_name = enumerator.child_by_field_name('name')
@@ -800,21 +803,24 @@ class FunctionDefinition():
         """Get the approximate number of basic blocks in a function"""
         self.bbcount = 1
 
-        if_query = self.tree_sitter_lang.query('( if_statement ) @fi')
-        if_res = if_query.captures(self.root)
-        for _, if_exprs in if_res.items():
+        if_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                               '( if_statement ) @fi')
+        if_res = tree_sitter_utils.query_captures(if_query, self.root)
+        for if_exprs in if_res.values():
             self.bbcount += len(if_exprs)
 
-        case_query = self.tree_sitter_lang.query('( case_statement ) @ci')
-        case_res = case_query.captures(self.root)
-        for _, case_exprs in case_res.items():
+        case_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                                 '( case_statement ) @ci')
+        case_res = tree_sitter_utils.query_captures(case_query, self.root)
+        for case_exprs in case_res.values():
             self.bbcount += len(case_exprs)
 
     def _process_assert_stmts(self):
         """Gets a list of assert statements in the function."""
-        call_query = self.tree_sitter_lang.query('( call_expression ) @ce')
-        call_res = call_query.captures(self.root)
-        for _, call_exprs in call_res.items():
+        call_query = tree_sitter_utils.get_query(self.tree_sitter_lang,
+                                                 '( call_expression ) @ce')
+        call_res = tree_sitter_utils.query_captures(call_query, self.root)
+        for call_exprs in call_res.values():
             for call_expr in call_exprs:
                 func_call = call_expr.child_by_field_name('function')
                 args = call_expr.child_by_field_name('arguments')
@@ -1071,6 +1077,9 @@ class CppProject(Project[CppSourceCodeFile]):
     def __init__(self, source_code_files: list[CppSourceCodeFile]):
         super().__init__(source_code_files)
         self.internal_func_list: list[dict[str, Any]] = []
+        self._function_metric_cache_key: tuple[int, int] | None = None
+        self._function_uses_cache: dict[str, int] = {}
+        self._function_depth_cache: dict[str, int] = {}
 
     def get_function_from_name(self, function_name):
         for func in self.all_functions:
@@ -1123,21 +1132,18 @@ class CppProject(Project[CppSourceCodeFile]):
                 # Extracting callsites of functions
                 logger.debug('Extracing callsites')
                 func.extract_callsites(self)
+                logger.debug('Done extracting callsites')
+
+            function_uses_map = self._build_function_uses_map(
+                self.all_functions)
+            function_depth_map = self._build_function_depth_map(
+                self.all_functions)
+
+            for func in self.all_functions:
                 callsites = func.base_callsites
                 reached = set()
                 for cs_dst, _ in callsites:
                     reached.add(cs_dst)
-                logger.debug('Done extracting callsites')
-
-                # Calculating function uses
-                logger.debug('Calculating function uses')
-                func_uses = self._calculate_function_uses(func.name)
-                logger.debug('Done calculating function uses')
-
-                # Calculating function depth
-                logger.debug('Calculating function depth')
-                func_depth = self._calculate_function_depth(func)
-                logger.debug('Done calculating function depth')
 
                 # Storing function information
                 func_dict: dict[str, Any] = {}
@@ -1164,8 +1170,9 @@ class CppProject(Project[CppSourceCodeFile]):
                 func_dict['signature'] = func.sig
                 func_dict['assertStmts'] = func.assert_stmts
                 func_dict['Callsites'] = func.detailed_callsites
-                func_dict['functionUses'] = func_uses
-                func_dict['functionDepth'] = func_depth
+                func_dict['functionUses'] = function_uses_map.get(func.name, 0)
+                func_dict['functionDepth'] = function_depth_map.get(
+                    func.name, 0)
                 func_dict['functionsReached'] = list(reached)
 
                 logger.debug('Done')
@@ -1182,6 +1189,64 @@ class CppProject(Project[CppSourceCodeFile]):
         self.report['Fuzzing method'] = 'LLVMFuzzerTestOneInput'
         self.report['Fuzzer filename'] = harness_source
         _function_node_cache.clear()
+
+    def _build_function_uses_map(
+            self, functions: list[FunctionDefinition]) -> dict[str, int]:
+        """Build reverse call graph based use counts."""
+        function_names = {function.name for function in functions}
+        function_uses: dict[str, set[str]] = {
+            function.name: set()
+            for function in functions
+        }
+
+        for function in functions:
+            for callsite_name, _ in function.base_callsites:
+                for suffix_index in range(len(callsite_name)):
+                    match_name = callsite_name[suffix_index:]
+                    if match_name in function_names:
+                        function_uses[match_name].add(function.name)
+
+        return {
+            function_name: len(caller_names)
+            for function_name, caller_names in function_uses.items()
+        }
+
+    def _build_function_depth_map(
+            self, functions: list[FunctionDefinition]) -> dict[str, int]:
+        """Build depth cache for all functions in project report."""
+        depth_cache: dict[str, int] = {}
+        recursion_stack: set[str] = set()
+        resolve_cache: dict[str, Optional[FunctionDefinition]] = {}
+
+        def _resolve_target(name: str) -> Optional[FunctionDefinition]:
+            if name not in resolve_cache:
+                target = self._find_source_with_func_def(name)
+                resolve_cache[name] = target[1] if target else None
+            return resolve_cache[name]
+
+        def _compute_depth(function: FunctionDefinition) -> int:
+            if function.name in depth_cache:
+                return depth_cache[function.name]
+
+            if function.name in recursion_stack:
+                return 1
+
+            recursion_stack.add(function.name)
+            depth = 0
+            for target_name, _ in function.base_callsites:
+                target = _resolve_target(target_name)
+                if not target:
+                    continue
+                depth = max(depth, _compute_depth(target) + 1)
+
+            recursion_stack.remove(function.name)
+            depth_cache[function.name] = depth
+            return depth
+
+        for function in functions:
+            _compute_depth(function)
+
+        return depth_cache
 
     def extract_calltree(self,
                          source_file: str = '',
@@ -1317,54 +1382,26 @@ class CppProject(Project[CppSourceCodeFile]):
 
     def _calculate_function_uses(self, target_name: str) -> int:
         """Calculate how many functions called the target function."""
-        func_use_count = 0
-
-        for source_file in self.source_code_files:
-            for function in source_file.func_defs:
-                found = False
-                for callsite in function.base_callsites:
-                    if callsite[0] == target_name:
-                        found = True
-                        break
-                    if callsite[0].endswith(target_name):
-                        found = True
-                        break
-                if found:
-                    func_use_count += 1
-
-        return func_use_count
+        self._ensure_function_metric_cache()
+        return self._function_uses_cache.get(target_name, 0)
 
     def _calculate_function_depth(self,
                                   target_function: FunctionDefinition) -> int:
         """Calculate function depth of the target function."""
+        self._ensure_function_metric_cache()
+        return self._function_depth_cache.get(target_function.name, 0)
 
-        def _recursive_function_depth(function: FunctionDefinition) -> int:
-            if function.depth != -1:
-                return function.depth
+    def _ensure_function_metric_cache(self) -> None:
+        """Ensure uses/depth caches exist for current project functions."""
+        cache_key = (id(self.all_functions), len(self.all_functions))
+        if self._function_metric_cache_key == cache_key:
+            return
 
-            callsites = function.base_callsites
-            if len(callsites) == 0:
-                return 0
-
-            depth = 0
-            visited.append(function.name)
-            for callsite in callsites:
-                target = self._find_source_with_func_def(callsite[0])
-                if target and target[1].name in visited:
-                    depth = max(depth, 1)
-                elif target:
-                    depth = max(depth,
-                                _recursive_function_depth(target[1]) + 1)
-                    function.depth = depth
-                else:
-                    visited.append(callsite[0])
-
-            return depth
-
-        visited: list[str] = []
-        func_depth = _recursive_function_depth(target_function)
-
-        return func_depth
+        self._function_uses_cache = self._build_function_uses_map(
+            self.all_functions)
+        self._function_depth_cache = self._build_function_depth_map(
+            self.all_functions)
+        self._function_metric_cache_key = cache_key
 
     def _find_source_with_func_def(
             self, name: str

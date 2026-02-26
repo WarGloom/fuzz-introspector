@@ -58,14 +58,17 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         """Helper for setting json string"""
         self.json_string_result = json_string
 
-    def analysis_func(self,
-                      table_of_contents: html_helpers.HtmlTableOfContents,
-                      tables: List[str],
-                      proj_profile: project_profile.MergedProjectProfile,
-                      profiles: List[fuzzer_profile.FuzzerProfile],
-                      basefolder: str, coverage_url: str,
-                      conclusions: List[html_helpers.HTMLConclusion],
-                      out_dir) -> str:
+    def analysis_func(
+        self,
+        table_of_contents: html_helpers.HtmlTableOfContents,
+        tables: List[str],
+        proj_profile: project_profile.MergedProjectProfile,
+        profiles: List[fuzzer_profile.FuzzerProfile],
+        basefolder: str,
+        coverage_url: str,
+        conclusions: List[html_helpers.HTMLConclusion],
+        out_dir,
+    ) -> str:
         """
         Creates the HTML of the calltree. Returns the HTML as a string.
         """
@@ -96,7 +99,7 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         logger.info("In calltree")
         # Generate HTML for the calltree
         calltree_html_string = "<h1>Fuzzer calltree</h1>"
-        calltree_html_string += "<div id=\"calltree-wrapper\">"
+        calltree_html_string += '<div id="calltree-wrapper">'
 
         calltree_html_section_string = "<div class='call-tree-section-wrapper'>"
         nodes = cfg_load.extract_all_callsites(
@@ -146,7 +149,7 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
 
             # Add div for line itself.
             calltree_html_section_string += (
-                f"<div class=\"{color_to_be}-background coverage-line\">")
+                f'<div class="{color_to_be}-background coverage-line">')
             calltree_html_section_string += self._get_span_row(
                 ct_idx_str, indentation, node, demangled_name, func_href,
                 callsite_link)
@@ -182,13 +185,16 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
 
         # Side overview wrapper holds the vertical bitmap image. The actual
         # visualisation happens in javascript rather than here.
-        calltree_html_section_string += "<div id=\"side-overview-wrapper\"></div>"
+        calltree_html_section_string += '<div id="side-overview-wrapper"></div>'
 
-        logger.info('calltree_html_section_string: <divs>: %d -- </divs>: %d',
-                    calltree_html_section_string.count("<div"),
-                    calltree_html_section_string.count("</div>"))
+        logger.info(
+            "calltree_html_section_string: <divs>: %d -- </divs>: %d",
+            calltree_html_section_string.count("<div"),
+            calltree_html_section_string.count("</div>"),
+        )
 
-        calltree_html_string += calltree_html_section_string + "</div>"  # calltree-wrapper
+        calltree_html_string += (calltree_html_section_string + "</div>"
+                                 )  # calltree-wrapper
         logger.info("Calltree created")
 
         # Write the HTML to a file called calltree_view_XX.html where XX is a counter.
@@ -208,8 +214,9 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         return calltree_html_file
 
     def collect_calltree_nodes(
-        self, branch_blockers: List[analysis.FuzzBranchBlocker],
-        func_call_depth: Optional[cfg_load.CalltreeCallsite]
+        self,
+        branch_blockers: List[analysis.FuzzBranchBlocker],
+        func_call_depth: Optional[cfg_load.CalltreeCallsite],
     ) -> Dict[analysis.FuzzBranchBlocker, cfg_load.CalltreeCallsite]:
         """Map branch blockers to the calltree nodes"""
 
@@ -235,8 +242,8 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                         new_node = all_callsites[i]
                         if depth > new_node.depth:
                             break  # Reached the caller of the node
-                        if (depth == new_node.depth and
-                                branch_linenumber >= new_node.src_linenumber):
+                        if (depth == new_node.depth and branch_linenumber
+                                >= new_node.src_linenumber):
                             found_node = new_node
                     blocker_node_map[blocker] = found_node
                     break
@@ -244,8 +251,11 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         return blocker_node_map
 
     def html_create_dedicated_calltree_file(
-            self, calltree_html_string: str, filename: str,
-            profile: fuzzer_profile.FuzzerProfile) -> None:
+        self,
+        calltree_html_string: str,
+        filename: str,
+        profile: fuzzer_profile.FuzzerProfile,
+    ) -> None:
         """
         Write a wrapped HTML file with the tags needed from fuzz-introspector
         We use this only for wrapping calltrees at the moment, however, down
@@ -256,7 +266,7 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         blocker_infos = {}
         # HTML start
         html_header = html_helpers.html_get_header(
-            title=f"Fuzz introspector: { profile.identifier }")
+            title=f"Fuzz introspector: {profile.identifier}")
         html_header += "<div class='content-wrapper calltree-page'>"
         html_header += '<div class="content-section calltree-content-section">'
         complete_html_string += html_header
@@ -285,7 +295,7 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                     node.cov_ct_idx))] = ""
 
         if fuzz_blocker_table is not None:
-            complete_html_string += "<div class=\"report-box\">"
+            complete_html_string += '<div class="report-box">'
             complete_html_string += "<h1>Fuzz blockers</h1>"
             complete_html_string += fuzz_blocker_table
             complete_html_string += "</div>"
@@ -294,14 +304,14 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
 
         # HTML end
         # close html header and content-section calltree-content-section
-        html_end = '</div></div>'
+        html_end = "</div></div>"
 
         if len(blocker_infos) > 0:
             html_end += "<script>"
-            html_end += f'var fuzz_blocker_infos = \'{json.dumps(blocker_infos)}\';'
+            html_end += f"var fuzz_blocker_infos = '{json.dumps(blocker_infos)}';"
             html_end += "</script>"
 
-        html_end += "<script src=\"calltree.js\"></script>"
+        html_end += '<script src="calltree.js"></script>'
         complete_html_string += html_end
 
         complete_html_string += "</body></html>"
@@ -337,19 +347,20 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                                            key=lambda x: x.cov_forward_reds,
                                            reverse=True)
         for node in nodes_sorted_by_red_ahead:
-            if node.cov_forward_reds == 0 or len(
-                    blocker_list) >= max_blockers_to_extract:
+            if (node.cov_forward_reds == 0
+                    or len(blocker_list) >= max_blockers_to_extract):
                 break
             blocker_list.append(node)
         return blocker_list
 
     def create_fuzz_blocker_table(
-            self,
-            profile: fuzzer_profile.FuzzerProfile,
-            tables: List[str],
-            calltree_file_name: str,
-            fuzz_blockers: Optional[List[cfg_load.CalltreeCallsite]] = None,
-            file_link: Optional[str] = None) -> Optional[str]:
+        self,
+        profile: fuzzer_profile.FuzzerProfile,
+        tables: List[str],
+        calltree_file_name: str,
+        fuzz_blockers: Optional[List[cfg_load.CalltreeCallsite]] = None,
+        file_link: Optional[str] = None,
+    ) -> Optional[str]:
         """
         Creates HTML string for table showing fuzz blockers.
         """
@@ -362,48 +373,62 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         if len(fuzz_blockers) == 0:
             return None
 
-        html_table_string = "<p class='no-top-margin'>The following nodes " \
-                            "represent call sites where fuzz blockers occur.</p>"
+        html_table_string = (
+            "<p class='no-top-margin'>The following nodes "
+            "represent call sites where fuzz blockers occur.</p>")
         tables.append(f"myTable{len(tables)}")
         html_table_string += html_helpers.html_create_table_head(
             tables[-1],
-            [("Amount of callsites blocked",
-              "Total amount of callsites blocked"),
-             ("Calltree index",
-              "Index in call tree where the fuzz blocker is."),
-             ("Parent function",
-              "Function in which the call site that blocks resides."),
-             ("Callsite", ""),
-             ("Largest blocked function",
-              "This is the function with highest cyclomatiic complexity amongst"
-              "all of the functions that are blocked. As such, it's a way of "
-              "highlighting a potentially important function being blocked")],
+            [
+                ("Amount of callsites blocked",
+                 "Total amount of callsites blocked"),
+                ("Calltree index",
+                 "Index in call tree where the fuzz blocker is."),
+                (
+                    "Parent function",
+                    "Function in which the call site that blocks resides.",
+                ),
+                ("Callsite", ""),
+                (
+                    "Largest blocked function",
+                    "This is the function with highest cyclomatiic complexity amongst"
+                    "all of the functions that are blocked. As such, it's a way of "
+                    "highlighting a potentially important function being blocked",
+                ),
+            ],
             sort_by_column=0,
-            sort_order="desc")
+            sort_order="desc",
+        )
         for node in fuzz_blockers:
             link_prefix = "0" * (5 - len(str(node.cov_ct_idx)))
-            node_id = f'{link_prefix}{node.cov_ct_idx}'
+            node_id = f"{link_prefix}{node.cov_ct_idx}"
             if file_link is not None:
                 cs_link = (
-                    "<span class=\"text-link\">"
-                    f"<a href=\"{file_link}?scrollToNode={node_id}\">call site: {node_id}"
+                    '<span class="text-link">'
+                    f'<a href="{file_link}?scrollToNode={node_id}">call site: {node_id}'
                     "</a></span>")
             else:
-                cs_link = ("<span class=\"text-link\" "
+                cs_link = ('<span class="text-link" '
                            f"onclick=\" scrollToNodeInCT('{node_id}')\">"
                            f"call site: {node_id}</span>")
             html_table_string += html_helpers.html_table_add_row([
                 str(node.cov_forward_reds),
-                str(node.cov_ct_idx), node.cov_parent, cs_link,
-                node.cov_largest_blocked_func
+                str(node.cov_ct_idx),
+                node.cov_parent,
+                cs_link,
+                node.cov_largest_blocked_func,
             ])
         html_table_string += "</table>"
 
         return html_table_string
 
     def create_branch_blocker_table(
-            self, profile: fuzzer_profile.FuzzerProfile, tables: List[str],
-            file_link: str, max_number_of_blockers: int) -> Optional[str]:
+        self,
+        profile: fuzzer_profile.FuzzerProfile,
+        tables: List[str],
+        file_link: str,
+        max_number_of_blockers: int,
+    ) -> Optional[str]:
         """
         Creates HTML string for table showing branch blockers.
         """
@@ -413,30 +438,39 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         if len(branch_blockers) == 0:
             return None
 
-        random_suffix = '_' + ''.join(
+        random_suffix = "_" + "".join(
             random.choices(string.ascii_lowercase + string.ascii_uppercase,
                            k=7))
 
         blockers_node_map = self.collect_calltree_nodes(
             branch_blockers, profile.fuzzer_callsite_calltree)
 
-        html_table_string = "<p class='no-top-margin'>The followings are " \
-                            "the branches where fuzzer fails to bypass.</p>"
+        html_table_string = ("<p class='no-top-margin'>The followings are "
+                             "the branches where fuzzer fails to bypass.</p>")
         tables.append(f"myTable{len(tables)}")
 
         branch_table_rows = [
-            ("Unique non-covered Complexity",
-             "Cyclomatic Complexity of not-yet-covered functions reachable "
-             "by the blocked branch side."),
-            ("Unique Reachable Complexities",
-             "Cyclomatic Complexity of the functions reachable by the blocked branch side."
-             ),
-            ("Unique Reachable Functions",
-             "List of functions that only the blocked branch side can reach."),
-            ("All non-covered Complexity",
-             "Cyclomatic Complexity that is not covered because of blockage."),
-            ("All Reachable Complexity",
-             "Cyclomatic Complexity that the blocked branch-side can reach."),
+            (
+                "Unique non-covered Complexity",
+                "Cyclomatic Complexity of not-yet-covered functions reachable "
+                "by the blocked branch side.",
+            ),
+            (
+                "Unique Reachable Complexities",
+                "Cyclomatic Complexity of the functions reachable by the blocked branch side.",
+            ),
+            (
+                "Unique Reachable Functions",
+                "List of functions that only the blocked branch side can reach.",
+            ),
+            (
+                "All non-covered Complexity",
+                "Cyclomatic Complexity that is not covered because of blockage.",
+            ),
+            (
+                "All Reachable Complexity",
+                "Cyclomatic Complexity that the blocked branch-side can reach.",
+            ),
             ("Function Name", "Function containing the blocked branch."),
             ("Function Callsite",
              "The blocking function callsite in the calltree"),
@@ -455,14 +489,15 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
             node_id = "%s%s" % (link_prefix, calltree_idx)
             if file_link is not None:
                 cs_link = (
-                    "<span class=\"text-link\">"
-                    f"<a href=\"{file_link}?scrollToNode={node_id}\">call site: {node_id}"
+                    '<span class="text-link">'
+                    f'<a href="{file_link}?scrollToNode={node_id}">call site: {node_id}'
                     "</a></span>")
             else:
-                cs_link = ("<span class=\"text-link\" "
+                cs_link = ('<span class="text-link" '
                            f"onclick=\" scrollToNodeInCT('{node_id}')\">"
                            f"call site: {node_id}</span>")
-            collapsible_id = entry.source_file + entry.blocked_side_line_numder + random_suffix
+            collapsible_id = (entry.source_file +
+                              entry.blocked_side_line_numder + random_suffix)
             func_num = len(entry.blocked_unique_funcs)
             if func_num > 0:
                 collapsible_string = html_helpers.create_collapsible_element(
@@ -482,10 +517,12 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                 str(entry.blocked_unique_reachable_complexity),
                 collapsible_string,
                 str(entry.blocked_not_covered_complexity),
-                str(entry.blocked_reachable_complexity), entry_function_name,
-                cs_link, f"""<a href="{entry.coverage_report_link}">
+                str(entry.blocked_reachable_complexity),
+                entry_function_name,
+                cs_link,
+                f"""<a href="{entry.coverage_report_link}">
                     {entry.source_file}:{entry.branch_line_number}
-                </a>"""
+                </a>""",
             ])
         html_table_string += "</table>"
 

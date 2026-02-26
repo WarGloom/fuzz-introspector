@@ -1,48 +1,64 @@
 diff --git a/infra/base-images/base-builder/Dockerfile b/infra/base-images/base-builder/Dockerfile
-index 62c47b9b7..5e6570a5a 100644
+index 16b787e67..e6516f622 100644
 --- a/infra/base-images/base-builder/Dockerfile
 +++ b/infra/base-images/base-builder/Dockerfile
-@@ -193,6 +193,16 @@ COPY llvmsymbol.diff $SRC
- COPY detect_repo.py /opt/cifuzz/
- COPY bazel.bazelrc /root/.bazelrc
+@@ -229,4 +229,7 @@ COPY indexer /opt/indexer
+ COPY --from=gcr.io/oss-fuzz-base/indexer /indexer/build/indexer /opt/indexer/indexer
+ RUN chmod a+x /opt/indexer/indexer /opt/indexer/index_build.py
  
-+RUN rm -rf /fuzz-introspector/src
-+RUN rm -rf /fuzz-introspector/frontends
-+COPY src /fuzz-introspector/src
-+COPY frontends /fuzz-introspector/frontends
++# Copy local fuzz-introspector with our changes
++COPY fuzz-introspector /fuzz-introspector
 +
-+RUN rm -rf /fuzz-introspector/src
-+RUN rm -rf /fuzz-introspector/frontends
-+COPY src /fuzz-introspector/src
-+COPY frontends /fuzz-introspector/frontends
+ CMD ["compile"]
+diff --git a/infra/base-images/base-builder/compile b/infra/base-images/base-builder/compile
+index d6407356a..7ffc1ffd6 100755
+--- a/infra/base-images/base-builder/compile
++++ b/infra/base-images/base-builder/compile
+@@ -223,9 +223,13 @@ if [ "$SANITIZER" = "introspector" ] || [ "$RUST_SANITIZER" = "introspector" ];
+   python3 -m pip install cxxfilt pyyaml beautifulsoup4 lxml soupsieve rust-demangler
+   python3 -m pip install --prefer-binary matplotlib
+ 
++  # Force upgrade tree-sitter to 0.25+ for QueryCursor API
++  python3 -m pip install --upgrade 'tree-sitter>=0.25.0,<0.26.0' tree-sitter-cpp tree-sitter-go tree-sitter-java tree-sitter-python tree-sitter-rust tree-sitter-languages
 +
- # Set up ccache binary and cache directory.
- # /ccache/bin will contain the compiler wrappers, and /ccache/cache will
- # contain the actual cache, which can be saved.
++
+   # Install Fuzz-Introspector
+   pushd /fuzz-introspector/src
+-  python3 -m pip install -e .
++  python3 -m pip install -e . --no-deps
+   popd
+ 
+   if [ "$FUZZING_LANGUAGE" = "python" ]; then
+@@ -337,7 +341,7 @@ if [ "$SANITIZER" = "introspector" ] || [ "$RUST_SANITIZER" = "introspector" ];
+   cp -rf /tmp/inspector-saved $SRC/inspector
+ 
+   cd /fuzz-introspector/src
+-  python3 -m pip install -e .
++  python3 -m pip install -e . --no-deps
+   cd /src/
+ 
+   if [ "$FUZZING_LANGUAGE" = "rust" ]; then
 diff --git a/infra/base-images/base-clang/Dockerfile b/infra/base-images/base-clang/Dockerfile
-index f8ac7df0d..b6edcfc75 100644
+index e5a4ec302..b7d799c2a 100644
 --- a/infra/base-images/base-clang/Dockerfile
 +++ b/infra/base-images/base-clang/Dockerfile
-@@ -43,6 +43,10 @@ RUN apt-get update && apt-get install -y git && \
-     rm -rf .git
+@@ -34,6 +34,8 @@ RUN apt-get update && apt-get install -y wget sudo && \
+     rm -rf /usr/local/doc/cmake /usr/local/bin/cmake-gui
  
  COPY checkout_build_install_llvm.sh /root/
-+
 +RUN rm -rf /fuzz-introspector
 +COPY fuzz-introspector fuzz-introspector
-+
+ 
  # Keep all steps in the same script to decrease the number of intermediate
  # layes in docker file.
- ARG FULL_LLVM_BUILD
 diff --git a/infra/base-images/base-runner/coverage b/infra/base-images/base-runner/coverage
-index 585b4d457..014bdbce6 100755
+index c3300fb8a..5304535c0 100755
 --- a/infra/base-images/base-runner/coverage
 +++ b/infra/base-images/base-runner/coverage
-@@ -382,6 +382,26 @@ if [[ $FUZZING_LANGUAGE == "go" ]]; then
+@@ -498,6 +498,24 @@ if [[ $FUZZING_LANGUAGE == "go" ]]; then
    echo $DUMPS_DIR
    $SYSGOPATH/bin/gocovmerge $DUMPS_DIR/*.profdata > fuzz.cov
    gotoolcover -html=fuzz.cov -o $REPORT_ROOT_DIR/index.html
-+
 +  # Patch the html with additional javascript to allow direct url
 +  # selection of target source file.
 +  SCRIPT='<script>
@@ -61,7 +77,6 @@ index 585b4d457..014bdbce6 100755
 +  sed -i "/<\/html>/d" $REPORT_ROOT_DIR/index.html
 +  echo $SCRIPT >> $REPORT_ROOT_DIR/index.html
 +  echo "</html>" >> $REPORT_ROOT_DIR/index.html
-+
    $SYSGOPATH/bin/gocovsum fuzz.cov > $SUMMARY_FILE
    cp $REPORT_ROOT_DIR/index.html $REPORT_PLATFORM_DIR/index.html
    $SYSGOPATH/bin/pprof-merge $DUMPS_DIR/*.perf.cpu.prof

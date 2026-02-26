@@ -1,3 +1,10 @@
+"""
+Constants used throughout the fuzz-introspector project.
+
+This module contains all the constant values used across the codebase,
+including file paths, language definitions, and configuration values.
+"""
+
 # Copyright 2022 Fuzz Introspector Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,39 +26,43 @@ GIT_BRANCH_URL = f"{GIT_REPO}/blob/main"
 
 ENGINE_INPUT_FILE = "fuzz-introspector-engine-input.json"
 SUMMARY_FILE = "summary.json"
-ALL_FUNCTIONS_JSON = 'all-fuzz-introspector-functions.json'
-ALL_JVM_CONSTRUCTOR_JSON = 'all-fuzz-introspector-jvm-constructor.json'
-BRANCH_BLOCKERS_FILE = 'branch-blockers.json'
-TEST_FILES_JSON = 'test-files.json'
-ALL_SOURCE_FILES = 'all-files.json'
+ALL_FUNCTIONS_JSON = "all-fuzz-introspector-functions.json"
+ALL_JVM_CONSTRUCTOR_JSON = "all-fuzz-introspector-jvm-constructor.json"
+BRANCH_BLOCKERS_FILE = "branch-blockers.json"
+TEST_FILES_JSON = "test-files.json"
+ALL_SOURCE_FILES = "all-files.json"
 
 HTML_REPORT = "fuzz_report.html"
 
 DEBUG_INFO_DUMP = "all_debug_info.json"
 
-SAVED_SOURCE_FOLDER = 'source-code'
+SAVED_SOURCE_FOLDER = "source-code"
 
 
 class LANGUAGES:
-    C = 'c'
-    CPP = 'c++'
-    JAVA = 'jvm'
-    GO = 'go'
-    RUST = 'rust'
+    C = "c"
+    CPP = "c++"
+    JAVA = "jvm"
+    GO = "go"
+    RUST = "rust"
 
 
 LANGUAGES_SUPPORTED = [
-    LANGUAGES.C, LANGUAGES.CPP, LANGUAGES.JAVA, LANGUAGES.GO, LANGUAGES.RUST
+    LANGUAGES.C,
+    LANGUAGES.CPP,
+    LANGUAGES.JAVA,
+    LANGUAGES.GO,
+    LANGUAGES.RUST,
 ]
 
 LANGUAGE_EXTENSIONS = {
     LANGUAGES.C:
-    ['.c', '.cpp', '.cc', '.c++', '.cxx', '.h', '.hpp', '.hh', '.hxx'],
+    [".c", ".cpp", ".cc", ".c++", ".cxx", ".h", ".hpp", ".hh", ".hxx"],
     LANGUAGES.CPP:
-    ['.c', '.cpp', '.cc', '.c++', '.cxx', '.h', '.hpp', '.hh', '.hxx'],
-    LANGUAGES.JAVA: ['.java'],
-    LANGUAGES.RUST: ['.rs'],
-    LANGUAGES.GO: ['.go', '.cgo'],
+    [".c", ".cpp", ".cc", ".c++", ".cxx", ".h", ".hpp", ".hh", ".hxx"],
+    LANGUAGES.JAVA: [".java"],
+    LANGUAGES.RUST: [".rs"],
+    LANGUAGES.GO: [".go", ".cgo"],
 }
 
 # Holds data about all functions in javascript, to ease loading of static
@@ -71,7 +82,7 @@ APP_EXIT_ERROR = 1
 APP_EXIT_SUCCESS = 0
 
 INPUT_BUG_FILE = "input_bugs.json"
-JSON_REPORT_KEY_PROJECT = 'MergedProjectProfile'
+JSON_REPORT_KEY_PROJECT = "MergedProjectProfile"
 
 # Color constants used for call trees. Composed of tuples,
 # (min, max, color) where
@@ -81,13 +92,16 @@ JSON_REPORT_KEY_PROJECT = 'MergedProjectProfile'
 # have the color of the tuple.
 # - color is the string
 # The hitcount is [min:max)
-COLOR_CONSTANTS = [(0, 1, "red", "#ff0000"), (1, 10, "gold", "#ffd700"),
-                   (10, 30, "yellow", "#ffff00"),
-                   (30, 50, "greenyellow", "#adff2f"),
-                   (50, 1000000000000, "lawngreen", "#7cfc00")]
+COLOR_CONSTANTS = [
+    (0, 1, "red", "#ff0000"),
+    (1, 10, "gold", "#ffd700"),
+    (10, 30, "yellow", "#ffff00"),
+    (30, 50, "greenyellow", "#adff2f"),
+    (50, 1000000000000, "lawngreen", "#7cfc00"),
+]
 
 BLOCKLISTED_FUNCTION_NAMES = re.compile(
-    r'^__sanitizer|^llvm\.|^__assert|.*printf$')
+    r"^__sanitizer|^llvm\.|^__assert|.*printf$")
 
 # Use by SinkCoverageAnaylser in analyses/sink_analyser.py
 # Integer constants to limit the maximum number of callpaths
