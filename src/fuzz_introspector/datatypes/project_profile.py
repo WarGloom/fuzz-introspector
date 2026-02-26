@@ -14,6 +14,7 @@
 """Project profile"""
 
 import collections
+import itertools
 import os
 import logging
 
@@ -51,6 +52,8 @@ class MergedProjectProfile:
         self.coverage_url = "#"
         self.dst_to_fd_cache: Dict[str,
                                    function_profile.FunctionProfile] = dict()
+        self._all_functions_with_source_cache: Dict[
+            str, function_profile.FunctionProfile] | None = None
         self.language = language
 
         logger.info(
@@ -122,17 +125,20 @@ class MergedProjectProfile:
         # Gather complexity information about each function
         logger.info(
             "Gathering complexity and incoming references of each function")
-        for fp_obj in {**self.all_functions, **self.all_constructors}.values():
+        all_functions = self.all_functions
+        all_constructors = self.all_constructors
+        for fp_obj in itertools.chain(all_functions.values(),
+                                      all_constructors.values()):
             total_cyclomatic_complexity = 0
             total_new_complexity = 0
 
             for reached_func_name in fp_obj.functions_reached:
-                if reached_func_name in self.all_functions:
-                    reached_func_obj = self.all_functions[reached_func_name]
-                elif reached_func_name in self.all_constructors:
-                    reached_func_obj = self.all_constructors[reached_func_name]
+                if reached_func_name in all_functions:
+                    reached_func_obj = all_functions[reached_func_name]
+                elif reached_func_name in all_constructors:
+                    reached_func_obj = all_constructors[reached_func_name]
                 else:
-                    if profile.target_lang == "jvm":
+                    if self.target_lang == "jvm":
                         logger.debug(
                             f"{reached_func_name} not provided within classpath"
                         )
@@ -524,13 +530,12 @@ class MergedProjectProfile:
         attached, which roughly corresponds to functions declared in the
         project or third parties where source code was pulled in.
         """
-        all_functions = self.get_all_functions()
+        if self._all_functions_with_source_cache is not None:
+            return self._all_functions_with_source_cache
 
         local_functions_with_source: Dict[
             str, function_profile.FunctionProfile] = dict()
-
-        for func_name in all_functions:
-            func_profile = self.all_functions[func_name]
+        for func_name, func_profile in self.all_functions.items():
             # Go through checks to ensure we have the source code.
             if not func_profile.has_source_file:
                 continue
@@ -538,6 +543,8 @@ class MergedProjectProfile:
             if int(func_profile.function_linenumber) == -1:
                 continue
             local_functions_with_source[func_name] = func_profile
+
+        self._all_functions_with_source_cache = local_functions_with_source
         return local_functions_with_source
 
     def get_func_hit_percentage(self, func_name):
