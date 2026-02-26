@@ -248,6 +248,23 @@ class OptimalTargets(analysis.AnalysisInterface):
         logger.info("Found a total of %d potential targets", len(target_fds))
         return target_fds
 
+    def _clone_profile_for_optimal_targets(
+        self, merged_profile: project_profile.MergedProjectProfile
+    ) -> project_profile.MergedProjectProfile:
+        """
+        Clone only the mutable merged profile state used by this analysis.
+        This avoids deep-copying unrelated heavy profile data.
+        """
+        cloned_profile = copy.copy(merged_profile)
+        cloned_functions = {}
+        for func_name, func_profile in merged_profile.all_functions.items():
+            cloned_function = copy.copy(func_profile)
+            cloned_function.reached_by_fuzzers = list(
+                func_profile.reached_by_fuzzers)
+            cloned_functions[func_name] = cloned_function
+        cloned_profile.all_functions = cloned_functions
+        return cloned_profile
+
     def iteratively_get_optimal_targets(
         self, merged_profile: project_profile.MergedProjectProfile
     ) -> Tuple[project_profile.MergedProjectProfile,
@@ -261,7 +278,8 @@ class OptimalTargets(analysis.AnalysisInterface):
         data we have. It is likely that we could do something much better.
         """
         logger.info("  - in iteratively_get_optimal_targets")
-        new_merged_profile = copy.deepcopy(merged_profile)
+        new_merged_profile = self._clone_profile_for_optimal_targets(
+            merged_profile)
         optimal_functions_targeted: List[function_profile.FunctionProfile] = []
 
         # Extract all candidates
