@@ -32,6 +32,8 @@ from concurrent.futures import (FIRST_COMPLETED, ProcessPoolExecutor,
 from typing import Any, TypeVar
 import yaml
 
+from fuzz_introspector import backend_loaders
+
 logger = logging.getLogger(name=__name__)
 _T = TypeVar("_T")
 DebugPayload = tuple[
@@ -790,6 +792,28 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
 
     if not paths:
         return []
+
+    selected_backend, external_items = backend_loaders.load_json_with_backend(
+        backend_env="FI_DEBUG_YAML_LOADER",
+        command_env_prefix="FI_DEBUG_YAML_LOADER",
+        payload={
+            "paths": paths,
+            "category": category
+        },
+        default_backend=backend_loaders.BACKEND_RUST,
+        timeout_env="FI_DEBUG_YAML_LOADER_TIMEOUT_SEC",
+    )
+    if external_items is not None:
+        if isinstance(external_items, dict):
+            external_items = external_items.get("items", [])
+        if isinstance(external_items, list):
+            logger.info("Loaded %d %s items with %s backend",
+                        len(external_items), category, selected_backend)
+            return external_items
+        logger.warning(
+            "External %s backend returned non-list payload; falling back to python",
+            selected_backend,
+        )
 
     parallel_enabled = _parse_bool_env("FI_DEBUG_PARALLEL", True)
     max_workers_default = min(os.cpu_count() or 1, 8)

@@ -30,6 +30,7 @@ from typing import (
 )
 
 from fuzz_introspector import utils
+from fuzz_introspector import backend_loaders
 from fuzz_introspector import exceptions
 from fuzz_introspector.datatypes import function_profile
 
@@ -474,6 +475,90 @@ def extract_hitcount(coverage_line: str) -> int:
     return int(num)
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalise_external_cov_function_name(func_name: str, is_rust: bool) -> str:
+    if is_rust:
+        return utils.demangle_rust_func(func_name)
+    return utils.demangle_cpp_func(func_name)
+
+
+def _normalise_external_branch_key(branch_key: str, is_rust: bool) -> str:
+    match = re.match(r"^(.*):(-?\d+),(-?\d+)$", branch_key)
+    if match is None:
+        return branch_key
+    func_name, line_no, column_no = match.groups()
+    normalised_name = _normalise_external_cov_function_name(func_name, is_rust)
+    return f"{normalised_name}:{line_no},{column_no}"
+
+
+def _coerce_external_covmap(raw_covmap: Any,
+                            is_rust: bool) -> Dict[str, List[Tuple[int, int]]]:
+    covmap: Dict[str, List[Tuple[int, int]]] = {}
+    if not isinstance(raw_covmap, dict):
+        return covmap
+
+    for func_name, line_entries in raw_covmap.items():
+        if not isinstance(func_name, str) or not isinstance(line_entries, list):
+            continue
+        parsed_entries: List[Tuple[int, int]] = []
+        for entry in line_entries:
+            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+                continue
+            parsed_entries.append(
+                (_safe_int(entry[0], default=0), _safe_int(entry[1],
+                                                           default=0)))
+        normalised_name = _normalise_external_cov_function_name(
+            func_name, is_rust)
+        if normalised_name not in covmap:
+            covmap[normalised_name] = []
+        covmap[normalised_name].extend(parsed_entries)
+    return covmap
+
+
+def _coerce_external_branch_cov_map(raw_branch_map: Any,
+                                    is_rust: bool) -> Dict[str, List[int]]:
+    branch_map: Dict[str, List[int]] = {}
+    if not isinstance(raw_branch_map, dict):
+        return branch_map
+
+    for branch_key, branch_values in raw_branch_map.items():
+        if not isinstance(branch_key, str) or not isinstance(
+                branch_values, list):
+            continue
+        normalised_key = _normalise_external_branch_key(branch_key, is_rust)
+        branch_map[normalised_key] = [_safe_int(value, default=0)
+                                      for value in branch_values]
+    return branch_map
+
+
+def _coverage_profile_from_external_payload(
+        payload: Any,
+        fallback_coverage_files: List[str],
+        is_rust: bool) -> Optional[CoverageProfile]:
+    if not isinstance(payload, dict):
+        return None
+
+    cp = CoverageProfile()
+    cp.set_type("function")
+    cp.covmap = _coerce_external_covmap(payload.get("covmap", {}), is_rust)
+    cp.branch_cov_map = _coerce_external_branch_cov_map(
+        payload.get("branch_cov_map", {}), is_rust)
+
+    raw_files = payload.get("coverage_files")
+    if isinstance(raw_files, list) and all(
+            isinstance(file_path, str) for file_path in raw_files):
+        cp.coverage_files = raw_files
+    else:
+        cp.coverage_files = list(fallback_coverage_files)
+    return cp
+
+
 def load_llvm_coverage(target_dir: str,
                        target_name: Optional[str] = None,
                        is_rust: bool = False) -> CoverageProfile:
@@ -522,6 +607,30 @@ def load_llvm_coverage(target_dir: str,
     # If we found no target coverage report then use all reports.
     if len(coverage_reports) == 0:
         coverage_reports = all_coverage_reports
+
+    selected_backend, external_payload = backend_loaders.load_json_with_backend(
+        backend_env="FI_LLVM_COV_LOADER",
+        command_env_prefix="FI_LLVM_COV_LOADER",
+        payload={
+            "target_dir": target_dir,
+            "target_name": target_name,
+            "is_rust": is_rust,
+            "coverage_reports": coverage_reports,
+        },
+        default_backend=backend_loaders.BACKEND_RUST,
+        timeout_env="FI_LLVM_COV_LOADER_TIMEOUT_SEC",
+    )
+    if external_payload is not None:
+        profile = _coverage_profile_from_external_payload(
+            external_payload, coverage_reports, is_rust)
+        if profile is not None:
+            logger.info("Loaded LLVM coverage with %s backend (%d reports)",
+                        selected_backend, len(coverage_reports))
+            return profile
+        logger.warning(
+            "External LLVM coverage payload from %s backend was invalid; falling back to python",
+            selected_backend,
+        )
 
     cache_enabled = os.getenv(LLVM_COVERAGE_CACHE_ENV, "1").strip().lower() not in (
         "0", "false", "no", "off")

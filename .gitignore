@@ -19,6 +19,14 @@ tests/tree-sitter-frontend/
 
 .claude/settings.local.json
 .agents/
+.work*
 plan.md
 docs/perf/debug_info_remediation_plan.md
 docs/perf/p2_2_process_pool_plan.md
+benchmarks/results/
+tools/native_llvm_cov_loader_rust/target/
+tools/native_yaml_loader_rust/target/
+tools/native_llvm_cov_loader_go/native_llvm_cov_loader_go
+tools/native_yaml_loader_go/native_yaml_loader_go
+tools/native_llvm_cov_loader_cpp/native_llvm_cov_loader_cpp
+tools/native_yaml_loader_cpp/native_yaml_loader_cpp

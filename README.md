@@ -63,6 +63,22 @@ variables:
   bitmap generation above this node count. `0` disables bitmap generation.
 - `FI_STAGE_WARN_SECONDS` (default: `0`): emit warning when a report stage
   exceeds this duration in seconds. `0` disables warnings.
+- `FI_DEBUG_YAML_LOADER` (default: `rust`): backend for debug YAML loader.
+  Supported selectors: `python`, `go`, `rust`, `cpp`.
+- `FI_PROFILE_YAML_LOADER` (default: `rust`): backend for profile YAML
+  parsing. Supported selectors: `python`, `go`, `rust`, `cpp`.
+- `FI_LLVM_COV_LOADER` (default: `rust`): backend for `.covreport` parsing.
+  Supported selectors: `python`, `go`, `rust`, `cpp`.
+- Backend binary configuration:
+  - `FI_DEBUG_YAML_LOADER_<BACKEND>_BIN` or `FI_DEBUG_YAML_LOADER_BIN`
+  - `FI_PROFILE_YAML_LOADER_<BACKEND>_BIN` or `FI_PROFILE_YAML_LOADER_BIN`
+  - `FI_LLVM_COV_LOADER_<BACKEND>_BIN` or `FI_LLVM_COV_LOADER_BIN`
+  where `<BACKEND>` is uppercase (`GO`, `RUST`, `CPP`).
+- Backend policy:
+  - Rust is the default backend for all three loader surfaces.
+  - Go remains available as an optional speed-focused backend mode.
+  - Python remains the reliability fallback and is automatically used when a
+    configured external backend is unavailable or fails.
 
 Presets:
 
@@ -107,6 +123,47 @@ export FI_PROFILE_BACKEND=thread
 export FI_CALLTREE_BITMAP_MAX_NODES=5000
 export FI_STAGE_WARN_SECONDS=120
 ```
+
+### Plugin/backend performance benchmarking
+
+Run analysis-by-analysis benchmarks with backend matrix settings:
+
+```bash
+python3 benchmarks/run_plugin_backend_perf.py \
+  --target-dir /path/to/introspector/artifacts \
+  --language c-cpp \
+  --disable-calltree-bitmap \
+  --src-dir /path/to/project/src \
+  --debug-yaml-loaders python \
+  --profile-yaml-loaders python \
+  --llvm-cov-loaders python go
+```
+
+This records elapsed time, CPU%, and max RSS (via `/usr/bin/time`) in
+`benchmarks/results/plugin_backend_perf_results.json`.
+
+Validate run outputs:
+
+```bash
+python3 benchmarks/validate_plugin_backend_perf.py \
+  --results-json benchmarks/results/plugin_backend_perf_results.json
+```
+
+Compare backend output parity for LLVM coverage parser implementations:
+
+```bash
+python3 benchmarks/compare_llvm_cov_backends.py \
+  --cov-dir /path/to/textcov_reports \
+  --go-bin /tmp/native_llvm_cov_loader_go \
+  --rust-bin /tmp/native_llvm_cov_loader_rust \
+  --cpp-bin /tmp/native_llvm_cov_loader_cpp
+```
+
+CI policy for backend tests:
+
+- CI and in-repo tests must use synthetic fixtures only.
+- Real project datasets should be used for manual/offline benchmarking only.
+- Do not commit large benchmark inputs or outputs.
 
 ## Architecture
 The workflow of fuzz-introspector can be visualised as follows:

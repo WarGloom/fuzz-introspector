@@ -1433,6 +1433,9 @@ def _create_section_optional_analyses_impl(
             parallel_worker_count,
             parallel_backend,
         )
+        logger.info(" - Parallel analyses: %s", [
+            analysis_cls.get_name() for analysis_cls in parallel_interfaces
+        ])
         parallel_results = _run_parallel_analyses(
             parallel_interfaces,
             analyses_to_run,
@@ -1458,6 +1461,7 @@ def _create_section_optional_analyses_impl(
 
     for analysis_interface in serial_interfaces:
         analysis_name = analysis_interface.get_name()
+        logger.info(" - Running serial analysis: %s", analysis_name)
         if use_parallel_merge:
             envelope = _run_serial_analysis_with_envelope(
                 analysis_interface,

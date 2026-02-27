@@ -18,11 +18,13 @@ import json
 import logging
 import os
 from typing import (
+    Any,
     Dict,
     List,
     Optional,
 )
 
+from fuzz_introspector import backend_loaders
 from fuzz_introspector import constants
 from fuzz_introspector import utils
 from fuzz_introspector.datatypes import fuzzer_profile, bug
@@ -69,13 +71,32 @@ def read_fuzzer_data_file_to_profile(
         logger.info("R1")
         return None
 
-    data_dict_yaml = utils.data_file_read_yaml(target_data_f + ".yaml")
+    def _load_profile_yaml(yaml_path: str) -> Optional[dict[Any, Any]]:
+        selected_backend, backend_payload = backend_loaders.load_json_with_backend(
+            backend_env="FI_PROFILE_YAML_LOADER",
+            command_env_prefix="FI_PROFILE_YAML_LOADER",
+            payload={"path": yaml_path},
+            default_backend=backend_loaders.BACKEND_RUST,
+            timeout_env="FI_PROFILE_YAML_LOADER_TIMEOUT_SEC",
+        )
+        if backend_payload is not None:
+            if isinstance(backend_payload, dict):
+                logger.info("Loaded %s using %s backend", yaml_path,
+                            selected_backend)
+                return backend_payload
+            logger.warning(
+                "Backend payload for %s is not a dictionary; falling back to python",
+                yaml_path,
+            )
+        return utils.data_file_read_yaml(yaml_path)
+
+    data_dict_yaml = _load_profile_yaml(target_data_f + ".yaml")
 
     # Must be  dictionary
     if data_dict_yaml is None or not isinstance(data_dict_yaml, dict):
         logger.info("Found no data yaml file")
         if os.path.isfile("report.yaml"):
-            data_dict_yaml = utils.data_file_read_yaml("report.yaml")
+            data_dict_yaml = _load_profile_yaml("report.yaml")
             if data_dict_yaml is None or not isinstance(data_dict_yaml, dict):
                 logger.info("Report.yaml is not a valid yaml file")
                 return None

@@ -45,6 +45,36 @@ def test_load_debug_all_yaml_files_serial(monkeypatch):
     assert items == [{"k": 1}, {"k": 2}]
 
 
+def test_load_debug_all_yaml_files_external_backend(monkeypatch):
+    monkeypatch.setenv("FI_DEBUG_YAML_LOADER", "go")
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "load_json_with_backend",
+        lambda **_: ("go", [{"external": True}]),
+    )
+
+    items = debug_info.load_debug_all_yaml_files(["/tmp/unused.yaml"])
+    assert items == [{"external": True}]
+
+
+def test_load_debug_all_yaml_files_uses_rust_default_backend(monkeypatch):
+    captured = {}
+
+    def _fake_loader(**kwargs):
+        captured["default_backend"] = kwargs.get("default_backend")
+        return "python", None
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yaml_path = _write_yaml(tmpdir, "a.yaml", [{"k": 1}])
+        monkeypatch.setenv("FI_DEBUG_PARALLEL", "0")
+        monkeypatch.setattr(debug_info.backend_loaders, "load_json_with_backend",
+                            _fake_loader)
+        items = debug_info.load_debug_all_yaml_files([yaml_path])
+
+    assert captured["default_backend"] == debug_info.backend_loaders.BACKEND_RUST
+    assert items == [{"k": 1}]
+
+
 def test_load_debug_all_yaml_files_parallel(monkeypatch):
     with tempfile.TemporaryDirectory() as tmpdir:
         files = []
