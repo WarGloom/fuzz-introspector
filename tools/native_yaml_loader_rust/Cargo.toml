@@ -1,0 +1,8 @@
+[package]
+name = "native_yaml_loader_rust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde_json = "1.0"
+yaml_serde = "0.10.3"
