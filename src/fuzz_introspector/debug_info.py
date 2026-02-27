@@ -996,9 +996,9 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                                         logger.info((
                                             "Memory pressure downshift for %s: "
                                             "rss=%.2fMB limit=%dMB "
-                                            "max in-flight %d -> %d"), category,
-                                            rss_mb, rss_soft_limit_mb,
-                                            previous_cap,
+                                            "max in-flight %d -> %d"),
+                                            category, rss_mb,
+                                            rss_soft_limit_mb, previous_cap,
                                             adaptive_inflight_cap)
                                 elif (rss_mb <= rss_soft_limit_mb * 0.85
                                       and adaptive_inflight_cap <
@@ -1013,9 +1013,9 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                                         logger.info((
                                             "Memory pressure recovery for %s: "
                                             "rss=%.2fMB limit=%dMB "
-                                            "max in-flight %d -> %d"), category,
-                                            rss_mb, rss_soft_limit_mb,
-                                            previous_cap,
+                                            "max in-flight %d -> %d"),
+                                            category, rss_mb,
+                                            rss_soft_limit_mb, previous_cap,
                                             adaptive_inflight_cap)
                                 else:
                                     rss_relief_streak = 0
