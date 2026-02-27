@@ -14,6 +14,7 @@
 """Utility functions"""
 
 import cxxfilt
+import functools
 import rust_demangler
 import logging
 import json
@@ -148,6 +149,7 @@ def data_file_read_yaml(filename: str) -> Optional[dict[Any, Any]]:
     return content
 
 
+@functools.lru_cache(maxsize=4096)
 def demangle_cpp_func(funcname: str) -> str:
     try:
         demangled: str = cxxfilt.demangle(funcname.replace(" ", ""))
@@ -156,6 +158,7 @@ def demangle_cpp_func(funcname: str) -> str:
         return funcname
 
 
+@functools.lru_cache(maxsize=4096)
 def demangle_rust_func(funcname: str) -> str:
     """Demangle the mangled rust function names."""
     # Ignore all non-mangled rust function names
