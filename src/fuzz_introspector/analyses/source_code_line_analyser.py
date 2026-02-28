@@ -17,6 +17,7 @@ target source file."""
 import os
 import json
 import logging
+import collections
 
 from typing import Any
 
@@ -105,11 +106,15 @@ class SourceCodeLineAnalyser(analysis.AnalysisInterface):
         all_functions.extend(proj_profile.all_constructors.values())
 
         # Generate SourceFile to Function Profile map and store in JSON Result
-        func_file_map: dict[str, list[function_profile.FunctionProfile]] = {}
+        # Optimization: Use collections.defaultdict(list) instead of manual .get(key, [])
+        # to avoid allocating a new empty list on every iteration. This improves performance
+        # when accumulating values into a multimap.
+        func_file_map: dict[
+            str,
+            list[function_profile.FunctionProfile]] = collections.defaultdict(
+                list)
         for function in all_functions:
-            func_list = func_file_map.get(function.function_source_file, [])
-            func_list.append(function)
-            func_file_map[function.function_source_file] = func_list
+            func_file_map[function.function_source_file].append(function)
 
         if os.sep in self.source_file:
             # File path
