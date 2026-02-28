@@ -57,8 +57,11 @@ variables:
   type-correlation.
 - `FI_DEBUG_CORRELATE_WORKERS` (default: `min(cpu_count, 8)`): worker cap for
   type-correlation.
+- `FI_DEBUG_CORRELATE_BACKEND` (default: `auto`): correlation backend for type-correlation.
+  Supported: `auto`, `thread`, `process`.
 - `FI_PROFILE_BACKEND` (default: `thread`): profile loading backend.
   Supported: `thread`, `process`.
+- `FI_PROFILE_WORKERS` (default: `cpu_count`): worker cap for profile loading.
 - `FI_CALLTREE_BITMAP_MAX_NODES` (default: `20000`): skip large calltree
   bitmap generation above this node count. `0` disables bitmap generation.
 - `FI_STAGE_WARN_SECONDS` (default: `0`): emit warning when a report stage

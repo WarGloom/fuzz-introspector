@@ -33,6 +33,7 @@ logger = logging.getLogger(name=__name__)
 FI_PROFILE_BACKEND_ENV = "FI_PROFILE_BACKEND"
 FI_PROFILE_BACKEND_THREAD = "thread"
 FI_PROFILE_BACKEND_PROCESS = "process"
+FI_PROFILE_WORKERS_ENV = "FI_PROFILE_WORKERS"
 
 
 def _get_profile_executor_backend(
@@ -51,6 +52,23 @@ def _get_profile_executor_backend(
                        FI_PROFILE_BACKEND_THREAD)
 
     return concurrent.futures.ThreadPoolExecutor, FI_PROFILE_BACKEND_THREAD
+
+
+def _parse_int_env(var_name: str, default: int, minimum: int = 1) -> int:
+    raw_value = os.environ.get(var_name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        logger.warning("Invalid %s=%r; using default %d", var_name, raw_value,
+                       default)
+        return default
+    if value < minimum:
+        logger.warning("Invalid %s=%r; using minimum %d", var_name, raw_value,
+                       minimum)
+        return minimum
+    return value
 
 
 def read_fuzzer_data_file_to_profile(
@@ -128,6 +146,15 @@ def _load_profile(data_file: str, language: str):
     return data_file, read_fuzzer_data_file_to_profile(data_file, language)
 
 
+def _resolve_profile_worker_count(data_file_count: int) -> int:
+    """Return worker count for profile loading."""
+    if data_file_count <= 1:
+        return 1
+    cpu_count = os.cpu_count() or 1
+    configured_workers = _parse_int_env(FI_PROFILE_WORKERS_ENV, cpu_count, 1)
+    return max(1, min(configured_workers, data_file_count))
+
+
 def load_all_debug_files(target_folder: str):
     """Loads all .debug_info files"""
     debug_info_files = utils.get_all_files_in_tree_with_regex(
@@ -161,12 +188,7 @@ def load_all_profiles(
         parallelise: bool = True) -> List[fuzzer_profile.FuzzerProfile]:
     """Loads all profiles in target_folder in a multi-threaded manner"""
     logger.info("Loading profiles from %s", target_folder)
-    if language == "jvm":
-        # Java targets tend to be quite large, so we try to avoid memory
-        # exhaustion here.
-        worker_count = 3
-    else:
-        worker_count = 6
+    default_worker_count = 3 if language == "jvm" else os.cpu_count() or 1
 
     profiles = []
     data_files = utils.get_all_files_in_tree_with_regex(
@@ -181,6 +203,12 @@ def load_all_profiles(
 
     logger.info(" - found %d profiles to load", len(data_files))
     if parallelise:
+        worker_count = _resolve_profile_worker_count(len(data_files))
+        if worker_count == 1:
+            logger.info(
+                "Profile loading configured with 1 worker; running serially")
+        if language == "jvm":
+            worker_count = max(1, min(worker_count, default_worker_count))
         worker_count = max(1, min(worker_count, len(data_files)))
         executor_cls, backend = _get_profile_executor_backend()
         logger.info(

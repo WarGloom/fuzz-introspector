@@ -308,11 +308,16 @@ def light_analysis(args) -> int:
     if not os.path.isdir(light_dir):
         os.makedirs(light_dir, exist_ok=True)
 
+    all_source_files = analysis.extract_all_sources(
+        args.language,
+        exclude_patterns,
+    )
     all_tests = analysis.extract_tests_from_directories(
         {src_dir},
         args.language,
         inspector_dir,
         exclude_patterns=exclude_patterns,
+        pre_scanned_files=all_source_files,
     )
 
     with open(os.path.join(light_dir, "all_tests.json"), "w") as f:
@@ -325,10 +330,6 @@ def light_analysis(args) -> int:
     with open(os.path.join(light_dir, "all_pairs.json"), "w") as f:
         f.write(json.dumps(list(pairs)))
 
-    all_source_files = analysis.extract_all_sources(
-        args.language,
-        exclude_patterns,
-    )
     light_out_src = os.path.join(light_dir, "source_files")
 
     for source_file in all_source_files:

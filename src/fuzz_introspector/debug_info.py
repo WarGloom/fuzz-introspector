@@ -1475,45 +1475,94 @@ def correlate_debugged_function_to_debug_types(all_debug_types,
     )
 
     parallel_enabled = _parse_bool_env("FI_DEBUG_CORRELATE_PARALLEL", True)
+    total_funcs = len(all_debug_functions)
     max_workers_default = min(os.cpu_count() or 1, 8)
     worker_count = _parse_int_env("FI_DEBUG_CORRELATE_WORKERS",
                                   max_workers_default, 1)
-    total_funcs = len(all_debug_functions)
+    worker_backend_raw = os.environ.get("FI_DEBUG_CORRELATE_BACKEND", "auto").strip(
+    ).lower()
+    worker_backend = worker_backend_raw or "auto"
+    if worker_backend not in ("auto", "thread", "process"):
+        logger.warning("Invalid FI_DEBUG_CORRELATE_BACKEND=%r; using 'auto'",
+                       worker_backend)
+        worker_backend = "auto"
+    if worker_backend == "auto":
+        worker_backend = "process" if total_funcs > 40000 else "thread"
     chunk_size = max(1, total_funcs // worker_count) if worker_count > 0 else 1
 
     def _process_slice(func_slice):
         _correlate_function_slice(func_slice, debug_type_dictionary)
 
     if parallel_enabled and worker_count > 1 and total_funcs > 1:
-        logger.info("Correlating %d debug functions with %d threads",
-                    total_funcs, worker_count)
+        logger.info(
+            "Correlating %d debug functions with %d %s workers",
+            total_funcs,
+            worker_count,
+            worker_backend,
+        )
         chunks = _chunked(all_debug_functions, chunk_size)
         completed_chunks = 0
         total_chunks = len(chunks)
         correlate_start = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = {
-                executor.submit(_process_slice, chunk): idx
-                for idx, chunk in enumerate(chunks)
-            }
-            for future in as_completed(futures):
-                idx = futures[future]
-                try:
-                    future.result()
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.warning(
-                        "Parallel correlation chunk %d failed: %s; "
-                        "falling back to serial", idx, exc)
-                    _correlate_function_slice(all_debug_functions,
-                                              debug_type_dictionary)
-                    break
-                completed_chunks += 1
-                logger.info(
-                    "Correlation progress: %d/%d chunks (%.3fs)",
-                    completed_chunks,
-                    total_chunks,
-                    time.perf_counter() - correlate_start,
-                )
+        if worker_backend == "process":
+            indexed_funcs = list(enumerate(all_debug_functions))
+            with ProcessPoolExecutor(max_workers=worker_count) as executor:
+                futures = {
+                    executor.submit(_correlate_function_slice_multiproc,
+                                   chunk,
+                                   debug_type_dictionary): idx
+                    for idx, chunk in enumerate(_chunked(indexed_funcs, chunk_size))
+                }
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    try:
+                        result_rows = future.result()
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.warning(
+                            "Parallel correlation chunk %d failed: %s; "
+                            "falling back to serial", idx, exc)
+                        _correlate_function_slice(all_debug_functions,
+                                                  debug_type_dictionary)
+                        break
+                    for row_idx, func_signature_elems, source_location in result_rows:
+                        debug_func = all_debug_functions[row_idx]
+                        debug_func["func_signature_elems"] = func_signature_elems
+                        debug_func["source"] = source_location
+                    completed_chunks += 1
+                    logger.info(
+                        "Correlation progress: %d/%d chunks (%.3fs)",
+                        completed_chunks,
+                        total_chunks,
+                        time.perf_counter() - correlate_start,
+                    )
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = {
+                    executor.submit(_process_slice, chunk): idx
+                    for idx, chunk in enumerate(chunks)
+                }
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    try:
+                        future.result()
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.warning(
+                            "Parallel correlation chunk %d failed: %s; "
+                            "falling back to serial", idx, exc)
+                        _correlate_function_slice(all_debug_functions,
+                                                  debug_type_dictionary)
+                        break
+                    completed_chunks += 1
+                    logger.info(
+                        "Correlation progress: %d/%d chunks (%.3fs)",
+                        completed_chunks,
+                        total_chunks,
+                        time.perf_counter() - correlate_start,
+                    )
+        logger.info(
+            "Correlation completed in %.3fs",
+            time.perf_counter() - correlate_start,
+        )
     else:
         logger.info("Correlating %d debug functions serially", total_funcs)
         correlate_start = time.perf_counter()
@@ -1536,6 +1585,19 @@ def _correlate_function_slice(func_slice: list[Any],
             extract_debugged_function_signature(dfunc, debug_type_dictionary))
         dfunc["func_signature_elems"] = func_signature_elems
         dfunc["source"] = source_location
+
+
+def _correlate_function_slice_multiproc(
+    func_slice: list[tuple[int, dict[str, Any]]],
+    debug_type_dictionary: dict[int, Any],
+) -> list[tuple[int, Any, dict[str, str]]]:
+    results = []
+    for idx, debug_function in func_slice:
+        func_signature_elems, source_location = (
+            extract_debugged_function_signature(debug_function,
+                                               debug_type_dictionary))
+        results.append((idx, func_signature_elems, source_location))
+    return results
 
 
 def extract_syzkaller_type(param_list):

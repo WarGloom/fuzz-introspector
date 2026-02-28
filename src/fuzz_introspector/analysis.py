@@ -56,6 +56,7 @@ FI_STAGE_WARN_SECONDS_ENV = "FI_STAGE_WARN_SECONDS"
 FI_STAGE_WARN_SECONDS_DEFAULT = 0
 _BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
 _BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
+_SOURCES_SCAN_CACHE: dict[tuple[str, tuple[str, ...]], frozenset[str]] = {}
 
 
 def _parse_profile_worker_count() -> int:
@@ -1516,6 +1517,11 @@ def extract_all_sources(
     exclude_patterns: list[str] | None = None,
 ) -> set[str]:
     """List all source files in /src with project language filters."""
+    cache_key = (language, tuple(sorted(exclude_patterns or [])))
+    cached_paths = _SOURCES_SCAN_CACHE.get(cache_key)
+    if cached_paths is not None:
+        return set(cached_paths)
+
     # Compile regex patterns once and ignore invalid entries consistently.
     compiled_exclude_patterns = []
     for pattern in exclude_patterns or []:
@@ -1524,7 +1530,9 @@ def extract_all_sources(
         except re.error as err:
             logger.warning("Invalid exclude pattern %s: %s", pattern, err)
 
-    return _scan_source_tree(language, compiled_exclude_patterns)
+    scanned_source_files = _scan_source_tree(language, compiled_exclude_patterns)
+    _SOURCES_SCAN_CACHE[cache_key] = frozenset(scanned_source_files)
+    return set(scanned_source_files)
 
 
 def _scan_source_tree(
