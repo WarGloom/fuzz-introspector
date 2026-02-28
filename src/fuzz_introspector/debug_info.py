@@ -1040,9 +1040,9 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                 if shutdown_fn is None:
                     return
                 try:
-                    shutdown_fn(wait=False, cancel_futures=True)
+                    shutdown_fn(wait=True, cancel_futures=True)
                 except TypeError:
-                    shutdown_fn(wait=False)
+                    shutdown_fn(wait=True)
 
             def _submit_shard(shard_idx: int) -> None:
                 shard = shards[shard_idx]
@@ -1976,9 +1976,53 @@ def correlate_debugged_function_to_debug_types(
     if worker_backend == "auto":
         worker_backend = "process" if total_funcs > 40000 else "thread"
     chunk_size = max(1, total_funcs // worker_count) if worker_count > 0 else 1
+    drain_timeout_seconds = _parse_int_env("FI_DEBUG_CORRELATE_DRAIN_TIMEOUT_SEC", 5, 1)
 
-    def _process_slice(func_slice):
-        _correlate_function_slice(func_slice, debug_type_dictionary)
+    def _drain_and_abort_correlation_futures(
+        executor: Any, future_to_idx: dict[Any, int]
+    ) -> None:
+        for pending_future in future_to_idx:
+            try:
+                pending_future.cancel()
+            except Exception:
+                continue
+        pending_set = set(future_to_idx)
+        drain_timed_out = False
+        if pending_set:
+            deadline = time.perf_counter() + drain_timeout_seconds
+            while pending_set:
+                remaining_seconds = deadline - time.perf_counter()
+                if remaining_seconds <= 0:
+                    drain_timed_out = True
+                    pending_chunk_idxs = sorted(
+                        future_to_idx[pending_future]
+                        for pending_future in pending_set
+                        if pending_future in future_to_idx
+                    )
+                    logger.warning(
+                        "Parallel correlation drain timed out after %.3fs; "
+                        "forcing shutdown with %d pending chunks: %s",
+                        float(drain_timeout_seconds),
+                        len(pending_chunk_idxs),
+                        pending_chunk_idxs,
+                    )
+                    break
+                done_futures, pending_set = wait(
+                    pending_set,
+                    timeout=min(0.2, remaining_seconds),
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done_futures:
+                    continue
+
+        shutdown_fn = getattr(executor, "shutdown", None)
+        if shutdown_fn is None:
+            return
+        should_wait = not drain_timed_out
+        try:
+            shutdown_fn(wait=should_wait, cancel_futures=True)
+        except TypeError:
+            shutdown_fn(wait=should_wait)
 
     if parallel_enabled and worker_count > 1 and total_funcs > 1:
         logger.info(
@@ -1991,19 +2035,26 @@ def correlate_debugged_function_to_debug_types(
         completed_chunks = 0
         total_chunks = len(chunks)
         correlate_start = time.perf_counter()
-        if worker_backend == "process":
-            indexed_funcs = list(enumerate(all_debug_functions))
-            with ProcessPoolExecutor(max_workers=worker_count) as executor:
-                futures = {
+        indexed_funcs = list(enumerate(all_debug_functions))
+        indexed_chunks = _chunked(indexed_funcs, chunk_size)
+
+        def _run_parallel_correlation(executor_cls: Any, max_workers: int) -> bool:
+            nonlocal completed_chunks
+            parallel_updates: list[tuple[int, Any, dict[str, str]]] = []
+            executor = None
+            parallel_failed = False
+            try:
+                executor = executor_cls(max_workers=max_workers)
+                future_to_idx = {
                     executor.submit(
                         _correlate_function_slice_multiproc,
                         chunk,
                         debug_type_dictionary,
                     ): idx
-                    for idx, chunk in enumerate(_chunked(indexed_funcs, chunk_size))
+                    for idx, chunk in enumerate(indexed_chunks)
                 }
-                for future in as_completed(futures):
-                    idx = futures[future]
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
                     try:
                         result_rows = future.result()
                     except Exception as exc:  # pragma: no cover - defensive
@@ -2013,14 +2064,11 @@ def correlate_debugged_function_to_debug_types(
                             idx,
                             exc,
                         )
-                        _correlate_function_slice(
-                            all_debug_functions, debug_type_dictionary
-                        )
+                        parallel_failed = True
+                        _drain_and_abort_correlation_futures(executor, future_to_idx)
                         break
-                    for row_idx, func_signature_elems, source_location in result_rows:
-                        debug_func = all_debug_functions[row_idx]
-                        debug_func["func_signature_elems"] = func_signature_elems
-                        debug_func["source"] = source_location
+
+                    parallel_updates.extend(result_rows)
                     completed_chunks += 1
                     logger.info(
                         "Correlation progress: %d/%d chunks (%.3fs)",
@@ -2028,34 +2076,33 @@ def correlate_debugged_function_to_debug_types(
                         total_chunks,
                         time.perf_counter() - correlate_start,
                     )
+            finally:
+                if executor is not None and not parallel_failed:
+                    shutdown_fn = getattr(executor, "shutdown", None)
+                    if shutdown_fn is not None:
+                        shutdown_fn(wait=True)
+
+            if parallel_failed:
+                return False
+
+            _apply_collected_correlator_updates_in_place(
+                all_debug_functions, parallel_updates
+            )
+            return True
+
+        correlation_completed = False
+        if worker_backend == "process":
+            correlation_completed = _run_parallel_correlation(
+                ProcessPoolExecutor, worker_count
+            )
         else:
-            with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                futures = {
-                    executor.submit(_process_slice, chunk): idx
-                    for idx, chunk in enumerate(chunks)
-                }
-                for future in as_completed(futures):
-                    idx = futures[future]
-                    try:
-                        future.result()
-                    except Exception as exc:  # pragma: no cover - defensive
-                        logger.warning(
-                            "Parallel correlation chunk %d failed: %s; "
-                            "falling back to serial",
-                            idx,
-                            exc,
-                        )
-                        _correlate_function_slice(
-                            all_debug_functions, debug_type_dictionary
-                        )
-                        break
-                    completed_chunks += 1
-                    logger.info(
-                        "Correlation progress: %d/%d chunks (%.3fs)",
-                        completed_chunks,
-                        total_chunks,
-                        time.perf_counter() - correlate_start,
-                    )
+            correlation_completed = _run_parallel_correlation(
+                ThreadPoolExecutor, worker_count
+            )
+
+        if not correlation_completed:
+            _correlate_function_slice(all_debug_functions, debug_type_dictionary)
+
         logger.info(
             "Correlation completed in %.3fs",
             time.perf_counter() - correlate_start,

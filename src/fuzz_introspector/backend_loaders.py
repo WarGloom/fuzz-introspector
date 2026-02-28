@@ -638,6 +638,25 @@ class _BoundedStreamReader(threading.Thread):
             self.error = err
 
 
+def _cleanup_process_io_threads(
+    proc: subprocess.Popen[str],
+    stdout_reader: _BoundedStreamReader,
+    stderr_reader: _BoundedStreamReader,
+    join_timeout_sec: float = 0.2,
+) -> None:
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except (OSError, ValueError):
+            continue
+
+    for reader in (stdout_reader, stderr_reader):
+        if reader.is_alive():
+            reader.join(timeout=join_timeout_sec)
+
+
 def run_overlay_backend(
     payload: dict[str, Any],
     command_env_prefix: str = "FI_OVERLAY",
@@ -717,98 +736,135 @@ def run_overlay_backend(
     stderr_reader.start()
 
     try:
-        if proc.stdin is not None:
-            proc.stdin.write(request_bytes)
-            proc.stdin.flush()
-            proc.stdin.close()
-    except (BrokenPipeError, OSError, ValueError) as err:
-        cleanup_status = _terminate_process_group(
-            proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
-        )
-        return _handle_overlay_failure(
-            FI_OVERLAY_EXECUTION_FAILED,
-            "Overlay backend stdin write failed",
-            strict_mode,
-            details={
-                "backend": selected_backend,
-                "command": command,
-                "error": str(err),
-                "cleanup_status": cleanup_status,
-            },
-        )
+        try:
+            if proc.stdin is not None:
+                proc.stdin.write(request_bytes)
+                proc.stdin.flush()
+                proc.stdin.close()
+        except (BrokenPipeError, OSError, ValueError) as err:
+            cleanup_status = _terminate_process_group(
+                proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+            )
+            return _handle_overlay_failure(
+                FI_OVERLAY_EXECUTION_FAILED,
+                "Overlay backend stdin write failed",
+                strict_mode,
+                details={
+                    "backend": selected_backend,
+                    "command": command,
+                    "error": str(err),
+                    "cleanup_status": cleanup_status,
+                },
+            )
 
-    try:
-        while True:
-            elapsed = time.perf_counter() - start
-            if timeout is not None and elapsed > timeout:
-                elapsed_ms = int(elapsed * 1000)
-                cleanup_status = _terminate_process_group(
-                    proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
-                )
-                return _handle_overlay_failure(
-                    FI_OVERLAY_TIMEOUT,
-                    "Overlay backend timed out",
-                    strict_mode,
-                    details={
-                        "backend": selected_backend,
-                        "timeout_seconds": timeout_seconds,
-                        "elapsed_ms": elapsed_ms,
-                        "cleanup_status": cleanup_status,
-                    },
-                )
+        try:
+            while True:
+                elapsed = time.perf_counter() - start
+                if timeout is not None and elapsed > timeout:
+                    elapsed_ms = int(elapsed * 1000)
+                    cleanup_status = _terminate_process_group(
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
+                    return _handle_overlay_failure(
+                        FI_OVERLAY_TIMEOUT,
+                        "Overlay backend timed out",
+                        strict_mode,
+                        details={
+                            "backend": selected_backend,
+                            "timeout_seconds": timeout_seconds,
+                            "elapsed_ms": elapsed_ms,
+                            "cleanup_status": cleanup_status,
+                        },
+                    )
 
-            if stdout_reader.overflowed:
-                cleanup_status = _terminate_process_group(
-                    proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
-                )
-                return _handle_overlay_failure(
-                    FI_OVERLAY_STDOUT_TOO_LARGE,
-                    "Overlay backend stdout exceeded metadata-only limit",
-                    strict_mode,
-                    details={
-                        "backend": selected_backend,
-                        "stdout_bytes": stdout_reader.total_bytes,
-                        "max_stdout_bytes": OVERLAY_MAX_STDOUT_BYTES,
-                        "cleanup_status": cleanup_status,
-                    },
-                )
+                if stdout_reader.overflowed:
+                    cleanup_status = _terminate_process_group(
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
+                    return _handle_overlay_failure(
+                        FI_OVERLAY_STDOUT_TOO_LARGE,
+                        "Overlay backend stdout exceeded metadata-only limit",
+                        strict_mode,
+                        details={
+                            "backend": selected_backend,
+                            "stdout_bytes": stdout_reader.total_bytes,
+                            "max_stdout_bytes": OVERLAY_MAX_STDOUT_BYTES,
+                            "cleanup_status": cleanup_status,
+                        },
+                    )
 
-            if stderr_reader.overflowed:
-                cleanup_status = _terminate_process_group(
-                    proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
-                )
-                return _handle_overlay_failure(
-                    FI_OVERLAY_STDERR_TOO_LARGE,
-                    "Overlay backend stderr exceeded cap; process terminated",
-                    strict_mode,
-                    details={
-                        "backend": selected_backend,
-                        "stderr_bytes": stderr_reader.total_bytes,
-                        "max_stderr_bytes": OVERLAY_MAX_STDERR_BYTES,
-                        "cleanup_status": cleanup_status,
-                    },
-                )
+                if stderr_reader.overflowed:
+                    cleanup_status = _terminate_process_group(
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
+                    return _handle_overlay_failure(
+                        FI_OVERLAY_STDERR_TOO_LARGE,
+                        "Overlay backend stderr exceeded cap; process terminated",
+                        strict_mode,
+                        details={
+                            "backend": selected_backend,
+                            "stderr_bytes": stderr_reader.total_bytes,
+                            "max_stderr_bytes": OVERLAY_MAX_STDERR_BYTES,
+                            "cleanup_status": cleanup_status,
+                        },
+                    )
 
-            if proc.poll() is not None and (
-                not stdout_reader.is_alive() and not stderr_reader.is_alive()
-            ):
-                break
+                if stdout_reader.error is not None:
+                    cleanup_status = _terminate_process_group(
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
+                    return _handle_overlay_failure(
+                        FI_OVERLAY_EXECUTION_FAILED,
+                        "Overlay backend stdout read failed during execution",
+                        strict_mode,
+                        details={
+                            "backend": selected_backend,
+                            "error": str(stdout_reader.error),
+                            "cleanup_status": cleanup_status,
+                        },
+                    )
 
-            time.sleep(0.01)
+                if stderr_reader.error is not None:
+                    cleanup_status = _terminate_process_group(
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
+                    return _handle_overlay_failure(
+                        FI_OVERLAY_EXECUTION_FAILED,
+                        "Overlay backend stderr read failed during execution",
+                        strict_mode,
+                        details={
+                            "backend": selected_backend,
+                            "error": str(stderr_reader.error),
+                            "cleanup_status": cleanup_status,
+                        },
+                    )
 
-        stdout_reader.join(timeout=0.1)
-        stderr_reader.join(timeout=0.1)
-    except (OSError, subprocess.SubprocessError) as err:
-        return _handle_overlay_failure(
-            FI_OVERLAY_EXECUTION_FAILED,
-            "Overlay backend communication failed",
-            strict_mode,
-            details={
-                "backend": selected_backend,
-                "command": command,
-                "error": str(err),
-            },
-        )
+                if proc.poll() is not None and (
+                    not stdout_reader.is_alive() and not stderr_reader.is_alive()
+                ):
+                    break
+
+                time.sleep(0.01)
+
+            stdout_reader.join(timeout=0.1)
+            stderr_reader.join(timeout=0.1)
+        except (OSError, subprocess.SubprocessError) as err:
+            cleanup_status = _terminate_process_group(
+                proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+            )
+            return _handle_overlay_failure(
+                FI_OVERLAY_EXECUTION_FAILED,
+                "Overlay backend communication failed",
+                strict_mode,
+                details={
+                    "backend": selected_backend,
+                    "command": command,
+                    "error": str(err),
+                    "cleanup_status": cleanup_status,
+                },
+            )
+    finally:
+        _cleanup_process_io_threads(proc, stdout_reader, stderr_reader)
 
     if stdout_reader.error is not None:
         return _handle_overlay_failure(
@@ -970,86 +1026,125 @@ def run_correlator_backend(
     stderr_reader.start()
 
     try:
-        if proc.stdin is not None:
-            proc.stdin.write(request_bytes)
-            proc.stdin.flush()
-            proc.stdin.close()
-    except (BrokenPipeError, OSError, ValueError) as err:
-        cleanup_status = _terminate_process_group(
-            proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
-        )
-        return _handle_correlator_failure(
-            FI_CORR_EXECUTION_FAILED,
-            "Correlator backend stdin write failed",
-            strict_mode,
-            cleanup_hook,
-            details={
-                "backend": selected_backend,
-                "command": command,
-                "error": str(err),
-                "cleanup_status": cleanup_status,
-            },
-        )
+        try:
+            if proc.stdin is not None:
+                proc.stdin.write(request_bytes)
+                proc.stdin.flush()
+                proc.stdin.close()
+        except (BrokenPipeError, OSError, ValueError) as err:
+            cleanup_status = _terminate_process_group(
+                proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+            )
+            return _handle_correlator_failure(
+                FI_CORR_EXECUTION_FAILED,
+                "Correlator backend stdin write failed",
+                strict_mode,
+                cleanup_hook,
+                details={
+                    "backend": selected_backend,
+                    "command": command,
+                    "error": str(err),
+                    "cleanup_status": cleanup_status,
+                },
+            )
 
-    try:
-        while True:
-            elapsed = time.perf_counter() - start
-            if timeout is not None and elapsed > timeout:
-                elapsed_ms = int(elapsed * 1000)
-                cleanup_status = _terminate_process_group(
-                    proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
-                )
-                return _handle_correlator_failure(
-                    FI_CORR_TIMEOUT,
-                    "Correlator backend timed out",
-                    strict_mode,
-                    cleanup_hook,
-                    details={
-                        "backend": selected_backend,
-                        "timeout_seconds": timeout_seconds,
-                        "elapsed_ms": elapsed_ms,
-                        "cleanup_status": cleanup_status,
-                    },
-                )
+        try:
+            while True:
+                elapsed = time.perf_counter() - start
+                if timeout is not None and elapsed > timeout:
+                    elapsed_ms = int(elapsed * 1000)
+                    cleanup_status = _terminate_process_group(
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
+                    return _handle_correlator_failure(
+                        FI_CORR_TIMEOUT,
+                        "Correlator backend timed out",
+                        strict_mode,
+                        cleanup_hook,
+                        details={
+                            "backend": selected_backend,
+                            "timeout_seconds": timeout_seconds,
+                            "elapsed_ms": elapsed_ms,
+                            "cleanup_status": cleanup_status,
+                        },
+                    )
 
-            if stdout_reader.overflowed:
-                cleanup_status = _terminate_process_group(
-                    proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
-                )
-                return _handle_correlator_failure(
-                    FI_CORR_STDOUT_TOO_LARGE,
-                    "Correlator backend stdout exceeded metadata-only limit",
-                    strict_mode,
-                    cleanup_hook,
-                    details={
-                        "backend": selected_backend,
-                        "stdout_bytes": stdout_reader.total_bytes,
-                        "max_stdout_bytes": CORRELATOR_MAX_STDOUT_BYTES,
-                        "cleanup_status": cleanup_status,
-                    },
-                )
+                if stdout_reader.overflowed:
+                    cleanup_status = _terminate_process_group(
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
+                    return _handle_correlator_failure(
+                        FI_CORR_STDOUT_TOO_LARGE,
+                        "Correlator backend stdout exceeded metadata-only limit",
+                        strict_mode,
+                        cleanup_hook,
+                        details={
+                            "backend": selected_backend,
+                            "stdout_bytes": stdout_reader.total_bytes,
+                            "max_stdout_bytes": CORRELATOR_MAX_STDOUT_BYTES,
+                            "cleanup_status": cleanup_status,
+                        },
+                    )
 
-            if proc.poll() is not None and (
-                not stdout_reader.is_alive() and not stderr_reader.is_alive()
-            ):
-                break
+                if stdout_reader.error is not None:
+                    cleanup_status = _terminate_process_group(
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
+                    return _handle_correlator_failure(
+                        FI_CORR_EXECUTION_FAILED,
+                        "Correlator backend stdout read failed during execution",
+                        strict_mode,
+                        cleanup_hook,
+                        details={
+                            "backend": selected_backend,
+                            "error": str(stdout_reader.error),
+                            "cleanup_status": cleanup_status,
+                        },
+                    )
 
-            time.sleep(0.01)
+                if stderr_reader.error is not None:
+                    cleanup_status = _terminate_process_group(
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
+                    return _handle_correlator_failure(
+                        FI_CORR_EXECUTION_FAILED,
+                        "Correlator backend stderr read failed during execution",
+                        strict_mode,
+                        cleanup_hook,
+                        details={
+                            "backend": selected_backend,
+                            "error": str(stderr_reader.error),
+                            "cleanup_status": cleanup_status,
+                        },
+                    )
 
-        stdout_reader.join(timeout=0.1)
-        stderr_reader.join(timeout=0.1)
-    except (OSError, subprocess.SubprocessError) as err:
-        return _handle_correlator_failure(
-            FI_CORR_EXECUTION_FAILED,
-            "Correlator backend communication failed",
-            strict_mode,
-            cleanup_hook,
-            details={
-                "backend": selected_backend,
-                "command": command,
-                "error": str(err),
-            },
-        )
+                if proc.poll() is not None and (
+                    not stdout_reader.is_alive() and not stderr_reader.is_alive()
+                ):
+                    break
+
+                time.sleep(0.01)
+
+            stdout_reader.join(timeout=0.1)
+            stderr_reader.join(timeout=0.1)
+        except (OSError, subprocess.SubprocessError) as err:
+            cleanup_status = _terminate_process_group(
+                proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+            )
+            return _handle_correlator_failure(
+                FI_CORR_EXECUTION_FAILED,
+                "Correlator backend communication failed",
+                strict_mode,
+                cleanup_hook,
+                details={
+                    "backend": selected_backend,
+                    "command": command,
+                    "error": str(err),
+                    "cleanup_status": cleanup_status,
+                },
+            )
+    finally:
+        _cleanup_process_io_threads(proc, stdout_reader, stderr_reader)
 
     if stdout_reader.error is not None:
         return _handle_correlator_failure(

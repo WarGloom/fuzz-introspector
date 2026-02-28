@@ -56,6 +56,57 @@ class _FakePopen:
             self.returncode = -9
 
 
+class _FailingStdin(io.BytesIO):
+    def write(self, _data):
+        raise BrokenPipeError("broken pipe")
+
+
+class _CloseTrackingStream(io.BytesIO):
+    def __init__(self, payload: bytes = b""):
+        super().__init__(payload)
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+        return super().close()
+
+
+class _ReaderSpy:
+    instances = []
+
+    def __init__(
+        self,
+        stream: Any,
+        max_bytes: int | None = None,
+        name: str = "",
+        stop_on_overflow: bool = True,
+    ):
+        del max_bytes
+        del name
+        del stop_on_overflow
+        self.stream = stream
+        self.overflowed = False
+        self.total_bytes = 0
+        self.error = None
+        self._alive = True
+        self.join_timeouts = []
+        self.__class__.instances.append(self)
+
+    @property
+    def content(self) -> bytes:
+        return b""
+
+    def start(self):
+        return None
+
+    def is_alive(self):
+        return self._alive
+
+    def join(self, timeout=None):
+        self.join_timeouts.append(timeout)
+        self._alive = False
+
+
 def _valid_metadata_only_response(schema_version: int = 1) -> dict[str, Any]:
     return {
         "schema_version": schema_version,
@@ -315,6 +366,167 @@ def test_correlator_oversized_stdout_triggers_prebuffer_cleanup(
         "backend": backend_loaders.BACKEND_RUST,
         "stdout_bytes": backend_loaders.CORRELATOR_MAX_STDOUT_BYTES + 1,
         "max_stdout_bytes": backend_loaders.CORRELATOR_MAX_STDOUT_BYTES,
+        "cleanup_status": "terminated",
+    }
+    assert terminate_calls == [1]
+
+
+def test_correlator_stdin_failure_closes_pipes_and_joins_readers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        backend_loaders,
+        "resolve_backend_command",
+        lambda *_args, **_kwargs: ["fake-correlator"],
+    )
+    _ReaderSpy.instances = []
+
+    stdout_stream = _CloseTrackingStream()
+    stderr_stream = _CloseTrackingStream()
+
+    tracked_proc = _FakePopen(returncode=None)
+    tracked_proc.stdin = _FailingStdin()
+    tracked_proc.stdout = stdout_stream
+    tracked_proc.stderr = stderr_stream
+
+    monkeypatch.setattr(backend_loaders, "_BoundedStreamReader", _ReaderSpy)
+    monkeypatch.setattr(
+        backend_loaders.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: tracked_proc,
+    )
+    monkeypatch.setattr(
+        backend_loaders,
+        "_terminate_process_group",
+        lambda *_args, **_kwargs: "terminated",
+    )
+
+    result = backend_loaders.run_correlator_backend(
+        payload={"debug_types": [], "debug_functions": []},
+        selected_backend=backend_loaders.BACKEND_RUST,
+        strict_mode=False,
+    )
+
+    assert result.reason_code == backend_loaders.FI_CORR_EXECUTION_FAILED
+    assert stdout_stream.close_calls >= 1
+    assert stderr_stream.close_calls >= 1
+    assert len(_ReaderSpy.instances) == 2
+    assert all(reader.join_timeouts for reader in _ReaderSpy.instances)
+
+
+def test_correlator_communication_exception_triggers_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        backend_loaders,
+        "resolve_backend_command",
+        lambda *_args, **_kwargs: ["fake-correlator"],
+    )
+    terminate_calls = []
+    monkeypatch.setattr(
+        backend_loaders,
+        "_terminate_process_group",
+        lambda *_args, **_kwargs: terminate_calls.append(1) or "terminated",
+    )
+    monkeypatch.setattr(
+        backend_loaders.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: _FakePopen(returncode=None),
+    )
+    monkeypatch.setattr(
+        backend_loaders.time,
+        "sleep",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("sleep failed")),
+    )
+
+    result = backend_loaders.run_correlator_backend(
+        payload={"debug_types": [], "debug_functions": []},
+        selected_backend=backend_loaders.BACKEND_RUST,
+        strict_mode=False,
+    )
+
+    assert result.reason_code == backend_loaders.FI_CORR_EXECUTION_FAILED
+    assert result.reason_details == {
+        "backend": backend_loaders.BACKEND_RUST,
+        "command": ["fake-correlator"],
+        "error": "sleep failed",
+        "cleanup_status": "terminated",
+    }
+    assert terminate_calls == [1]
+
+
+def test_correlator_reader_error_fails_fast_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+
+    class _ReaderErrorSpy:
+        def __init__(
+            self,
+            stream: Any,
+            max_bytes: int | None = None,
+            name: str = "",
+            stop_on_overflow: bool = True,
+        ):
+            del max_bytes
+            del stop_on_overflow
+            self._stream = stream
+            self._name = name
+            self.total_bytes = 0
+            self.overflowed = False
+            self.error = (
+                RuntimeError("stdout reader failed") if "stdout" in name else None
+            )
+            self._alive = True
+
+        @property
+        def content(self) -> bytes:
+            return b""
+
+        def start(self):
+            return None
+
+        def is_alive(self):
+            return self._alive
+
+        def join(self, timeout=None):
+            del timeout
+            self._alive = False
+
+    monkeypatch.setattr(
+        backend_loaders,
+        "resolve_backend_command",
+        lambda *_args, **_kwargs: ["fake-correlator"],
+    )
+    terminate_calls = []
+    monkeypatch.setattr(
+        backend_loaders,
+        "_terminate_process_group",
+        lambda *_args, **_kwargs: terminate_calls.append(1) or "terminated",
+    )
+    monkeypatch.setattr(backend_loaders, "_BoundedStreamReader", _ReaderErrorSpy)
+    monkeypatch.setattr(
+        backend_loaders.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: _FakePopen(returncode=None),
+    )
+    monkeypatch.setattr(
+        backend_loaders.time,
+        "sleep",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("sleep should not be reached")
+        ),
+    )
+
+    result = backend_loaders.run_correlator_backend(
+        payload={"debug_types": [], "debug_functions": []},
+        selected_backend=backend_loaders.BACKEND_RUST,
+        strict_mode=False,
+    )
+
+    assert result.reason_code == backend_loaders.FI_CORR_EXECUTION_FAILED
+    assert result.reason_details == {
+        "backend": backend_loaders.BACKEND_RUST,
+        "error": "stdout reader failed",
         "cleanup_status": "terminated",
     }
     assert terminate_calls == [1]

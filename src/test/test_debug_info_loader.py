@@ -248,7 +248,221 @@ def test_load_debug_all_yaml_files_parallel_failure_cancels_pending_futures(
     assert items == [{"idx": 0}, {"idx": 1}, {"idx": 2}]
     assert _Executor.instances
     first_executor = _Executor.instances[0]
-    assert (False, True) in first_executor.shutdown_calls
+    assert (True, True) in first_executor.shutdown_calls
+
+
+def test_correlation_thread_fallback_drains_futures_before_serial(monkeypatch):
+
+    class _Future:
+        def __init__(self, result_payload=None, result_exc=None):
+            self._result_payload = result_payload
+            self._result_exc = result_exc
+            self.cancel_called = False
+
+        def result(self):
+            if self._result_exc is not None:
+                raise self._result_exc
+            return self._result_payload
+
+        def cancel(self):
+            self.cancel_called = True
+            return True
+
+    class _Executor:
+        instances = []
+
+        def __init__(self, max_workers):
+            del max_workers
+            self._submitted = 0
+            self.futures = []
+            self.shutdown_calls = []
+            self.__class__.instances.append(self)
+
+        def submit(self, *_args, **_kwargs):
+            if self._submitted == 0:
+                future = _Future(result_exc=RuntimeError("forced correlation failure"))
+            else:
+                future = _Future(result_payload=[])
+            self._submitted += 1
+            self.futures.append(future)
+            return future
+
+        def shutdown(self, wait=True, cancel_futures=False):
+            self.shutdown_calls.append((wait, cancel_futures))
+
+    state = {"drained": False}
+
+    def _fake_as_completed(futures):
+        futures_list = list(futures)
+        return [futures_list[0]]
+
+    def _fake_wait(futures, timeout=None, return_when=None):
+        del timeout
+        del return_when
+        state["drained"] = True
+        futures_list = list(futures)
+        return set(futures_list), set()
+
+    def _fake_create_friendly(*_args, **_kwargs):
+        return None
+
+    def _fake_serial_correlate(func_slice, _debug_type_dictionary):
+        assert state["drained"]
+        assert _Executor.instances
+        shutdown_calls = _Executor.instances[0].shutdown_calls
+        assert (True, True) in shutdown_calls
+        assert any(future.cancel_called for future in _Executor.instances[0].futures)
+        for debug_func in func_slice:
+            debug_func["func_signature_elems"] = {
+                "return_type": ["serial"],
+                "params": [],
+            }
+            debug_func["source"] = {
+                "source_file": "/serial/fallback.c",
+                "source_line": "1",
+            }
+
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = [
+        {"type_arguments": [0], "file_location": "/src/a.c:7"},
+        {"type_arguments": [0], "file_location": "/src/b.c:9"},
+    ]
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_PARALLEL", "1")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_WORKERS", "2")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_BACKEND", "thread")
+    monkeypatch.setattr(debug_info, "ThreadPoolExecutor", _Executor)
+    monkeypatch.setattr(debug_info, "as_completed", _fake_as_completed)
+    monkeypatch.setattr(debug_info, "wait", _fake_wait)
+    monkeypatch.setattr(
+        debug_info, "create_friendly_debug_types", _fake_create_friendly
+    )
+    monkeypatch.setattr(
+        debug_info,
+        "_correlate_function_slice",
+        _fake_serial_correlate,
+    )
+
+    debug_info.correlate_debugged_function_to_debug_types(types, funcs, "/tmp", False)
+
+    assert funcs[0]["func_signature_elems"]["return_type"] == ["serial"]
+    assert funcs[1]["func_signature_elems"]["return_type"] == ["serial"]
+
+
+def test_correlation_thread_fallback_drain_timeout_forces_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+
+    class _Future:
+        def __init__(self, result_payload=None, result_exc=None):
+            self._result_payload = result_payload
+            self._result_exc = result_exc
+            self.cancel_called = False
+
+        def result(self):
+            if self._result_exc is not None:
+                raise self._result_exc
+            return self._result_payload
+
+        def cancel(self):
+            self.cancel_called = True
+            return True
+
+    class _Executor:
+        instances = []
+
+        def __init__(self, max_workers):
+            del max_workers
+            self._submitted = 0
+            self.futures = []
+            self.shutdown_calls = []
+            self.__class__.instances.append(self)
+
+        def submit(self, *_args, **_kwargs):
+            if self._submitted == 0:
+                future = _Future(result_exc=RuntimeError("forced correlation failure"))
+            else:
+                future = _Future(result_payload=[])
+            self._submitted += 1
+            self.futures.append(future)
+            return future
+
+        def shutdown(self, wait=True, cancel_futures=False):
+            self.shutdown_calls.append((wait, cancel_futures))
+
+    wait_calls = []
+    serial_called = {"value": False}
+    perf_counter_state = {"value": 0.0}
+
+    def _fake_as_completed(futures):
+        futures_list = list(futures)
+        return [futures_list[0]]
+
+    def _fake_wait(futures, timeout=None, return_when=None):
+        wait_calls.append((timeout, return_when, len(futures)))
+        return set(), set(futures)
+
+    def _fake_perf_counter():
+        perf_counter_state["value"] += 0.6
+        return perf_counter_state["value"]
+
+    def _fake_create_friendly(*_args, **_kwargs):
+        return None
+
+    def _fake_serial_correlate(func_slice, _debug_type_dictionary):
+        serial_called["value"] = True
+        assert _Executor.instances
+        shutdown_calls = _Executor.instances[0].shutdown_calls
+        assert (False, True) in shutdown_calls
+        assert any(future.cancel_called for future in _Executor.instances[0].futures)
+        for debug_func in func_slice:
+            debug_func["func_signature_elems"] = {
+                "return_type": ["serial"],
+                "params": [],
+            }
+            debug_func["source"] = {
+                "source_file": "/serial/fallback.c",
+                "source_line": "1",
+            }
+
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = [
+        {"type_arguments": [0], "file_location": "/src/a.c:7"},
+        {"type_arguments": [0], "file_location": "/src/b.c:9"},
+    ]
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_PARALLEL", "1")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_WORKERS", "2")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_BACKEND", "thread")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_DRAIN_TIMEOUT_SEC", "1")
+    monkeypatch.setattr(debug_info, "ThreadPoolExecutor", _Executor)
+    monkeypatch.setattr(debug_info, "as_completed", _fake_as_completed)
+    monkeypatch.setattr(debug_info, "wait", _fake_wait)
+    monkeypatch.setattr(debug_info.time, "perf_counter", _fake_perf_counter)
+    monkeypatch.setattr(
+        debug_info, "create_friendly_debug_types", _fake_create_friendly
+    )
+    monkeypatch.setattr(
+        debug_info,
+        "_correlate_function_slice",
+        _fake_serial_correlate,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        debug_info.correlate_debugged_function_to_debug_types(
+            types, funcs, "/tmp", False
+        )
+
+    assert serial_called["value"]
+    assert wait_calls
+    assert all(call[1] == debug_info.FIRST_COMPLETED for call in wait_calls)
+    assert any(
+        "Parallel correlation drain timed out after 1.000s" in record.message
+        for record in caplog.records
+    )
+    assert funcs[0]["func_signature_elems"]["return_type"] == ["serial"]
+    assert funcs[1]["func_signature_elems"]["return_type"] == ["serial"]
 
 
 def test_load_debug_all_yaml_files_spill_activation(monkeypatch):
