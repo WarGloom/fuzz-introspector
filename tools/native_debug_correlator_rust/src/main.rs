@@ -112,19 +112,25 @@ struct FunctionEntry {
     type_arguments: Vec<i128>,
 }
 
-#[derive(Serialize)]
+#[derive(Hash, Eq, PartialEq)]
+struct CorrelationKey {
+    file_location: String,
+    type_arguments: Vec<i128>,
+}
+
+#[derive(Clone, Serialize)]
 struct FunctionSignatureElems {
     return_type: JsonValue,
     params: Vec<Vec<String>>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct SourceLocation {
     source_file: String,
     source_line: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct CorrelatedRecord {
     row_idx: usize,
     func_signature_elems: FunctionSignatureElems,
@@ -399,29 +405,28 @@ fn build_type_index(records: &[JsonValue]) -> TypeIndex {
     index
 }
 
-fn dedupe_functions(functions: &[FunctionEntry]) -> Vec<FunctionEntry> {
-    let mut no_path_functions: Vec<FunctionEntry> = Vec::new();
-    let mut keyed_functions: Vec<FunctionEntry> = Vec::new();
-    let mut key_to_index: HashMap<String, usize> = HashMap::new();
+fn build_correlation_plan(functions: &[FunctionEntry]) -> (Vec<FunctionEntry>, Vec<usize>) {
+    let mut unique_functions: Vec<FunctionEntry> = Vec::new();
+    let mut row_to_unique_idx: Vec<usize> = Vec::with_capacity(functions.len());
+    let mut key_to_unique_idx: HashMap<CorrelationKey, usize> = HashMap::new();
 
     for function in functions {
-        if function.file_location.trim().is_empty() {
-            no_path_functions.push(function.clone());
-            continue;
-        }
-
-        if let Some(existing_idx) = key_to_index.get(&function.file_location) {
-            keyed_functions[*existing_idx] = function.clone();
-            continue;
-        }
-
-        let insert_idx = keyed_functions.len();
-        key_to_index.insert(function.file_location.clone(), insert_idx);
-        keyed_functions.push(function.clone());
+        let key = CorrelationKey {
+            file_location: function.file_location.clone(),
+            type_arguments: function.type_arguments.clone(),
+        };
+        let unique_idx = if let Some(existing_idx) = key_to_unique_idx.get(&key) {
+            *existing_idx
+        } else {
+            let next_idx = unique_functions.len();
+            unique_functions.push(function.clone());
+            key_to_unique_idx.insert(key, next_idx);
+            next_idx
+        };
+        row_to_unique_idx.push(unique_idx);
     }
 
-    no_path_functions.extend(keyed_functions);
-    no_path_functions
+    (unique_functions, row_to_unique_idx)
 }
 
 fn extract_func_sig_friendly_type_tags(target_type: i128, type_map: &HashMap<i128, TypeEntry>) -> Vec<String> {
@@ -687,7 +692,7 @@ fn write_all_friendly_debug_types(index: &TypeIndex, out_dir: &Path) -> Result<S
 }
 
 fn correlate_and_write_shards(
-    deduped_functions: &[FunctionEntry],
+    functions: &[FunctionEntry],
     type_map: &HashMap<i128, TypeEntry>,
     output_dir: &Path,
     shard_size: usize,
@@ -701,13 +706,13 @@ fn correlate_and_write_shards(
 
     let mut result = CorrelationWriteResult::default();
 
-    for (shard_idx, function_chunk) in deduped_functions.chunks(shard_size).enumerate() {
+    for (shard_idx, function_chunk) in functions.chunks(shard_size).enumerate() {
         if function_chunk.is_empty() {
             continue;
         }
 
         let correlate_started = Instant::now();
-        let correlated_chunk = correlate_chunk_parallel(function_chunk, type_map);
+        let correlated_chunk = correlate_chunk_with_cache(function_chunk, type_map);
         result.correlate_ms += to_ms(correlate_started.elapsed());
 
         let shard_path = output_dir.join(format!("correlated-debug-{:05}.ndjson", shard_idx));
@@ -748,6 +753,29 @@ fn correlate_and_write_shards(
     }
 
     Ok(result)
+}
+
+fn correlate_chunk_with_cache(
+    function_chunk: &[FunctionEntry],
+    type_map: &HashMap<i128, TypeEntry>,
+) -> Vec<CorrelatedRecord> {
+    if function_chunk.is_empty() {
+        return Vec::new();
+    }
+
+    let (unique_functions, row_to_unique_idx) = build_correlation_plan(function_chunk);
+    let unique_records = correlate_chunk_parallel(&unique_functions, type_map);
+
+    let mut records: Vec<CorrelatedRecord> = Vec::with_capacity(function_chunk.len());
+    for (chunk_offset, function) in function_chunk.iter().enumerate() {
+        let cached_record = &unique_records[row_to_unique_idx[chunk_offset]];
+        records.push(CorrelatedRecord {
+            row_idx: function.original_row_idx,
+            func_signature_elems: cached_record.func_signature_elems.clone(),
+            source: cached_record.source.clone(),
+        });
+    }
+    records
 }
 
 fn correlate_chunk_parallel(
@@ -903,8 +931,8 @@ fn run_request(request: Request) -> Result<Response, AppError> {
     timings.parse_ms = to_ms(parse_started.elapsed());
 
     let dedupe_started = Instant::now();
-    let deduped_functions = dedupe_functions(&parsed_functions);
-    counters.deduped_functions = deduped_functions.len();
+    let (memoized_correlation_inputs, _) = build_correlation_plan(&parsed_functions);
+    counters.deduped_functions = memoized_correlation_inputs.len();
     timings.dedupe_ms = to_ms(dedupe_started.elapsed());
 
     if request.dump_files {
@@ -922,7 +950,7 @@ fn run_request(request: Request) -> Result<Response, AppError> {
     }
 
     let correlation_result =
-        correlate_and_write_shards(&deduped_functions, &type_index.entries, &output_dir, shard_size)?;
+        correlate_and_write_shards(&parsed_functions, &type_index.entries, &output_dir, shard_size)?;
 
     counters.written_records = correlation_result.written_records;
     counters.updated_functions = correlation_result.written_records;
@@ -962,34 +990,32 @@ mod tests {
     }
 
     #[test]
-    fn row_indexes_follow_original_rows_after_dedupe_reorder() {
+    fn correlation_plan_keeps_all_rows_with_duplicate_keys() {
         let functions = vec![
             function_entry(0, "/src/a.c:10"),
-            function_entry(1, ""),
+            function_entry(1, "/src/a.c:10"),
             function_entry(2, "/src/b.c:20"),
-            function_entry(3, ""),
+            function_entry(3, "/src/a.c:10"),
         ];
 
-        let deduped = dedupe_functions(&functions);
-        let records = correlate_chunk_parallel(&deduped, &HashMap::new());
-        let row_indexes: Vec<usize> = records.into_iter().map(|record| record.row_idx).collect();
+        let (unique_functions, row_to_unique_idx) = build_correlation_plan(&functions);
 
-        assert_eq!(row_indexes, vec![1, 3, 0, 2]);
+        assert_eq!(unique_functions.len(), 2);
+        assert_eq!(row_to_unique_idx, vec![0, 0, 1, 0]);
     }
 
     #[test]
-    fn row_indexes_track_replaced_duplicate_to_latest_original_row() {
+    fn correlated_records_keep_one_output_per_input_row() {
         let functions = vec![
             function_entry(0, "/src/a.c:10"),
-            function_entry(1, ""),
+            function_entry(1, "/src/a.c:10"),
             function_entry(2, "/src/a.c:10"),
         ];
 
-        let deduped = dedupe_functions(&functions);
-        let records = correlate_chunk_parallel(&deduped, &HashMap::new());
+        let records = correlate_chunk_with_cache(&functions, &HashMap::new());
         let row_indexes: Vec<usize> = records.into_iter().map(|record| record.row_idx).collect();
 
-        assert_eq!(row_indexes, vec![1, 2]);
+        assert_eq!(row_indexes, vec![0, 1, 2]);
     }
 }
 

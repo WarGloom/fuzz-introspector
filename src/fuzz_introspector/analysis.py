@@ -944,9 +944,24 @@ def _build_overlay_native_payload(
     output_dir: str,
 ) -> Dict[str, Any]:
     callsites = []
+    target_coverage_url = utils.get_target_coverage_url(
+        coverage_url,
+        profile.identifier,
+        profile.target_lang,
+    )
     if profile.fuzzer_callsite_calltree is not None:
         all_callsites = cfg_load.extract_all_callsites(profile.fuzzer_callsite_calltree)
+        callstack: Dict[int, str] = {}
         for ct_idx, node in enumerate(all_callsites):
+            if profile.target_lang == "jvm":
+                demangled_name = utils.demangle_jvm_func(
+                    node.dst_function_source_file, node.dst_function_name
+                )
+            elif profile.target_lang == "rust":
+                demangled_name = utils.demangle_rust_func(node.dst_function_name)
+            else:
+                demangled_name = utils.demangle_cpp_func(node.dst_function_name)
+            callstack_set_curr_node(node, demangled_name, callstack)
             callsites.append(
                 {
                     "cov_ct_idx": ct_idx,
@@ -954,6 +969,15 @@ def _build_overlay_native_payload(
                     "dst_function_name": node.dst_function_name,
                     "dst_function_source_file": node.dst_function_source_file,
                     "src_linenumber": node.src_linenumber,
+                    "cov_link": get_url_to_cov_report(
+                        profile, node, target_coverage_url
+                    ),
+                    "cov_callsite_link": get_parent_callsite_link(
+                        node,
+                        callstack,
+                        profile,
+                        target_coverage_url,
+                    ),
                 }
             )
 
@@ -999,11 +1023,7 @@ def _build_overlay_native_payload(
         "profile_id": profile.identifier,
         "output_dir": output_dir,
         "target_lang": profile.target_lang,
-        "target_coverage_url": utils.get_target_coverage_url(
-            coverage_url,
-            profile.identifier,
-            profile.target_lang,
-        ),
+        "target_coverage_url": target_coverage_url,
         "callsites": callsites,
         "coverage": coverage_payload,
         "functions": function_complexities,

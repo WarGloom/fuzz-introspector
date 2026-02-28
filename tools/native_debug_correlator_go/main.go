@@ -601,27 +601,30 @@ func buildTypeIndex(records []any) typeIndex {
 	return index
 }
 
-func dedupeFunctions(functions []functionEntry) []functionEntry {
-	noPathFunctions := make([]functionEntry, 0)
-	keyedFunctions := make([]functionEntry, 0)
-	keyToIndex := make(map[string]int)
+func correlationCacheKey(function functionEntry) string {
+	if len(function.TypeArguments) == 0 {
+		return function.FileLocation
+	}
+	return function.FileLocation + "\x1f" + strings.Join(function.TypeArguments, ",")
+}
+
+func buildCorrelationPlan(functions []functionEntry) ([]functionEntry, []int) {
+	uniqueFunctions := make([]functionEntry, 0, len(functions))
+	rowToUniqueIdx := make([]int, 0, len(functions))
+	keyToUniqueIdx := make(map[string]int, len(functions))
 
 	for _, function := range functions {
-		if strings.TrimSpace(function.FileLocation) == "" {
-			noPathFunctions = append(noPathFunctions, function)
-			continue
+		key := correlationCacheKey(function)
+		uniqueIdx, exists := keyToUniqueIdx[key]
+		if !exists {
+			uniqueIdx = len(uniqueFunctions)
+			uniqueFunctions = append(uniqueFunctions, function)
+			keyToUniqueIdx[key] = uniqueIdx
 		}
-
-		if existingIdx, exists := keyToIndex[function.FileLocation]; exists {
-			keyedFunctions[existingIdx] = function
-			continue
-		}
-
-		keyToIndex[function.FileLocation] = len(keyedFunctions)
-		keyedFunctions = append(keyedFunctions, function)
+		rowToUniqueIdx = append(rowToUniqueIdx, uniqueIdx)
 	}
 
-	return append(noPathFunctions, keyedFunctions...)
+	return uniqueFunctions, rowToUniqueIdx
 }
 
 func extractFuncSigFriendlyTypeTags(targetType string, typeMap map[string]typeEntry) []string {
@@ -963,8 +966,34 @@ func correlateChunkParallel(functionChunk []functionEntry, typeMap map[string]ty
 	return records
 }
 
+func correlateChunkWithCache(functionChunk []functionEntry, typeMap map[string]typeEntry) []correlatedRecord {
+	if len(functionChunk) == 0 {
+		return []correlatedRecord{}
+	}
+
+	uniqueFunctions, rowToUniqueIdx := buildCorrelationPlan(functionChunk)
+	uniqueRecords := correlateChunkParallel(uniqueFunctions, typeMap)
+
+	records := make([]correlatedRecord, 0, len(functionChunk))
+	for chunkOffset, function := range functionChunk {
+		cachedRecord := uniqueRecords[rowToUniqueIdx[chunkOffset]]
+		records = append(records, correlatedRecord{
+			RowIdx: function.OriginalRowIdx,
+			FuncSignatureElems: functionSignatureElems{
+				ReturnType: cachedRecord.FuncSignatureElems.ReturnType,
+				Params:     cachedRecord.FuncSignatureElems.Params,
+			},
+			Source: sourceLocation{
+				SourceFile: cachedRecord.Source.SourceFile,
+				SourceLine: cachedRecord.Source.SourceLine,
+			},
+		})
+	}
+	return records
+}
+
 func correlateAndWriteShards(
-	dedupedFunctions []functionEntry,
+	functions []functionEntry,
 	typeMap map[string]typeEntry,
 	outputDir string,
 	shardSize int,
@@ -982,15 +1011,15 @@ func correlateAndWriteShards(
 	}
 
 	shardIdx := 0
-	for start := 0; start < len(dedupedFunctions); start += shardSize {
-		end := minInt(start+shardSize, len(dedupedFunctions))
-		functionChunk := dedupedFunctions[start:end]
+	for start := 0; start < len(functions); start += shardSize {
+		end := minInt(start+shardSize, len(functions))
+		functionChunk := functions[start:end]
 		if len(functionChunk) == 0 {
 			continue
 		}
 
 		correlateStarted := time.Now()
-		correlatedChunk := correlateChunkParallel(functionChunk, typeMap)
+		correlatedChunk := correlateChunkWithCache(functionChunk, typeMap)
 		result.CorrelateMS += toMS(time.Since(correlateStarted))
 
 		shardPath := filepath.Join(outputDir, fmt.Sprintf("correlated-debug-%05d.ndjson", shardIdx))
@@ -1141,8 +1170,8 @@ func runRequest(input request) (response, *appError) {
 	outputTimings.ParseMS = toMS(time.Since(parseStarted))
 
 	dedupeStarted := time.Now()
-	dedupedFunctions := dedupeFunctions(parsedFunctions)
-	outputCounters.DedupedFunctions = len(dedupedFunctions)
+	memoizedInputs, _ := buildCorrelationPlan(parsedFunctions)
+	outputCounters.DedupedFunctions = len(memoizedInputs)
 	outputTimings.DedupeMS = toMS(time.Since(dedupeStarted))
 
 	dumpFiles := true
@@ -1169,7 +1198,7 @@ func runRequest(input request) (response, *appError) {
 	}
 
 	correlationResult, correlationErr := correlateAndWriteShards(
-		dedupedFunctions, typeIndex.entries, outputDir, shardSize,
+		parsedFunctions, typeIndex.entries, outputDir, shardSize,
 	)
 	if correlationErr != nil {
 		return response{}, correlationErr

@@ -29,6 +29,10 @@ struct Callsite {
     #[allow(dead_code)]
     dst_function_source_file: String,
     src_linenumber: i64,
+    #[serde(default)]
+    cov_link: String,
+    #[serde(default)]
+    cov_callsite_link: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -243,8 +247,8 @@ fn run() -> Result<(), String> {
             cov_ct_idx: node.cov_ct_idx,
             cov_hitcount: hit_count,
             cov_color: color_for_hitcount(hit_count).to_string(),
-            cov_link: "#".to_string(),
-            cov_callsite_link: "#".to_string(),
+            cov_link: node.cov_link.clone(),
+            cov_callsite_link: node.cov_callsite_link.clone(),
             cov_forward_reds: 0,
             cov_largest_blocked_func: "".to_string(),
         });
@@ -259,11 +263,23 @@ fn run() -> Result<(), String> {
         }
     }
 
+    let mut prev_end: i64 = -1;
     for idx in 0..overlay_nodes.len() {
+        let mut prev_depth_leq = false;
+        if idx > 0 {
+            prev_depth_leq = sorted_callsites[idx - 1].depth <= sorted_callsites[idx].depth;
+        }
+        if overlay_nodes[idx].cov_hitcount == 0 && (prev_depth_leq || (idx as i64) < prev_end) {
+            overlay_nodes[idx].cov_forward_reds = 0;
+            overlay_nodes[idx].cov_largest_blocked_func = "none".to_string();
+            continue;
+        }
+
         let mut forward_reds = 0i64;
         let mut largest_name = String::new();
         let mut largest_complexity = 0i64;
-        for look_ahead in (idx + 1)..overlay_nodes.len() {
+        let mut look_ahead = idx + 1;
+        while look_ahead < overlay_nodes.len() {
             if overlay_nodes[look_ahead].cov_hitcount != 0 {
                 break;
             }
@@ -275,7 +291,9 @@ fn run() -> Result<(), String> {
                 }
             }
             forward_reds += 1;
+            look_ahead += 1;
         }
+        prev_end = (look_ahead as i64) - 1;
         overlay_nodes[idx].cov_forward_reds = forward_reds;
         overlay_nodes[idx].cov_largest_blocked_func = largest_name;
     }

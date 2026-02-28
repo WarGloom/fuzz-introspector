@@ -14,6 +14,8 @@
 """Tests for phase-1 overlay backend plumbing behavior."""
 
 import json
+import shlex
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -67,12 +69,39 @@ def _dummy_profile() -> _ProfileStub:
         target_lang="c-cpp",
         fuzzer_callsite_calltree=root,
         coverage=_CoverageStub(),
+        dst_to_fd_cache={},
         branch_blockers=[],
     )
 
 
 def _dummy_project() -> SimpleNamespace:
     return SimpleNamespace(all_functions={"entry": _FunctionStub()})
+
+
+def _build_two_node_profile() -> _ProfileStub:
+    root = cfg_load.CalltreeCallsite("entry", "a.c", 0, 1, None)
+    child = cfg_load.CalltreeCallsite("leaf", "a.c", 1, 10, root)
+    root.children = [child]
+    profile = _ProfileStub(
+        identifier="fuzzer",
+        target_lang="c-cpp",
+        fuzzer_callsite_calltree=root,
+        coverage=_CoverageStub(),
+        branch_blockers=[],
+    )
+    profile.dst_to_fd_cache = {
+        "entry": SimpleNamespace(
+            function_source_file="a.c",
+            function_linenumber=1,
+            function_name="entry",
+        ),
+        "leaf": SimpleNamespace(
+            function_source_file="a.c",
+            function_linenumber=10,
+            function_name="leaf",
+        ),
+    }
+    return profile
 
 
 def test_overlay_default_python_path_does_not_call_native_loader(
@@ -245,33 +274,46 @@ def test_overlay_go_backend_forces_python_authoritative_shadow(
         root.cov_hitcount = 77
         root.cov_color = "green"
 
-    monkeypatch.setattr(backend_loaders, "parse_overlay_backend_env", lambda: "go")
-    monkeypatch.setattr(backend_loaders, "parse_overlay_strict_mode", lambda: False)
-    monkeypatch.setattr(backend_loaders, "parse_overlay_shadow_mode", lambda: False)
+    script_path = tmp_path / "overlay_success.py"
+    script_path.write_text(
+        "\n".join(
+            [
+                "import json",
+                "import sys",
+                "json.load(sys.stdin)",
+                "print(json.dumps({",
+                "  'schema_version': 1,",
+                "  'status': 'success',",
+                "  'counters': {},",
+                "  'timings': {},",
+                "  'artifacts': {",
+                f"    'overlay_nodes': {repr(str(overlay_nodes))},",
+                f"    'branch_complexities': {repr(str(branch_complexities))},",
+                f"    'branch_blockers': {repr(str(branch_blockers))},",
+                "  },",
+                "}))",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cmd = " ".join([shlex.quote(sys.executable), shlex.quote(str(script_path))])
+    monkeypatch.setenv("FI_OVERLAY_BACKEND", "go")
+    monkeypatch.setenv("FI_OVERLAY_GO_BIN", cmd)
+    monkeypatch.setenv("FI_OVERLAY_STRICT", "0")
+    monkeypatch.delenv("FI_OVERLAY_SHADOW", raising=False)
+    monkeypatch.setattr(
+        analysis, "_overlay_calltree_with_coverage_python", _python_overlay
+    )
+    original_run_overlay_backend = backend_loaders.run_overlay_backend
+
+    def _counting_run_overlay_backend(*args, **kwargs):
+        native_loader_calls.append(1)
+        return original_run_overlay_backend(*args, **kwargs)
+
     monkeypatch.setattr(
         backend_loaders,
         "run_overlay_backend",
-        lambda **_kwargs: (
-            native_loader_calls.append(1),
-            backend_loaders.OverlayBackendResult(
-                selected_backend="go",
-                strict_mode=False,
-                response={
-                    "schema_version": 1,
-                    "status": "success",
-                    "counters": {},
-                    "timings": {},
-                    "artifacts": {
-                        "overlay_nodes": str(overlay_nodes),
-                        "branch_complexities": str(branch_complexities),
-                        "branch_blockers": str(branch_blockers),
-                    },
-                },
-            ),
-        )[1],
-    )
-    monkeypatch.setattr(
-        analysis, "_overlay_calltree_with_coverage_python", _python_overlay
+        _counting_run_overlay_backend,
     )
 
     with caplog.at_level("WARNING"):
@@ -711,3 +753,61 @@ def test_overlay_parity_normalization_is_order_stable() -> None:
     mismatch_counts = analysis._compare_overlay_outputs(native_outputs, python_outputs)
 
     assert sum(mismatch_counts.values()) == 0
+
+
+def test_overlay_native_payload_includes_python_link_fields() -> None:
+    profile = _build_two_node_profile()
+    project = _dummy_project()
+
+    payload = analysis._build_overlay_native_payload(
+        profile,
+        project,
+        "https://cov.example",
+        "/tmp",
+    )
+
+    assert payload["callsites"][0]["cov_link"] == "a.c:1:entry"
+    assert payload["callsites"][0]["cov_callsite_link"] == "#"
+    assert payload["callsites"][1]["cov_link"] == "a.c:10:leaf"
+    assert payload["callsites"][1]["cov_callsite_link"] == "a.c:10:entry"
+
+
+def test_overlay_parity_detects_forward_red_and_sentinel_drift() -> None:
+    native_outputs = {
+        "overlay_nodes": analysis._normalize_overlay_nodes(
+            [
+                {
+                    "cov_ct_idx": 0,
+                    "cov_hitcount": 200,
+                    "cov_color": "lawngreen",
+                    "cov_link": "a",
+                    "cov_callsite_link": "#",
+                    "cov_forward_reds": 0,
+                    "cov_largest_blocked_func": "",
+                }
+            ]
+        ),
+        "branch_complexities": analysis._normalize_branch_complexities([]),
+        "branch_blockers": analysis._normalize_branch_blockers([]),
+    }
+    python_outputs = {
+        "overlay_nodes": analysis._normalize_overlay_nodes(
+            [
+                {
+                    "cov_ct_idx": 0,
+                    "cov_hitcount": 200,
+                    "cov_color": "lawngreen",
+                    "cov_link": "a",
+                    "cov_callsite_link": "#",
+                    "cov_forward_reds": 0,
+                    "cov_largest_blocked_func": "none",
+                }
+            ]
+        ),
+        "branch_complexities": analysis._normalize_branch_complexities([]),
+        "branch_blockers": analysis._normalize_branch_blockers([]),
+    }
+
+    mismatch_counts = analysis._compare_overlay_outputs(native_outputs, python_outputs)
+
+    assert mismatch_counts["overlay_nodes_values"] == 1

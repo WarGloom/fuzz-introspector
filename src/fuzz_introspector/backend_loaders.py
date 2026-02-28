@@ -122,6 +122,12 @@ class OverlayBackendResult:
     reason_details: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class OverlayBackendSelection:
+    requested_backend: str
+    execution_backend: str
+
+
 def parse_backend_env(
     env_name: str,
     default: str = BACKEND_PYTHON,
@@ -145,11 +151,19 @@ def resolve_backend_command(command_env_prefix: str, backend: str) -> list[str] 
     1) <PREFIX>_<BACKEND>_BIN
     2) <PREFIX>_BIN
     """
-    candidates = [
-        f"{command_env_prefix}_{backend.upper()}_BIN",
-        f"{command_env_prefix}_BIN",
-    ]
+    candidates = [f"{command_env_prefix}_{backend.upper()}_BIN"]
+    if command_env_prefix == "FI_OVERLAY" and backend in (BACKEND_RUST, BACKEND_GO):
+        candidates.append(f"{command_env_prefix}_{BACKEND_NATIVE.upper()}_BIN")
+    candidates.append(f"{command_env_prefix}_BIN")
+
+    deduplicated_candidates: list[str] = []
+    seen_candidates: set[str] = set()
     for env_name in candidates:
+        if env_name in seen_candidates:
+            continue
+        seen_candidates.add(env_name)
+        deduplicated_candidates.append(env_name)
+    for env_name in deduplicated_candidates:
         raw_cmd = os.environ.get(env_name, "").strip()
         if not raw_cmd:
             continue
@@ -264,22 +278,28 @@ def parse_correlator_backend_env(
     return BACKEND_PYTHON
 
 
-def parse_overlay_backend_env(
+def _canonicalize_overlay_backend(backend: str) -> str:
+    if backend in (BACKEND_RUST, BACKEND_GO):
+        return BACKEND_NATIVE
+    return backend
+
+
+def parse_overlay_backend_selection(
     env_name: str = "FI_OVERLAY_BACKEND",
-) -> str:
-    """Resolve overlay backend selector."""
+) -> OverlayBackendSelection:
+    """Resolve overlay backend selector and canonical execution backend."""
     raw = os.environ.get(env_name, "").strip().lower()
     if not raw:
-        return BACKEND_PYTHON
+        return OverlayBackendSelection(BACKEND_PYTHON, BACKEND_PYTHON)
     if raw in (BACKEND_RUST, BACKEND_GO):
         logger.warning(
             "%s=%r is a compatibility alias; using native backend",
             env_name,
             raw,
         )
-        return raw
+        return OverlayBackendSelection(raw, BACKEND_NATIVE)
     if raw in (BACKEND_PYTHON, BACKEND_NATIVE):
-        return raw
+        return OverlayBackendSelection(raw, raw)
 
     logger.warning(
         "%s: Unsupported %s=%r; falling back to python",
@@ -287,7 +307,14 @@ def parse_overlay_backend_env(
         env_name,
         raw,
     )
-    return BACKEND_PYTHON
+    return OverlayBackendSelection(BACKEND_PYTHON, BACKEND_PYTHON)
+
+
+def parse_overlay_backend_env(
+    env_name: str = "FI_OVERLAY_BACKEND",
+) -> str:
+    """Resolve requested overlay backend selector."""
+    return parse_overlay_backend_selection(env_name).requested_backend
 
 
 def parse_overlay_strict_mode(
@@ -621,12 +648,19 @@ def run_overlay_backend(
     """Run the native overlay backend with strict/non-strict handling."""
     if strict_mode is None:
         strict_mode = parse_overlay_strict_mode()
+    selection: OverlayBackendSelection | None = None
     if selected_backend is None:
-        selected_backend = parse_overlay_backend_env()
+        selection = parse_overlay_backend_selection()
+        selected_backend = selection.requested_backend
     if selected_backend == BACKEND_PYTHON:
         return OverlayBackendResult(
             selected_backend=selected_backend,
             strict_mode=strict_mode,
+        )
+    if selection is None:
+        selection = OverlayBackendSelection(
+            requested_backend=selected_backend,
+            execution_backend=_canonicalize_overlay_backend(selected_backend),
         )
 
     command = resolve_backend_command(command_env_prefix, selected_backend)

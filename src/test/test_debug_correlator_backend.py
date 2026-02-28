@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 
 from fuzz_introspector import backend_loaders
+from fuzz_introspector import debug_info
 
 
 class _FakePopen:
@@ -317,3 +318,81 @@ def test_correlator_oversized_stdout_triggers_prebuffer_cleanup(
         "cleanup_status": "terminated",
     }
     assert terminate_calls == [1]
+
+
+def test_correlator_shards_require_full_row_coverage(tmp_path) -> None:
+    shard_path = tmp_path / "correlated-partial-00000.ndjson"
+    shard_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "row_idx": 0,
+                        "func_signature_elems": {"return_type": [], "params": []},
+                        "source": {"source_file": "a.c", "source_line": "1"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "row_idx": 2,
+                        "func_signature_elems": {"return_type": [], "params": []},
+                        "source": {"source_file": "b.c", "source_line": "2"},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    response = {"artifacts": {"correlated_shards": [str(shard_path)]}}
+
+    with pytest.raises(ValueError, match="coverage mismatch"):
+        debug_info._collect_correlator_shard_updates(
+            [{}, {}, {}],
+            response,
+            require_complete_coverage=True,
+        )
+
+
+def test_correlator_shards_keep_one_update_per_original_row(tmp_path) -> None:
+    shard_path = tmp_path / "correlated-complete-00000.ndjson"
+    repeated_signature = {"return_type": ["N/A"], "params": []}
+    repeated_source = {"source_file": "same.c", "source_line": "7"}
+    shard_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "row_idx": 0,
+                        "func_signature_elems": repeated_signature,
+                        "source": repeated_source,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "row_idx": 1,
+                        "func_signature_elems": repeated_signature,
+                        "source": repeated_source,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "row_idx": 2,
+                        "func_signature_elems": repeated_signature,
+                        "source": repeated_source,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    response = {"artifacts": {"correlated_shards": [str(shard_path)]}}
+
+    updates = debug_info._collect_correlator_shard_updates(
+        [{}, {}, {}],
+        response,
+        require_complete_coverage=True,
+    )
+
+    assert [row_idx for row_idx, _sig, _source in updates] == [0, 1, 2]

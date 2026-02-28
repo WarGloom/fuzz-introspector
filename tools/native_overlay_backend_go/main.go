@@ -15,6 +15,8 @@ type callsite struct {
 	CovCtIdx        int    `json:"cov_ct_idx"`
 	Depth           int    `json:"depth"`
 	DstFunctionName string `json:"dst_function_name"`
+	CovLink         string `json:"cov_link"`
+	CovCallsiteLink string `json:"cov_callsite_link"`
 	SrcLineNumber   int    `json:"src_linenumber"`
 }
 
@@ -161,8 +163,8 @@ func run() error {
 			CovCtIdx:              cs.CovCtIdx,
 			CovHitcount:           hit,
 			CovColor:              colorForHitcount(hit),
-			CovLink:               "#",
-			CovCallsiteLink:       "#",
+			CovLink:               cs.CovLink,
+			CovCallsiteLink:       cs.CovCallsiteLink,
 			CovForwardReds:        0,
 			CovLargestBlockedFunc: "",
 		})
@@ -175,6 +177,44 @@ func run() error {
 				break
 			}
 		}
+	}
+
+	prevEnd := -1
+	for idx := range nodes {
+		prevDepthLEQ := false
+		if idx > 0 {
+			prevDepthLEQ = req.Callsites[idx-1].Depth <= req.Callsites[idx].Depth
+		}
+		if nodes[idx].CovHitcount == 0 && (prevDepthLEQ || idx < prevEnd) {
+			nodes[idx].CovForwardReds = 0
+			nodes[idx].CovLargestBlockedFunc = "none"
+			continue
+		}
+
+		forwardRed := 0
+		largestBlockedName := ""
+		largestBlockedCount := 0
+		lookAhead := idx + 1
+		for lookAhead < len(nodes) {
+			n2 := nodes[lookAhead]
+			if n2.CovHitcount != 0 {
+				break
+			}
+
+			lookName := req.Callsites[lookAhead].DstFunctionName
+			if fd, ok := req.Functions[lookName]; ok {
+				if fd.TotalCyclomaticComplexity > largestBlockedCount {
+					largestBlockedCount = fd.TotalCyclomaticComplexity
+					largestBlockedName = lookName
+				}
+			}
+
+			forwardRed++
+			lookAhead++
+		}
+		prevEnd = lookAhead - 1
+		nodes[idx].CovForwardReds = forwardRed
+		nodes[idx].CovLargestBlockedFunc = largestBlockedName
 	}
 
 	complexities := []branchComplexity{}

@@ -15,7 +15,9 @@
 
 import json
 import io
+import shlex
 import subprocess
+import sys
 
 from typing import Any
 
@@ -234,6 +236,139 @@ def test_parse_overlay_backend_env_accepts_go_compat_alias(
 ) -> None:
     monkeypatch.setenv("FI_OVERLAY_BACKEND", "go")
     assert backend_loaders.parse_overlay_backend_env() == backend_loaders.BACKEND_GO
+
+
+def test_parse_overlay_backend_selection_retains_alias_with_native_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FI_OVERLAY_BACKEND", "go")
+
+    selection = backend_loaders.parse_overlay_backend_selection()
+
+    assert selection.requested_backend == backend_loaders.BACKEND_GO
+    assert selection.execution_backend == backend_loaders.BACKEND_NATIVE
+
+
+def test_resolve_overlay_command_rust_alias_falls_back_to_native_bin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FI_OVERLAY_RUST_BIN", raising=False)
+    monkeypatch.setenv("FI_OVERLAY_NATIVE_BIN", "overlay-native --json")
+    monkeypatch.delenv("FI_OVERLAY_BIN", raising=False)
+
+    assert backend_loaders.resolve_backend_command("FI_OVERLAY", "rust") == [
+        "overlay-native",
+        "--json",
+    ]
+
+
+def test_resolve_overlay_command_go_alias_falls_back_to_native_bin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FI_OVERLAY_GO_BIN", raising=False)
+    monkeypatch.setenv("FI_OVERLAY_NATIVE_BIN", "overlay-native --json")
+    monkeypatch.delenv("FI_OVERLAY_BIN", raising=False)
+
+    assert backend_loaders.resolve_backend_command("FI_OVERLAY", "go") == [
+        "overlay-native",
+        "--json",
+    ]
+
+
+def test_run_overlay_backend_go_alias_uses_go_bin_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    overlay_nodes = tmp_path / "overlay_nodes.json"
+    overlay_nodes.write_text("[]", encoding="utf-8")
+    branch_complexities = tmp_path / "branch_complexities.json"
+    branch_complexities.write_text("[]", encoding="utf-8")
+    branch_blockers = tmp_path / "branch_blockers.json"
+    branch_blockers.write_text("[]", encoding="utf-8")
+
+    script_path = tmp_path / "overlay_success.py"
+    script_path.write_text(
+        "\n".join(
+            [
+                "import json",
+                "import sys",
+                "json.load(sys.stdin)",
+                "print(json.dumps({",
+                "  'schema_version': 1,",
+                "  'status': 'success',",
+                "  'counters': {},",
+                "  'timings': {},",
+                "  'artifacts': {",
+                f"    'overlay_nodes': {repr(str(overlay_nodes))},",
+                f"    'branch_complexities': {repr(str(branch_complexities))},",
+                f"    'branch_blockers': {repr(str(branch_blockers))},",
+                "  },",
+                "}))",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    cmd = " ".join([shlex.quote(sys.executable), shlex.quote(str(script_path))])
+    monkeypatch.setenv("FI_OVERLAY_BACKEND", "go")
+    monkeypatch.setenv("FI_OVERLAY_GO_BIN", cmd)
+    monkeypatch.delenv("FI_OVERLAY_NATIVE_BIN", raising=False)
+    monkeypatch.delenv("FI_OVERLAY_BIN", raising=False)
+
+    result = backend_loaders.run_overlay_backend(payload={"fuzzer": "fuzz_target"})
+
+    assert result.selected_backend == backend_loaders.BACKEND_GO
+    assert result.reason_code is None
+    assert result.response is not None
+    assert result.response["status"] == "success"
+
+
+def test_run_overlay_backend_rust_alias_uses_rust_bin_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    overlay_nodes = tmp_path / "overlay_nodes.json"
+    overlay_nodes.write_text("[]", encoding="utf-8")
+    branch_complexities = tmp_path / "branch_complexities.json"
+    branch_complexities.write_text("[]", encoding="utf-8")
+    branch_blockers = tmp_path / "branch_blockers.json"
+    branch_blockers.write_text("[]", encoding="utf-8")
+
+    script_path = tmp_path / "overlay_success.py"
+    script_path.write_text(
+        "\n".join(
+            [
+                "import json",
+                "import sys",
+                "json.load(sys.stdin)",
+                "print(json.dumps({",
+                "  'schema_version': 1,",
+                "  'status': 'success',",
+                "  'counters': {},",
+                "  'timings': {},",
+                "  'artifacts': {",
+                f"    'overlay_nodes': {repr(str(overlay_nodes))},",
+                f"    'branch_complexities': {repr(str(branch_complexities))},",
+                f"    'branch_blockers': {repr(str(branch_blockers))},",
+                "  },",
+                "}))",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    cmd = " ".join([shlex.quote(sys.executable), shlex.quote(str(script_path))])
+    monkeypatch.setenv("FI_OVERLAY_BACKEND", "rust")
+    monkeypatch.setenv("FI_OVERLAY_RUST_BIN", cmd)
+    monkeypatch.delenv("FI_OVERLAY_NATIVE_BIN", raising=False)
+    monkeypatch.delenv("FI_OVERLAY_BIN", raising=False)
+
+    result = backend_loaders.run_overlay_backend(payload={"fuzzer": "fuzz_target"})
+
+    assert result.selected_backend == backend_loaders.BACKEND_RUST
+    assert result.reason_code is None
+    assert result.response is not None
+    assert result.response["status"] == "success"
 
 
 def test_parse_overlay_shadow_mode(
