@@ -88,8 +88,8 @@ defaults and only set the minimal correlator variables listed below.
 - `FI_DEBUG_CORRELATOR_BACKEND` (default: `python`): native correlator stage
   backend selector. Supported: `python`, `rust`, `go`.
 - Rollout gate decision (2026-02-28): keep `FI_DEBUG_CORRELATOR_BACKEND=python`
-  as authoritative default. Current local gate evidence does not meet switch
-  thresholds for speed/memory and strict-parity stability.
+  as authoritative default. Latest local introtest evidence shows rust/go
+  parity with python, but switch thresholds for performance/memory are not met.
 - `FI_DEBUG_CORRELATOR_BACKEND=go` is currently shadow-only and never
   authoritative; if `FI_DEBUG_CORRELATOR_SHADOW=0` is configured, shadow mode
   is forced and Python output remains authoritative.
@@ -123,8 +123,9 @@ defaults and only set the minimal correlator variables listed below.
   - `FI_OVERLAY_BACKEND=go` is currently probe/shadow-only and never authoritative;
     Python overlay output remains authoritative even when `FI_OVERLAY_SHADOW=0`.
   - Rollout gate decision (2026-02-28): keep `FI_OVERLAY_BACKEND=python` as
-    default/authoritative. Current local fixture run reports parity mismatch in
-    go probe/shadow mode.
+    default/authoritative. Native rust/go backends are parity-validated on the
+    local introtest fixture, but default switch remains pending stronger
+    performance evidence.
   - Native authoritative overlay application is currently gated to `target_lang=c-cpp`.
     Other languages use Python overlay output.
 - Optional correlator advanced tuning (not required for normal operation):
