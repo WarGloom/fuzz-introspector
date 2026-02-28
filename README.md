@@ -53,6 +53,20 @@ variables:
   `0` disables spill-to-disk.
 - `FI_DEBUG_MAX_INMEM_MB` (default: `0`): hard in-memory cap for shard
   buffering in MB. `0` disables cap-based spilling.
+- `FI_DEBUG_MAX_INFLIGHT_SHARDS` (default: `min(max_workers, 2, shard_count)`):
+  maximum concurrent shards in YAML load phase.
+- `FI_DEBUG_ADAPTIVE_WORKERS` (default: `false`): enable spill/timing based
+  in-flight downshift and recovery.
+- `FI_DEBUG_RSS_SOFT_LIMIT_MB` (default: `0`): if set, temporarily lowers
+  in-flight shards when RSS is above this threshold.
+- `FI_DEBUG_SPILL_POLICY` (default: `oldest`): choose which shard to spill
+  first under memory pressure. Supported: `oldest`, `largest`.
+- `FI_DEBUG_STAGE_RSS` (default: `false`): include RSS snapshot in debug-load
+  stage telemetry (`rss_mb=...`).
+- `FI_DEBUG_PERF_WARN` (default: `true`): emit performance guidance warnings
+  for slow or high-memory debug stages.
+- `FI_DEBUG_STAGE_WARN_RSS_MB` (default: `0`): warning threshold in MB for
+  per-stage RSS. `0` disables RSS threshold warnings.
 - `FI_DEBUG_CORRELATE_PARALLEL` (default: `true`): enable parallel function
   type-correlation.
 - `FI_DEBUG_CORRELATE_WORKERS` (default: `min(cpu_count, 8)`): worker cap for
@@ -92,6 +106,9 @@ export FI_DEBUG_MAX_WORKERS=2
 export FI_DEBUG_SHARD_FILES=4
 export FI_DEBUG_SPILL_MB=0
 export FI_DEBUG_MAX_INMEM_MB=0
+export FI_DEBUG_MAX_INFLIGHT_SHARDS=2
+export FI_DEBUG_ADAPTIVE_WORKERS=0
+export FI_DEBUG_RSS_SOFT_LIMIT_MB=0
 export FI_DEBUG_CORRELATE_PARALLEL=true
 export FI_DEBUG_CORRELATE_WORKERS=2
 export FI_PROFILE_BACKEND=thread
@@ -106,6 +123,9 @@ export FI_DEBUG_MAX_WORKERS=10
 export FI_DEBUG_SHARD_FILES=4
 export FI_DEBUG_SPILL_MB=4096
 export FI_DEBUG_MAX_INMEM_MB=8192
+export FI_DEBUG_MAX_INFLIGHT_SHARDS=6
+export FI_DEBUG_ADAPTIVE_WORKERS=1
+export FI_DEBUG_RSS_SOFT_LIMIT_MB=24576
 export FI_DEBUG_CORRELATE_PARALLEL=true
 export FI_DEBUG_CORRELATE_WORKERS=8
 export FI_PROFILE_BACKEND=process
@@ -120,6 +140,9 @@ export FI_DEBUG_MAX_WORKERS=8
 export FI_DEBUG_SHARD_FILES=4
 export FI_DEBUG_SPILL_MB=3072
 export FI_DEBUG_MAX_INMEM_MB=6144
+export FI_DEBUG_MAX_INFLIGHT_SHARDS=8
+export FI_DEBUG_ADAPTIVE_WORKERS=1
+export FI_DEBUG_RSS_SOFT_LIMIT_MB=24576
 export FI_DEBUG_CORRELATE_PARALLEL=true
 export FI_DEBUG_CORRELATE_WORKERS=6
 export FI_PROFILE_BACKEND=process
@@ -134,6 +157,9 @@ export FI_DEBUG_MAX_WORKERS=2
 export FI_DEBUG_SHARD_FILES=2
 export FI_DEBUG_SPILL_MB=128
 export FI_DEBUG_MAX_INMEM_MB=512
+export FI_DEBUG_MAX_INFLIGHT_SHARDS=2
+export FI_DEBUG_ADAPTIVE_WORKERS=0
+export FI_DEBUG_RSS_SOFT_LIMIT_MB=1536
 export FI_DEBUG_CORRELATE_PARALLEL=false
 export FI_DEBUG_CORRELATE_WORKERS=1
 export FI_PROFILE_BACKEND=thread

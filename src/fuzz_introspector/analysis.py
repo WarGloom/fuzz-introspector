@@ -53,10 +53,13 @@ FI_PROFILE_WORKERS_DEFAULT_CAP = 0
 FI_DEBUG_STAGE_RSS_ENV = "FI_DEBUG_STAGE_RSS"
 FI_DEBUG_PERF_WARN_ENV = "FI_DEBUG_PERF_WARN"
 FI_STAGE_WARN_SECONDS_ENV = "FI_STAGE_WARN_SECONDS"
+FI_DEBUG_STAGE_WARN_RSS_MB_ENV = "FI_DEBUG_STAGE_WARN_RSS_MB"
 FI_STAGE_WARN_SECONDS_DEFAULT = 0
+FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT = 0
 _BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
 _BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
-_SOURCES_SCAN_CACHE: dict[tuple[str, tuple[str, ...], str], frozenset[str]] = {}
+_SOURCES_SCAN_CACHE: dict[tuple[str, tuple[str, ...], str],
+                          frozenset[str]] = {}
 
 
 def _parse_profile_worker_count() -> int:
@@ -121,6 +124,32 @@ def _parse_stage_warn_seconds() -> int:
     return warn_seconds
 
 
+def _parse_stage_warn_rss_mb() -> int:
+    """Parse the per-stage RSS warning threshold in MiB."""
+    raw_value = os.environ.get(FI_DEBUG_STAGE_WARN_RSS_MB_ENV, "")
+    if not raw_value:
+        return FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT
+    try:
+        warn_rss_mb = int(raw_value)
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; defaulting to %d",
+            FI_DEBUG_STAGE_WARN_RSS_MB_ENV,
+            raw_value,
+            FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT,
+        )
+        return FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT
+    if warn_rss_mb < 0:
+        logger.warning(
+            "Invalid %s=%r; defaulting to %d",
+            FI_DEBUG_STAGE_WARN_RSS_MB_ENV,
+            raw_value,
+            FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT,
+        )
+        return FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT
+    return warn_rss_mb
+
+
 def _get_stage_rss_mb() -> float | None:
     """Best-effort snapshot of process RSS in MiB."""
     try:
@@ -165,6 +194,7 @@ def _log_debug_load_stage(
     include_rss: bool,
     perf_warn_enabled: bool,
     warn_after_seconds: int,
+    warn_rss_mb: int,
 ) -> None:
     stage_fields: list[str] = [
         f"stage={stage_name}", f"elapsed={elapsed_seconds:.3f}s"
@@ -172,12 +202,16 @@ def _log_debug_load_stage(
     for metric_name, metric_value in metrics.items():
         stage_fields.append(f"{metric_name}={metric_value}")
 
+    stage_rss_mb = None
+    should_measure_rss = include_rss or warn_rss_mb > 0
+    if should_measure_rss:
+        stage_rss_mb = _get_stage_rss_mb()
+
     if include_rss:
-        rss_mb = _get_stage_rss_mb()
-        if rss_mb is None:
+        if stage_rss_mb is None:
             stage_fields.append("rss_mb=n/a")
         else:
-            stage_fields.append(f"rss_mb={rss_mb:.2f}")
+            stage_fields.append(f"rss_mb={stage_rss_mb:.2f}")
 
     logger.info("[debug-load] %s", " ".join(stage_fields))
 
@@ -188,6 +222,17 @@ def _log_debug_load_stage(
             stage_name,
             warn_after_seconds,
             elapsed_seconds,
+            _get_debug_stage_tuning_hint(stage_name),
+        )
+
+    if (perf_warn_enabled and warn_rss_mb > 0 and stage_rss_mb is not None
+            and stage_rss_mb > warn_rss_mb):
+        logger.warning(
+            ("[debug-load] stage=%s exceeded rss threshold=%dMB with rss=%.2fMB. "
+             "Tune %s."),
+            stage_name,
+            warn_rss_mb,
+            stage_rss_mb,
             _get_debug_stage_tuning_hint(stage_name),
         )
 
@@ -403,6 +448,7 @@ class IntrospectionProject:
         warn_after_seconds = _parse_stage_warn_seconds()
 
         load_started = time.perf_counter()
+        warn_rss_mb = _parse_stage_warn_rss_mb()
         self.debug_report = debug_info.load_debug_report(self.debug_files)
         _log_debug_load_stage(
             "debug_report",
@@ -411,6 +457,7 @@ class IntrospectionProject:
             include_stage_rss,
             perf_warn_enabled,
             warn_after_seconds,
+            warn_rss_mb,
         )
 
         # Load the yaml  content of debug files holding type information and
@@ -428,6 +475,7 @@ class IntrospectionProject:
             include_stage_rss,
             perf_warn_enabled,
             warn_after_seconds,
+            warn_rss_mb,
         )
 
         function_load_started = time.perf_counter()
@@ -443,6 +491,7 @@ class IntrospectionProject:
             include_stage_rss,
             perf_warn_enabled,
             warn_after_seconds,
+            warn_rss_mb,
         )
 
         # Index the functions based on file locations. This is useful for
@@ -478,6 +527,7 @@ class IntrospectionProject:
             include_stage_rss,
             perf_warn_enabled,
             warn_after_seconds,
+            warn_rss_mb,
         )
 
         # Extract the raw function signature. This propagates types into all of
@@ -499,6 +549,7 @@ class IntrospectionProject:
             include_stage_rss,
             perf_warn_enabled,
             warn_after_seconds,
+            warn_rss_mb,
         )
 
     def dump_debug_report(self, out_dir):
