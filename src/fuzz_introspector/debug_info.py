@@ -1811,6 +1811,12 @@ def correlate_debugged_function_to_debug_types(
     correlator_backend = backend_loaders.parse_correlator_backend_env()
     correlator_strict_mode = backend_loaders.parse_correlator_strict_mode()
     correlator_shadow_mode = _parse_bool_env("FI_DEBUG_CORRELATOR_SHADOW", False)
+    if correlator_backend == backend_loaders.BACKEND_GO and not correlator_shadow_mode:
+        logger.warning(
+            "FI_DEBUG_CORRELATOR_BACKEND=go currently runs in shadow-only mode; "
+            "forcing Python authoritative output"
+        )
+        correlator_shadow_mode = True
     shadow_sample_size = _parse_int_env(
         "FI_DEBUG_CORRELATOR_SHADOW_SAMPLE_SIZE",
         CORRELATOR_SHADOW_SAMPLE_SIZE_DEFAULT,

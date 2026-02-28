@@ -87,6 +87,9 @@ defaults and only set the minimal correlator variables listed below.
   - `FI_DEBUG_CORRELATOR_SHADOW` (default: `0`)
 - `FI_DEBUG_CORRELATOR_BACKEND` (default: `python`): native correlator stage
   backend selector. Supported: `python`, `rust`, `go`.
+- `FI_DEBUG_CORRELATOR_BACKEND=go` is currently shadow-only and never
+  authoritative; if `FI_DEBUG_CORRELATOR_SHADOW=0` is configured, shadow mode
+  is forced and Python output remains authoritative.
 - `FI_DEBUG_CORRELATOR_SHADOW` (default: `0`): run native correlator in
   shadow mode while Python output remains authoritative. Native still executes;
   mismatches versus Python are logged for investigation. With strict mode
