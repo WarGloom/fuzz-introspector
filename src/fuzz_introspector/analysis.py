@@ -56,7 +56,7 @@ FI_STAGE_WARN_SECONDS_ENV = "FI_STAGE_WARN_SECONDS"
 FI_STAGE_WARN_SECONDS_DEFAULT = 0
 _BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
 _BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
-_SOURCES_SCAN_CACHE: dict[tuple[str, tuple[str, ...]], frozenset[str]] = {}
+_SOURCES_SCAN_CACHE: dict[tuple[str, tuple[str, ...], str], frozenset[str]] = {}
 
 
 def _parse_profile_worker_count() -> int:
@@ -1517,7 +1517,13 @@ def extract_all_sources(
     exclude_patterns: list[str] | None = None,
 ) -> set[str]:
     """List all source files in /src with project language filters."""
-    cache_key = (language, tuple(sorted(exclude_patterns or [])))
+    scan_root = os.path.abspath("/src")
+    cache_key = (
+        language,
+        tuple(sorted(exclude_patterns or [])),
+        os.path.abspath(os.getcwd()),
+        scan_root,
+    )
     cached_paths = _SOURCES_SCAN_CACHE.get(cache_key)
     if cached_paths is not None:
         return set(cached_paths)
@@ -1530,7 +1536,11 @@ def extract_all_sources(
         except re.error as err:
             logger.warning("Invalid exclude pattern %s: %s", pattern, err)
 
-    scanned_source_files = _scan_source_tree(language, compiled_exclude_patterns)
+    scanned_source_files = _scan_source_tree(
+        language,
+        compiled_exclude_patterns,
+        scan_root=scan_root,
+    )
     _SOURCES_SCAN_CACHE[cache_key] = frozenset(scanned_source_files)
     return set(scanned_source_files)
 
@@ -1538,6 +1548,7 @@ def extract_all_sources(
 def _scan_source_tree(
     language: str,
     compiled_exclude_patterns: list[re.Pattern[str]],
+    scan_root: str = "/src/",
 ) -> set[str]:
     interesting_source_files: set[str] = set()
 
@@ -1591,7 +1602,7 @@ def _scan_source_tree(
             return False
         return True
 
-    for root, dirs, files in os.walk("/src/"):
+    for root, dirs, files in os.walk(scan_root):
         dirs[:] = [
             d for d in dirs
             if not is_excluded_by_pattern(os.path.join(root, d)) and not any(
