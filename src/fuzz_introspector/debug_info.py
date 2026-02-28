@@ -728,8 +728,10 @@ def _write_spill(items: list[Any], category: str) -> tuple[str, int]:
                                       suffix=".jsonl")
     os.close(fd)
     try:
-        with open(spill_path, "w") as spill_fp:
-            json.dump(items, spill_fp)
+        with open(spill_path, "w", encoding="utf-8") as spill_fp:
+            for item in items:
+                spill_fp.write(json.dumps(item))
+                spill_fp.write("\n")
     except Exception:
         try:
             os.remove(spill_path)
@@ -737,6 +739,41 @@ def _write_spill(items: list[Any], category: str) -> tuple[str, int]:
             pass
         raise
     return spill_path, len(items)
+
+
+def _iter_spill_items(spill_path: str):
+    with open(spill_path, "r", encoding="utf-8") as spill_fp:
+        # Backward compatibility: legacy spill files were written as one JSON
+        # array. New spill files are NDJSON (one JSON value per line).
+        first_non_whitespace = ""
+        while True:
+            char = spill_fp.read(1)
+            if not char:
+                return
+            if not char.isspace():
+                first_non_whitespace = char
+                break
+        spill_fp.seek(0)
+
+        if first_non_whitespace == "[":
+            payload = json.load(spill_fp)
+            if isinstance(payload, list):
+                for item in payload:
+                    yield item
+                return
+            yield payload
+            return
+
+        for line in spill_fp:
+            line = line.strip()
+            if not line:
+                continue
+            payload = json.loads(line)
+            if isinstance(payload, list):
+                for item in payload:
+                    yield item
+                continue
+            yield payload
 
 
 def _estimate_list_bytes(items: list[Any]) -> int:
@@ -867,6 +904,12 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
         if max_inmem_bytes > 0 and current_mem_bytes >= max_inmem_bytes:
             return True
         return False
+
+    category_progress_unit = "items"
+    if category == "debug-info":
+        category_progress_unit = "types"
+    elif category == "debug-functions":
+        category_progress_unit = "functions"
 
     def _record_shard_items(shard_idx: int, items: list[Any]) -> int:
         nonlocal current_mem_bytes
@@ -1146,22 +1189,33 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                 logger.info("Merging spilled shard %d/%d from %s", idx + 1,
                             shard_count, spill_path)
                 try:
-                    with open(spill_path, "r") as spill_fp:
-                        items = json.load(spill_fp)
-                        results.extend(items)
+                    for item in _iter_spill_items(spill_path):
+                        results.append(item)
                 finally:
                     try:
                         os.remove(spill_path)
                     except OSError:
                         pass
                 merged_count += 1
-                logger.info("Shard merge progress for %s: %d/%d", category,
-                            merged_count, shard_count)
+                logger.info(
+                    "Shard merge progress for %s: %d/%d (%d %s)",
+                    category,
+                    merged_count,
+                    shard_count,
+                    len(results),
+                    category_progress_unit,
+                )
                 continue
             results.extend(shard_items_by_idx.get(idx, []))
             merged_count += 1
-            logger.info("Shard merge progress for %s: %d/%d", category,
-                        merged_count, shard_count)
+            logger.info(
+                "Shard merge progress for %s: %d/%d (%d %s)",
+                category,
+                merged_count,
+                shard_count,
+                len(results),
+                category_progress_unit,
+            )
         return results
     finally:
         for spill_path in spilled_by_idx.values():
@@ -1299,56 +1353,88 @@ def create_friendly_debug_types(debug_type_dictionary,
     logging.info("Have to create for %d addresses" %
                  (len(debug_type_dictionary)))
 
-    addr_members = dict()
-    for elem_addr, elem_val in debug_type_dictionary.items():
-        if elem_val["tag"] == "DW_TAG_member":
-            current_members = addr_members.get(int(elem_val["scope"]), [])
-            elem_dict = {
-                "addr":
-                elem_addr,
-                "elem_name":
-                elem_val["name"],
-                "elem_friendly_type":
-                convert_param_list_to_str_v2(
-                    extract_func_sig_friendly_type_tags(
-                        elem_val["base_type_addr"], debug_type_dictionary)),
-            }
-            current_members.append(elem_dict)
-            addr_members[int(elem_val["scope"])] = current_members
-
     # Nothing consumes this structure in-memory today; it is only persisted.
     # Avoid large temporary maps and serialize incrementally.
     if not dump_files:
         return
 
+    member_entries_by_scope: dict[int, list[dict[str, Any]]] = {}
+    for elem_addr, elem_val in debug_type_dictionary.items():
+        if elem_val["tag"] != "DW_TAG_member":
+            continue
+        scope_addr = int(elem_val["scope"])
+        member_entries_by_scope.setdefault(scope_addr, []).append({
+            "addr": elem_addr,
+            "elem_name": elem_val["name"],
+            "base_type_addr": elem_val["base_type_addr"],
+        })
+
+    cached_members_by_scope: dict[int, list[dict[str, Any]]] = {}
+    friendly_type_cache: dict[int | str, list[Any]] = {}
+
+    def _get_friendly_type(addr: int | str) -> list[Any]:
+        cache_key: int | str = addr
+        if not isinstance(cache_key, int):
+            try:
+                cache_key = int(cache_key)
+            except (TypeError, ValueError):
+                cache_key = str(cache_key)
+
+        friendly_type = friendly_type_cache.get(cache_key)
+        if friendly_type is None:
+            friendly_type = extract_func_sig_friendly_type_tags(
+                addr, debug_type_dictionary)
+            friendly_type_cache[cache_key] = friendly_type
+        return friendly_type
+
+    def _get_struct_members(scope_addr: int) -> list[dict[str, Any]]:
+        struct_members = cached_members_by_scope.get(scope_addr)
+        if struct_members is not None:
+            return struct_members
+
+        struct_members = []
+        for entry in member_entries_by_scope.get(scope_addr, []):
+            member_friendly_type = _get_friendly_type(entry["base_type_addr"])
+            struct_members.append({
+                "addr":
+                entry["addr"],
+                "elem_name":
+                entry["elem_name"],
+                "elem_friendly_type":
+                convert_param_list_to_str_v2(member_friendly_type),
+            })
+        cached_members_by_scope[scope_addr] = struct_members
+        return struct_members
+
     output_path = os.path.join(out_dir, "all-friendly-debug-types.json")
     with open(output_path, "w") as f:
         f.write("{")
-        for idx, addr in enumerate(debug_type_dictionary):
+        for idx, (addr, debug_entry) in enumerate(debug_type_dictionary.items()):
             if idx % 2500 == 0 and idx > 0:
                 logging.info("Idx: %d" % (idx))
 
-            friendly_type = extract_func_sig_friendly_type_tags(
-                addr, debug_type_dictionary)
+            addr_int = int(addr)
+            friendly_type = _get_friendly_type(addr_int)
+            is_struct_type = is_struct(friendly_type)
             structure_elems = []
-            if is_struct(friendly_type):
-                structure_elems = addr_members.get(int(addr), [])
+            if is_struct_type:
+                structure_elems = _get_struct_members(addr_int)
 
             entry = {
-                "raw_debug_info": debug_type_dictionary[addr],
+                "raw_debug_info": debug_entry,
                 "friendly-info": {
                     "raw-types":
                     friendly_type,
                     "string_type":
                     convert_param_list_to_str_v2(friendly_type),
                     "is-struct":
-                    is_struct(friendly_type),
+                    is_struct_type,
                     "struct-elems":
                     structure_elems,
                     "is-enum":
                     is_enumeration(friendly_type),
                     "enum-elems":
-                    debug_type_dictionary[addr].get("enum_elems", []),
+                    debug_entry.get("enum_elems", []),
                 },
             }
             if idx > 0:
@@ -1376,10 +1462,17 @@ def correlate_debugged_function_to_debug_types(all_debug_types,
     # Create json file with addresses as indexes for type information.
     # This can be used to lookup types fast.
     logger.info("Creating dictionary")
+    create_start = time.perf_counter()
     create_friendly_debug_types(debug_type_dictionary,
                                 out_dir,
                                 dump_files=dump_files)
-    logger.info("Finished creating dictionary")
+    create_elapsed = time.perf_counter() - create_start
+    logger.info(
+        "Finished creating dictionary in %.3fs (types=%d, dump_files=%s)",
+        create_elapsed,
+        len(debug_type_dictionary),
+        dump_files,
+    )
 
     parallel_enabled = _parse_bool_env("FI_DEBUG_CORRELATE_PARALLEL", True)
     max_workers_default = min(os.cpu_count() or 1, 8)
@@ -1395,6 +1488,9 @@ def correlate_debugged_function_to_debug_types(all_debug_types,
         logger.info("Correlating %d debug functions with %d threads",
                     total_funcs, worker_count)
         chunks = _chunked(all_debug_functions, chunk_size)
+        completed_chunks = 0
+        total_chunks = len(chunks)
+        correlate_start = time.perf_counter()
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = {
                 executor.submit(_process_slice, chunk): idx
@@ -1411,9 +1507,21 @@ def correlate_debugged_function_to_debug_types(all_debug_types,
                     _correlate_function_slice(all_debug_functions,
                                               debug_type_dictionary)
                     break
+                completed_chunks += 1
+                logger.info(
+                    "Correlation progress: %d/%d chunks (%.3fs)",
+                    completed_chunks,
+                    total_chunks,
+                    time.perf_counter() - correlate_start,
+                )
     else:
         logger.info("Correlating %d debug functions serially", total_funcs)
+        correlate_start = time.perf_counter()
         _correlate_function_slice(all_debug_functions, debug_type_dictionary)
+        logger.info(
+            "Correlation completed serially in %.3fs",
+            time.perf_counter() - correlate_start,
+        )
 
 
 def _correlate_function_slice(func_slice: list[Any],

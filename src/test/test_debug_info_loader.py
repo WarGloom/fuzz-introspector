@@ -242,6 +242,28 @@ def test_load_debug_all_yaml_files_spill_activation(monkeypatch):
     assert items == [{"idx": 0}, {"idx": 1}, {"idx": 2}]
 
 
+def test_spill_roundtrip_jsonl():
+    items = [{"idx": 1, "name": "a"}, {"idx": 2, "name": "b"}]
+    spill_path, spill_count = debug_info._write_spill(items, "debug-info")
+    try:
+        loaded_items = list(debug_info._iter_spill_items(spill_path))
+    finally:
+        os.remove(spill_path)
+
+    assert spill_count == 2
+    assert loaded_items == items
+
+
+def test_iter_spill_items_supports_legacy_json_array(tmp_path):
+    legacy_spill = tmp_path / "legacy_spill.json"
+    expected_items = [{"idx": 1}, {"idx": 2}]
+    with open(legacy_spill, "w", encoding="utf-8") as spill_fp:
+        json.dump(expected_items, spill_fp)
+
+    loaded_items = list(debug_info._iter_spill_items(str(legacy_spill)))
+    assert loaded_items == expected_items
+
+
 def test_correlate_debugged_function_to_debug_types_parallel(monkeypatch):
     types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
     funcs = [{"type_arguments": [0], "file_location": "/src/a:1"}]
@@ -251,6 +273,36 @@ def test_correlate_debugged_function_to_debug_types_parallel(monkeypatch):
         types, funcs, "/tmp", False)
     assert "func_signature_elems" in funcs[0]
     assert "source" in funcs[0]
+
+
+def test_create_friendly_debug_types_skips_work_when_dump_disabled(monkeypatch):
+    called = {"value": False}
+
+    def _fail_if_called(*_args, **_kwargs):
+        called["value"] = True
+        raise AssertionError("Should not process friendly types when dump is disabled")
+
+    monkeypatch.setattr(debug_info, "extract_func_sig_friendly_type_tags",
+                        _fail_if_called)
+
+    debug_info.create_friendly_debug_types(
+        {
+            1: {
+                "tag": "DW_TAG_structure_type",
+                "name": "S",
+            },
+            2: {
+                "tag": "DW_TAG_member",
+                "scope": 1,
+                "name": "field",
+                "base_type_addr": 3,
+            },
+        },
+        "/tmp",
+        dump_files=False,
+    )
+
+    assert called["value"] is False
 
 
 def test_extract_all_functions_in_debug_info_single_pass_parser():

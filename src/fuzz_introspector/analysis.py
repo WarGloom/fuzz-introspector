@@ -859,8 +859,9 @@ def overlay_calltree_with_coverage(
     target_coverage_url = utils.get_target_coverage_url(
         coverage_url, target_name, profile.target_lang)
     logger.info("Using coverage url: %s", target_coverage_url)
-    for node in cfg_load.extract_all_callsites(
-            profile.fuzzer_callsite_calltree):
+    all_callsites = cfg_load.extract_all_callsites(
+        profile.fuzzer_callsite_calltree)
+    for node in all_callsites:
         node.cov_ct_idx = ct_idx
         ct_idx += 1
 
@@ -891,11 +892,9 @@ def overlay_calltree_with_coverage(
     # For python, do a hack where we check if any node is covered, and, if so,
     # ensure the entrypoint is covered.
     logger.info("Overlaying 2")
-    all_nodes = cfg_load.extract_all_callsites(
-        profile.fuzzer_callsite_calltree)
+    all_nodes = all_callsites
     if len(all_nodes) > 0:
-        for node in cfg_load.extract_all_callsites(
-                profile.fuzzer_callsite_calltree)[1:]:
+        for node in all_nodes[1:]:
             if node.cov_hitcount > 0:
                 all_nodes[0].cov_hitcount = 200
                 all_nodes[0].cov_color = get_hit_count_color(200)
@@ -903,8 +902,6 @@ def overlay_calltree_with_coverage(
 
     # Extract data about which nodes unlocks data
     logger.info("Overlaying 3")
-    all_callsites = cfg_load.extract_all_callsites(
-        profile.fuzzer_callsite_calltree)
     prev_end = -1
     for idx1, n1 in enumerate(all_callsites):
         n1 = all_callsites[idx1]
@@ -1323,10 +1320,13 @@ def _safe_int(value, default=None):
         return default
 
 
-def _build_debug_function_indexes(debug_all_functions, header_index_by_name):
+def _build_debug_function_indexes(debug_all_functions,
+                                  header_index_by_name=None):
     debug_dict_by_name = {}
     debug_dict_by_filename = {}
     debug_lines_by_filename = {}
+    if header_index_by_name is None:
+        header_index_by_name = {}
 
     for debug_function in debug_all_functions:
         source_dict = debug_function.get("source", {})
@@ -1450,7 +1450,6 @@ def correlate_introspection_functions_to_debug_info(all_functions_json_report,
     if not report_dict:
         report_dict = {}
 
-    # Find header files
     normalized_paths = set()
     for header_file in report_dict.get("all_files_in_project", []):
         normalized_paths.add(os.path.normpath(header_file["source_file"]))

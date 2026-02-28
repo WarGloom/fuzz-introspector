@@ -13,19 +13,19 @@
 # limitations under the License.
 """Utility functions"""
 
-import cxxfilt
-import rust_demangler
-import logging
+import functools
 import json
+import logging
 import os
+import pathlib
 import re
 import shutil
-import yaml
-import pathlib
-
-from bs4 import BeautifulSoup
-
 from typing import Any, Optional
+
+import cxxfilt
+import rust_demangler
+import yaml
+from bs4 import BeautifulSoup
 
 from fuzz_introspector import constants
 
@@ -149,14 +149,26 @@ def data_file_read_yaml(filename: str) -> Optional[dict[Any, Any]]:
 
 
 def demangle_cpp_func(funcname: str) -> str:
+    return _demangle_cpp_cached(funcname)
+
+
+@functools.lru_cache(maxsize=262144)
+def _demangle_cpp_cached(funcname: str) -> str:
+    cleaned_name = funcname.replace(" ", "")
     try:
-        demangled: str = cxxfilt.demangle(funcname.replace(" ", ""))
+        demangled: str = cxxfilt.demangle(cleaned_name)
         return demangled
     except Exception:
         return funcname
 
 
 def demangle_rust_func(funcname: str) -> str:
+    """Demangle the mangled rust function names."""
+    return _demangle_rust_cached(funcname)
+
+
+@functools.lru_cache(maxsize=262144)
+def _demangle_rust_cached(funcname: str) -> str:
     """Demangle the mangled rust function names."""
     # Ignore all non-mangled rust function names
     # All mangled rust function names started with _R

@@ -242,3 +242,33 @@ def test_resolve_coverage_link(
     if (temp_file is not None):
         # Remove temp html_status.json file
         os.remove('temp_html_status.json')
+
+
+def test_demangle_cpp_func_uses_cache(monkeypatch):
+    calls = {"count": 0}
+
+    def _fake_demangle(name):
+        calls["count"] += 1
+        return f"d:{name}"
+
+    utils._demangle_cpp_cached.cache_clear()
+    monkeypatch.setattr(utils.cxxfilt, "demangle", _fake_demangle)
+
+    assert utils.demangle_cpp_func("_Z3foov") == "d:_Z3foov"
+    assert utils.demangle_cpp_func("_Z3foov") == "d:_Z3foov"
+    assert calls["count"] == 1
+
+
+def test_demangle_rust_func_uses_cache(monkeypatch):
+    calls = {"count": 0}
+
+    def _fake_demangle(name):
+        calls["count"] += 1
+        return f"<{name}>"
+
+    utils._demangle_rust_cached.cache_clear()
+    monkeypatch.setattr(utils.rust_demangler, "demangle", _fake_demangle)
+
+    assert utils.demangle_rust_func("_Rabc") == "_Rabc"
+    assert utils.demangle_rust_func("_Rabc") == "_Rabc"
+    assert calls["count"] == 1
