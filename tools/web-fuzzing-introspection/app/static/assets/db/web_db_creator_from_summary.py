@@ -985,8 +985,8 @@ def extend_db_timestamps(db_timestamp, output_directory):
                 "max": max_cov,
                 "avg": avg_cov,
                 "current": current,
-                "max_has_degraded": (max_cov - current)
-                > FUZZER_COVERAGE_IS_DEGRADED,
+                "max_has_degraded":
+                (max_cov - current) > FUZZER_COVERAGE_IS_DEGRADED,
                 "days_degraded": days_degraded,
                 "got_lost": ff in lost_fuzzers,
                 "coverage_error": coverage_error,
