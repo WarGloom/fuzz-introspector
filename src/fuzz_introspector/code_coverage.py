@@ -523,8 +523,9 @@ def load_llvm_coverage(target_dir: str,
     if len(coverage_reports) == 0:
         coverage_reports = all_coverage_reports
 
-    cache_enabled = os.getenv(LLVM_COVERAGE_CACHE_ENV, "1").strip().lower() not in (
-        "0", "false", "no", "off")
+    cache_enabled = os.getenv(LLVM_COVERAGE_CACHE_ENV,
+                              "1").strip().lower() not in ("0", "false", "no",
+                                                           "off")
     cache_key: Optional[Tuple[Any, ...]] = None
     if cache_enabled:
         cache_entries: List[Tuple[str, int, int]] = []
