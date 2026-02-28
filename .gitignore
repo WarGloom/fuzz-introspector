@@ -30,3 +30,5 @@ tools/native_llvm_cov_loader_go/native_llvm_cov_loader_go
 tools/native_yaml_loader_go/native_yaml_loader_go
 tools/native_llvm_cov_loader_cpp/native_llvm_cov_loader_cpp
 tools/native_yaml_loader_cpp/native_yaml_loader_cpp
+tools/native_debug_correlator_rust/target/
+tools/native_debug_correlator_go/native_debug_correlator_go

@@ -18,6 +18,8 @@ import logging
 import os
 import tempfile
 
+import pytest
+
 from fuzz_introspector import debug_info
 
 
@@ -67,8 +69,9 @@ def test_load_debug_all_yaml_files_uses_rust_default_backend(monkeypatch):
     with tempfile.TemporaryDirectory() as tmpdir:
         yaml_path = _write_yaml(tmpdir, "a.yaml", [{"k": 1}])
         monkeypatch.setenv("FI_DEBUG_PARALLEL", "0")
-        monkeypatch.setattr(debug_info.backend_loaders, "load_json_with_backend",
-                            _fake_loader)
+        monkeypatch.setattr(
+            debug_info.backend_loaders, "load_json_with_backend", _fake_loader
+        )
         items = debug_info.load_debug_all_yaml_files([yaml_path])
 
     assert captured["default_backend"] == debug_info.backend_loaders.BACKEND_RUST
@@ -90,12 +93,8 @@ def test_load_debug_all_yaml_files_parallel(monkeypatch):
 def test_load_debug_all_yaml_files_invalid_env_fallback(monkeypatch, caplog):
     with tempfile.TemporaryDirectory() as tmpdir:
         files = [
-            _write_yaml(tmpdir, "f0.yaml", [{
-                "idx": 0
-            }]),
-            _write_yaml(tmpdir, "f1.yaml", [{
-                "idx": 1
-            }]),
+            _write_yaml(tmpdir, "f0.yaml", [{"idx": 0}]),
+            _write_yaml(tmpdir, "f1.yaml", [{"idx": 1}]),
         ]
         monkeypatch.setenv("FI_DEBUG_PARALLEL", "0")
         monkeypatch.setenv("FI_DEBUG_MAX_WORKERS", "not-a-number")
@@ -111,22 +110,13 @@ def test_load_debug_all_yaml_files_invalid_env_fallback(monkeypatch, caplog):
     assert any("FI_DEBUG_SPILL_MB" in message for message in messages)
 
 
-def test_load_debug_all_yaml_files_deterministic_serial_vs_parallel(
-        monkeypatch):
+def test_load_debug_all_yaml_files_deterministic_serial_vs_parallel(monkeypatch):
     with tempfile.TemporaryDirectory() as tmpdir:
         files = [
-            _write_yaml(tmpdir, "a.yaml", [{
-                "name": "a"
-            }]),
-            _write_yaml(tmpdir, "b.yaml", [{
-                "name": "b"
-            }]),
-            _write_yaml(tmpdir, "c.yaml", [{
-                "name": "c"
-            }]),
-            _write_yaml(tmpdir, "d.yaml", [{
-                "name": "d"
-            }]),
+            _write_yaml(tmpdir, "a.yaml", [{"name": "a"}]),
+            _write_yaml(tmpdir, "b.yaml", [{"name": "b"}]),
+            _write_yaml(tmpdir, "c.yaml", [{"name": "c"}]),
+            _write_yaml(tmpdir, "d.yaml", [{"name": "d"}]),
         ]
         monkeypatch.setenv("FI_DEBUG_PARALLEL", "0")
         monkeypatch.setenv("FI_DEBUG_SHARD_FILES", "2")
@@ -138,22 +128,12 @@ def test_load_debug_all_yaml_files_deterministic_serial_vs_parallel(
         parallel_items = debug_info.load_debug_all_yaml_files(files)
 
     assert serial_items == parallel_items
-    assert serial_items == [{
-        "name": "a"
-    }, {
-        "name": "b"
-    }, {
-        "name": "c"
-    }, {
-        "name": "d"
-    }]
+    assert serial_items == [{"name": "a"}, {"name": "b"}, {"name": "c"}, {"name": "d"}]
 
 
-def test_load_debug_all_yaml_files_parallel_executor_failure_falls_back(
-        monkeypatch):
+def test_load_debug_all_yaml_files_parallel_executor_failure_falls_back(monkeypatch):
 
     class _Future:
-
         def __init__(self, should_fail):
             self._should_fail = should_fail
 
@@ -163,20 +143,19 @@ def test_load_debug_all_yaml_files_parallel_executor_failure_falls_back(
             return []
 
     class _Executor:
+        shutdown_calls = []
 
         def __init__(self, max_workers):
+            del max_workers
             self._submitted = 0
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
 
         def submit(self, *_args, **_kwargs):
             future = _Future(should_fail=self._submitted == 0)
             self._submitted += 1
             return future
+
+        def shutdown(self, wait=True, cancel_futures=False):
+            self.shutdown_calls.append((wait, cancel_futures))
 
     def _fake_as_completed(futures):
         return list(futures)
@@ -188,15 +167,9 @@ def test_load_debug_all_yaml_files_parallel_executor_failure_falls_back(
 
     with tempfile.TemporaryDirectory() as tmpdir:
         files = [
-            _write_yaml(tmpdir, "f0.yaml", [{
-                "idx": 0
-            }]),
-            _write_yaml(tmpdir, "f1.yaml", [{
-                "idx": 1
-            }]),
-            _write_yaml(tmpdir, "f2.yaml", [{
-                "idx": 2
-            }]),
+            _write_yaml(tmpdir, "f0.yaml", [{"idx": 0}]),
+            _write_yaml(tmpdir, "f1.yaml", [{"idx": 1}]),
+            _write_yaml(tmpdir, "f2.yaml", [{"idx": 2}]),
         ]
         monkeypatch.setenv("FI_DEBUG_PARALLEL", "1")
         monkeypatch.setenv("FI_DEBUG_MAX_WORKERS", "2")
@@ -210,6 +183,74 @@ def test_load_debug_all_yaml_files_parallel_executor_failure_falls_back(
     assert items == [{"idx": 0}, {"idx": 1}, {"idx": 2}]
 
 
+def test_load_debug_all_yaml_files_parallel_failure_cancels_pending_futures(
+    monkeypatch,
+):
+
+    class _Future:
+        def __init__(self, result_payload=None, result_exc=None):
+            self._result_payload = result_payload
+            self._result_exc = result_exc
+            self.cancel_called = False
+
+        def result(self):
+            if self._result_exc is not None:
+                raise self._result_exc
+            return self._result_payload
+
+        def cancel(self):
+            self.cancel_called = True
+            return True
+
+    class _Executor:
+        instances = []
+
+        def __init__(self, max_workers):
+            del max_workers
+            self._submitted = 0
+            self.futures = []
+            self.shutdown_calls = []
+            self.__class__.instances.append(self)
+
+        def submit(self, *_args, **_kwargs):
+            if self._submitted == 0:
+                future = _Future(result_exc=RuntimeError("forced shard failure"))
+            else:
+                future = _Future(result_payload=[])
+            self._submitted += 1
+            self.futures.append(future)
+            return future
+
+        def shutdown(self, wait=True, cancel_futures=False):
+            self.shutdown_calls.append((wait, cancel_futures))
+
+    def _fake_wait(futures, timeout=None, return_when=None):
+        del timeout
+        del return_when
+        futures_list = list(futures)
+        return {futures_list[0]}, set(futures_list[1:])
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        files = [
+            _write_yaml(tmpdir, "f0.yaml", [{"idx": 0}]),
+            _write_yaml(tmpdir, "f1.yaml", [{"idx": 1}]),
+            _write_yaml(tmpdir, "f2.yaml", [{"idx": 2}]),
+        ]
+        monkeypatch.setenv("FI_DEBUG_PARALLEL", "1")
+        monkeypatch.setenv("FI_DEBUG_MAX_WORKERS", "2")
+        monkeypatch.setenv("FI_DEBUG_SHARD_FILES", "1")
+        monkeypatch.setenv("FI_DEBUG_USE_PROCESS_POOL", "0")
+        monkeypatch.setattr(debug_info, "ThreadPoolExecutor", _Executor)
+        monkeypatch.setattr(debug_info, "wait", _fake_wait)
+
+        items = debug_info.load_debug_all_yaml_files(files)
+
+    assert items == [{"idx": 0}, {"idx": 1}, {"idx": 2}]
+    assert _Executor.instances
+    first_executor = _Executor.instances[0]
+    assert (False, True) in first_executor.shutdown_calls
+
+
 def test_load_debug_all_yaml_files_spill_activation(monkeypatch):
     spill_count = {"count": 0}
     original_write_spill = debug_info._write_spill
@@ -220,21 +261,18 @@ def test_load_debug_all_yaml_files_spill_activation(monkeypatch):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         files = [
-            _write_yaml(tmpdir, "f0.yaml", [{
-                "idx": 0
-            }]),
-            _write_yaml(tmpdir, "f1.yaml", [{
-                "idx": 1
-            }]),
-            _write_yaml(tmpdir, "f2.yaml", [{
-                "idx": 2
-            }]),
+            _write_yaml(tmpdir, "f0.yaml", [{"idx": 0}]),
+            _write_yaml(tmpdir, "f1.yaml", [{"idx": 1}]),
+            _write_yaml(tmpdir, "f2.yaml", [{"idx": 2}]),
         ]
         monkeypatch.setenv("FI_DEBUG_PARALLEL", "0")
         monkeypatch.setenv("FI_DEBUG_SHARD_FILES", "1")
         monkeypatch.setenv("FI_DEBUG_SPILL_MB", "1")
-        monkeypatch.setattr(debug_info, "_estimate_list_bytes",
-                            lambda items: 1024 * 1024 if items else 0)
+        monkeypatch.setattr(
+            debug_info,
+            "_estimate_list_bytes",
+            lambda items: 1024 * 1024 if items else 0,
+        )
         monkeypatch.setattr(debug_info, "_write_spill", _counting_write_spill)
         items = debug_info.load_debug_all_yaml_files(files)
 
@@ -269,10 +307,868 @@ def test_correlate_debugged_function_to_debug_types_parallel(monkeypatch):
     funcs = [{"type_arguments": [0], "file_location": "/src/a:1"}]
     monkeypatch.setenv("FI_DEBUG_CORRELATE_PARALLEL", "1")
     monkeypatch.setenv("FI_DEBUG_CORRELATE_WORKERS", "2")
-    debug_info.correlate_debugged_function_to_debug_types(
-        types, funcs, "/tmp", False)
+    debug_info.correlate_debugged_function_to_debug_types(types, funcs, "/tmp", False)
     assert "func_signature_elems" in funcs[0]
     assert "source" in funcs[0]
+
+
+def test_correlate_debugged_function_to_debug_types_native_shards(monkeypatch):
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = [{"type_arguments": [0], "file_location": "/src/a.c:7"}]
+    captured_payload = {}
+
+    def _fake_run_correlator_backend(payload, **_kwargs):
+        captured_payload.update(payload)
+        output_dir = payload["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        shard_path = os.path.join(output_dir, "correlated-debug-00000.ndjson")
+        with open(shard_path, "w", encoding="utf-8") as shard_fp:
+            json.dump(
+                {
+                    "row_idx": 0,
+                    "func_signature_elems": {
+                        "return_type": ["void"],
+                        "params": [],
+                    },
+                    "source": {"source_file": "/src/a.c", "source_line": "7"},
+                },
+                shard_fp,
+            )
+            shard_fp.write("\n")
+        return debug_info.backend_loaders.CorrelatorBackendResult(
+            selected_backend="rust",
+            strict_mode=True,
+            response={
+                "schema_version": 1,
+                "status": "success",
+                "counters": {"updated_functions": 1},
+                "artifacts": {"correlated_shards": [shard_path]},
+                "timings": {},
+            },
+        )
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "1")
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "run_correlator_backend",
+        _fake_run_correlator_backend,
+    )
+    monkeypatch.setattr(
+        debug_info,
+        "create_friendly_debug_types",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("python friendly-type dump should be skipped")
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        debug_info.correlate_debugged_function_to_debug_types(
+            types, funcs, tmpdir, dump_files=False
+        )
+
+    assert "debug_types_paths" in captured_payload
+    assert "debug_functions_paths" in captured_payload
+    assert "debug_types" not in captured_payload
+    assert "debug_functions" not in captured_payload
+    assert len(captured_payload["debug_types_paths"]) == 1
+    assert len(captured_payload["debug_functions_paths"]) == 1
+    assert funcs[0]["source"]["source_file"] == "/src/a.c"
+    assert funcs[0]["source"]["source_line"] == "7"
+    assert funcs[0]["func_signature_elems"]["return_type"] == ["void"]
+
+
+def test_correlator_native_zero_functions_strict_accepts_empty_shards(monkeypatch):
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = []
+
+    def _fake_run_correlator_backend(**_kwargs):
+        return debug_info.backend_loaders.CorrelatorBackendResult(
+            selected_backend="rust",
+            strict_mode=True,
+            response={
+                "schema_version": 1,
+                "status": "success",
+                "counters": {"updated_functions": 0},
+                "artifacts": {"correlated_shards": []},
+                "timings": {},
+            },
+        )
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "1")
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "run_correlator_backend",
+        _fake_run_correlator_backend,
+    )
+    monkeypatch.setattr(
+        debug_info,
+        "create_friendly_debug_types",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("python fallback should be skipped for native success")
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        debug_info.correlate_debugged_function_to_debug_types(
+            types, funcs, tmpdir, dump_files=False
+        )
+
+    assert funcs == []
+
+
+def test_correlator_native_shard_schema_error_non_strict_falls_back_without_partial_mutation(
+    monkeypatch, caplog
+):
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = [
+        {"type_arguments": [0], "file_location": "/src/a.c:7"},
+        {"type_arguments": [0], "file_location": "/src/b.c:9"},
+    ]
+
+    def _fake_run_correlator_backend(payload, **_kwargs):
+        output_dir = payload["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        shard_path = os.path.join(output_dir, "correlated-malformed-00000.ndjson")
+        with open(shard_path, "w", encoding="utf-8") as shard_fp:
+            json.dump(
+                {
+                    "row_idx": 0,
+                    "func_signature_elems": {
+                        "return_type": ["native"],
+                        "params": [],
+                    },
+                    "source": {"source_file": "/native/a.c", "source_line": "7"},
+                },
+                shard_fp,
+            )
+            shard_fp.write("\n")
+            json.dump(
+                {
+                    "row_idx": 1,
+                    "func_signature_elems": "invalid-shape",
+                    "source": {"source_file": "/native/b.c", "source_line": "9"},
+                },
+                shard_fp,
+            )
+            shard_fp.write("\n")
+        return debug_info.backend_loaders.CorrelatorBackendResult(
+            selected_backend="rust",
+            strict_mode=False,
+            response={
+                "schema_version": 1,
+                "status": "success",
+                "counters": {"updated_functions": 2},
+                "artifacts": {"correlated_shards": [shard_path]},
+                "timings": {},
+            },
+        )
+
+    def _fake_python_correlate(func_slice, _debug_type_dictionary):
+        assert all("func_signature_elems" not in dfunc for dfunc in func_slice)
+        for debug_func in func_slice:
+            debug_func["func_signature_elems"] = {
+                "return_type": ["python"],
+                "params": [],
+            }
+            debug_func["source"] = {
+                "source_file": "/python/fallback.c",
+                "source_line": "1",
+            }
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "0")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_PARALLEL", "0")
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "run_correlator_backend",
+        _fake_run_correlator_backend,
+    )
+    monkeypatch.setattr(debug_info, "_correlate_function_slice", _fake_python_correlate)
+    monkeypatch.setattr(
+        debug_info,
+        "create_friendly_debug_types",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with caplog.at_level(logging.WARNING):
+            debug_info.correlate_debugged_function_to_debug_types(
+                types, funcs, tmpdir, dump_files=False
+            )
+
+    assert funcs[0]["func_signature_elems"]["return_type"] == ["python"]
+    assert funcs[1]["func_signature_elems"]["return_type"] == ["python"]
+    assert any(
+        debug_info.backend_loaders.FI_CORR_SCHEMA_ERROR in record.message
+        for record in caplog.records
+    )
+
+
+def test_correlator_native_shard_schema_error_strict_raises(monkeypatch):
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = [{"type_arguments": [0], "file_location": "/src/a.c:7"}]
+
+    def _fake_run_correlator_backend(payload, **_kwargs):
+        output_dir = payload["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        shard_path = os.path.join(output_dir, "correlated-malformed-00000.ndjson")
+        with open(shard_path, "w", encoding="utf-8") as shard_fp:
+            json.dump(
+                {
+                    "row_idx": 0,
+                    "func_signature_elems": "invalid-shape",
+                    "source": {"source_file": "/native/a.c", "source_line": "7"},
+                },
+                shard_fp,
+            )
+            shard_fp.write("\n")
+        return debug_info.backend_loaders.CorrelatorBackendResult(
+            selected_backend="rust",
+            strict_mode=True,
+            response={
+                "schema_version": 1,
+                "status": "success",
+                "counters": {"updated_functions": 1},
+                "artifacts": {"correlated_shards": [shard_path]},
+                "timings": {},
+            },
+        )
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "1")
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "run_correlator_backend",
+        _fake_run_correlator_backend,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with pytest.raises(
+            debug_info.backend_loaders.CorrelatorBackendError
+        ) as exc_info:
+            debug_info.correlate_debugged_function_to_debug_types(
+                types, funcs, tmpdir, dump_files=False
+            )
+
+    assert exc_info.value.reason_code == debug_info.backend_loaders.FI_CORR_SCHEMA_ERROR
+
+
+def test_correlator_native_cross_shard_error_non_strict_keeps_atomic_updates(
+    monkeypatch,
+):
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = [
+        {"type_arguments": [0], "file_location": "/src/a.c:7"},
+        {"type_arguments": [0], "file_location": "/src/b.c:9"},
+    ]
+
+    def _fake_run_correlator_backend(payload, **_kwargs):
+        output_dir = payload["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        valid_shard = os.path.join(output_dir, "correlated-valid-00000.ndjson")
+        malformed_shard = os.path.join(output_dir, "correlated-malformed-00001.ndjson")
+        with open(valid_shard, "w", encoding="utf-8") as shard_fp:
+            json.dump(
+                {
+                    "row_idx": 0,
+                    "func_signature_elems": {
+                        "return_type": ["native"],
+                        "params": [],
+                    },
+                    "source": {"source_file": "/native/a.c", "source_line": "7"},
+                },
+                shard_fp,
+            )
+            shard_fp.write("\n")
+        with open(malformed_shard, "w", encoding="utf-8") as shard_fp:
+            json.dump(
+                {
+                    "row_idx": 1,
+                    "func_signature_elems": "invalid-shape",
+                    "source": {"source_file": "/native/b.c", "source_line": "9"},
+                },
+                shard_fp,
+            )
+            shard_fp.write("\n")
+        return debug_info.backend_loaders.CorrelatorBackendResult(
+            selected_backend="rust",
+            strict_mode=False,
+            response={
+                "schema_version": 1,
+                "status": "success",
+                "counters": {"updated_functions": 2},
+                "artifacts": {"correlated_shards": [valid_shard, malformed_shard]},
+                "timings": {},
+            },
+        )
+
+    def _fake_python_correlate(func_slice, _debug_type_dictionary):
+        assert all("func_signature_elems" not in dfunc for dfunc in func_slice)
+        for debug_func in func_slice:
+            debug_func["func_signature_elems"] = {
+                "return_type": ["python"],
+                "params": [],
+            }
+            debug_func["source"] = {
+                "source_file": "/python/fallback.c",
+                "source_line": "1",
+            }
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "0")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_PARALLEL", "0")
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "run_correlator_backend",
+        _fake_run_correlator_backend,
+    )
+    monkeypatch.setattr(debug_info, "_correlate_function_slice", _fake_python_correlate)
+    monkeypatch.setattr(
+        debug_info,
+        "create_friendly_debug_types",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        debug_info.correlate_debugged_function_to_debug_types(
+            types, funcs, tmpdir, dump_files=False
+        )
+
+    assert funcs[0]["func_signature_elems"]["return_type"] == ["python"]
+    assert funcs[1]["func_signature_elems"]["return_type"] == ["python"]
+
+
+def test_correlator_native_cross_shard_error_strict_keeps_atomic_updates(monkeypatch):
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = [
+        {"type_arguments": [0], "file_location": "/src/a.c:7"},
+        {"type_arguments": [0], "file_location": "/src/b.c:9"},
+    ]
+
+    def _fake_run_correlator_backend(payload, **_kwargs):
+        output_dir = payload["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        valid_shard = os.path.join(output_dir, "correlated-valid-00000.ndjson")
+        malformed_shard = os.path.join(output_dir, "correlated-malformed-00001.ndjson")
+        with open(valid_shard, "w", encoding="utf-8") as shard_fp:
+            json.dump(
+                {
+                    "row_idx": 0,
+                    "func_signature_elems": {
+                        "return_type": ["native"],
+                        "params": [],
+                    },
+                    "source": {"source_file": "/native/a.c", "source_line": "7"},
+                },
+                shard_fp,
+            )
+            shard_fp.write("\n")
+        with open(malformed_shard, "w", encoding="utf-8") as shard_fp:
+            json.dump(
+                {
+                    "row_idx": 1,
+                    "func_signature_elems": "invalid-shape",
+                    "source": {"source_file": "/native/b.c", "source_line": "9"},
+                },
+                shard_fp,
+            )
+            shard_fp.write("\n")
+        return debug_info.backend_loaders.CorrelatorBackendResult(
+            selected_backend="rust",
+            strict_mode=True,
+            response={
+                "schema_version": 1,
+                "status": "success",
+                "counters": {"updated_functions": 2},
+                "artifacts": {"correlated_shards": [valid_shard, malformed_shard]},
+                "timings": {},
+            },
+        )
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "1")
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "run_correlator_backend",
+        _fake_run_correlator_backend,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with pytest.raises(
+            debug_info.backend_loaders.CorrelatorBackendError
+        ) as exc_info:
+            debug_info.correlate_debugged_function_to_debug_types(
+                types, funcs, tmpdir, dump_files=False
+            )
+
+    assert exc_info.value.reason_code == debug_info.backend_loaders.FI_CORR_SCHEMA_ERROR
+    assert all("func_signature_elems" not in debug_func for debug_func in funcs)
+    assert all("source" not in debug_func for debug_func in funcs)
+
+
+def test_correlator_native_duplicate_row_idx_strict_raises(monkeypatch):
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = [
+        {"type_arguments": [0], "file_location": "/src/a.c:7"},
+        {"type_arguments": [0], "file_location": "/src/b.c:9"},
+    ]
+
+    def _fake_run_correlator_backend(payload, **_kwargs):
+        output_dir = payload["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        shard_path = os.path.join(output_dir, "correlated-duplicate-00000.ndjson")
+        with open(shard_path, "w", encoding="utf-8") as shard_fp:
+            json.dump(
+                {
+                    "row_idx": 0,
+                    "func_signature_elems": {
+                        "return_type": ["native"],
+                        "params": [],
+                    },
+                    "source": {"source_file": "/native/a.c", "source_line": "7"},
+                },
+                shard_fp,
+            )
+            shard_fp.write("\n")
+            json.dump(
+                {
+                    "row_idx": 0,
+                    "func_signature_elems": {
+                        "return_type": ["native-dup"],
+                        "params": [],
+                    },
+                    "source": {
+                        "source_file": "/native/a-dup.c",
+                        "source_line": "8",
+                    },
+                },
+                shard_fp,
+            )
+            shard_fp.write("\n")
+        return debug_info.backend_loaders.CorrelatorBackendResult(
+            selected_backend="rust",
+            strict_mode=True,
+            response={
+                "schema_version": 1,
+                "status": "success",
+                "counters": {"updated_functions": 2},
+                "artifacts": {"correlated_shards": [shard_path]},
+                "timings": {},
+            },
+        )
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "1")
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "run_correlator_backend",
+        _fake_run_correlator_backend,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with pytest.raises(
+            debug_info.backend_loaders.CorrelatorBackendError
+        ) as exc_info:
+            debug_info.correlate_debugged_function_to_debug_types(
+                types, funcs, tmpdir, dump_files=False
+            )
+
+    assert exc_info.value.reason_code == debug_info.backend_loaders.FI_CORR_SCHEMA_ERROR
+    assert all("func_signature_elems" not in debug_func for debug_func in funcs)
+    assert all("source" not in debug_func for debug_func in funcs)
+
+
+def test_correlator_native_missing_coverage_non_strict_falls_back(monkeypatch, caplog):
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = [
+        {"type_arguments": [0], "file_location": "/src/a.c:7"},
+        {"type_arguments": [0], "file_location": "/src/b.c:9"},
+    ]
+
+    def _fake_run_correlator_backend(payload, **_kwargs):
+        output_dir = payload["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        shard_path = os.path.join(output_dir, "correlated-partial-00000.ndjson")
+        with open(shard_path, "w", encoding="utf-8") as shard_fp:
+            json.dump(
+                {
+                    "row_idx": 0,
+                    "func_signature_elems": {
+                        "return_type": ["native"],
+                        "params": [],
+                    },
+                    "source": {"source_file": "/native/a.c", "source_line": "7"},
+                },
+                shard_fp,
+            )
+            shard_fp.write("\n")
+        return debug_info.backend_loaders.CorrelatorBackendResult(
+            selected_backend="rust",
+            strict_mode=False,
+            response={
+                "schema_version": 1,
+                "status": "success",
+                "counters": {"updated_functions": 1},
+                "artifacts": {"correlated_shards": [shard_path]},
+                "timings": {},
+            },
+        )
+
+    def _fake_python_correlate(func_slice, _debug_type_dictionary):
+        assert all("func_signature_elems" not in dfunc for dfunc in func_slice)
+        for debug_func in func_slice:
+            debug_func["func_signature_elems"] = {
+                "return_type": ["python"],
+                "params": [],
+            }
+            debug_func["source"] = {
+                "source_file": "/python/fallback.c",
+                "source_line": "1",
+            }
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "0")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_PARALLEL", "0")
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "run_correlator_backend",
+        _fake_run_correlator_backend,
+    )
+    monkeypatch.setattr(debug_info, "_correlate_function_slice", _fake_python_correlate)
+    monkeypatch.setattr(
+        debug_info,
+        "create_friendly_debug_types",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with caplog.at_level(logging.WARNING):
+            debug_info.correlate_debugged_function_to_debug_types(
+                types, funcs, tmpdir, dump_files=False
+            )
+
+    assert funcs[0]["func_signature_elems"]["return_type"] == ["python"]
+    assert funcs[1]["func_signature_elems"]["return_type"] == ["python"]
+    assert any(
+        debug_info.backend_loaders.FI_CORR_SCHEMA_ERROR in record.message
+        for record in caplog.records
+    )
+
+
+def test_correlator_shadow_mode_strict_missing_unsampled_rows_raises(monkeypatch):
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    func_count = debug_info.CORRELATOR_SHADOW_SAMPLE_SIZE_DEFAULT + 20
+    funcs = [
+        {"type_arguments": [0], "file_location": f"/src/a.c:{idx + 1}"}
+        for idx in range(func_count)
+    ]
+    sampled_indexes = debug_info._build_correlator_shadow_sample_indexes(
+        func_count, debug_info.CORRELATOR_SHADOW_SAMPLE_SIZE_DEFAULT
+    )
+
+    def _fake_run_correlator_backend(payload, **_kwargs):
+        output_dir = payload["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        shard_path = os.path.join(output_dir, "correlated-shadow-partial-00000.ndjson")
+        with open(shard_path, "w", encoding="utf-8") as shard_fp:
+            for row_idx in sampled_indexes:
+                json.dump(
+                    {
+                        "row_idx": row_idx,
+                        "func_signature_elems": {
+                            "return_type": ["native"],
+                            "params": [],
+                        },
+                        "source": {
+                            "source_file": "/native/a.c",
+                            "source_line": str(row_idx + 1),
+                        },
+                    },
+                    shard_fp,
+                )
+                shard_fp.write("\n")
+        return debug_info.backend_loaders.CorrelatorBackendResult(
+            selected_backend="rust",
+            strict_mode=True,
+            response={
+                "schema_version": 1,
+                "status": "success",
+                "counters": {"updated_functions": len(sampled_indexes)},
+                "artifacts": {"correlated_shards": [shard_path]},
+                "timings": {},
+            },
+        )
+
+    def _fail_if_python_correlation_runs(*_args, **_kwargs):
+        raise AssertionError(
+            "Strict shadow missing coverage must fail before python stage"
+        )
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_SHADOW", "1")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "1")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_PARALLEL", "0")
+    monkeypatch.delenv("FI_DEBUG_CORRELATOR_SHADOW_SAMPLE_SIZE", raising=False)
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "run_correlator_backend",
+        _fake_run_correlator_backend,
+    )
+    monkeypatch.setattr(
+        debug_info, "_correlate_function_slice", _fail_if_python_correlation_runs
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with pytest.raises(
+            debug_info.backend_loaders.CorrelatorBackendError
+        ) as exc_info:
+            debug_info.correlate_debugged_function_to_debug_types(
+                types, funcs, tmpdir, dump_files=False
+            )
+
+    assert exc_info.value.reason_code == debug_info.backend_loaders.FI_CORR_SCHEMA_ERROR
+    assert all("func_signature_elems" not in debug_func for debug_func in funcs)
+    assert all("source" not in debug_func for debug_func in funcs)
+
+
+def test_correlator_shadow_sample_size_zero_keeps_full_compare_opt_in():
+    sample_indexes = debug_info._build_correlator_shadow_sample_indexes(5, 0)
+    assert sample_indexes == [0, 1, 2, 3, 4]
+
+
+def test_correlator_shadow_mode_uses_safe_default_sample_size(monkeypatch, caplog):
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    func_count = debug_info.CORRELATOR_SHADOW_SAMPLE_SIZE_DEFAULT + 20
+    funcs = [
+        {"type_arguments": [0], "file_location": f"/src/a.c:{idx + 1}"}
+        for idx in range(func_count)
+    ]
+
+    def _fake_run_correlator_backend(payload, **_kwargs):
+        output_dir = payload["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        shard_path = os.path.join(output_dir, "correlated-shadow-default-00000.ndjson")
+        with open(shard_path, "w", encoding="utf-8") as shard_fp:
+            for row_idx in range(func_count):
+                json.dump(
+                    {
+                        "row_idx": row_idx,
+                        "func_signature_elems": {
+                            "return_type": ["native"],
+                            "params": [],
+                        },
+                        "source": {
+                            "source_file": "/native/a.c",
+                            "source_line": str(row_idx + 1),
+                        },
+                    },
+                    shard_fp,
+                )
+                shard_fp.write("\n")
+        return debug_info.backend_loaders.CorrelatorBackendResult(
+            selected_backend="rust",
+            strict_mode=False,
+            response={
+                "schema_version": 1,
+                "status": "success",
+                "counters": {"updated_functions": func_count},
+                "artifacts": {"correlated_shards": [shard_path]},
+                "timings": {},
+            },
+        )
+
+    def _fake_python_correlate(func_slice, _debug_type_dictionary):
+        for debug_func in func_slice:
+            debug_func["func_signature_elems"] = {
+                "return_type": ["python"],
+                "params": [],
+            }
+            debug_func["source"] = {
+                "source_file": "/python/a.c",
+                "source_line": "1",
+            }
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_SHADOW", "1")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "0")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_PARALLEL", "0")
+    monkeypatch.delenv("FI_DEBUG_CORRELATOR_SHADOW_SAMPLE_SIZE", raising=False)
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "run_correlator_backend",
+        _fake_run_correlator_backend,
+    )
+    monkeypatch.setattr(debug_info, "_correlate_function_slice", _fake_python_correlate)
+    monkeypatch.setattr(
+        debug_info,
+        "create_friendly_debug_types",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with caplog.at_level(logging.INFO):
+            debug_info.correlate_debugged_function_to_debug_types(
+                types, funcs, tmpdir, dump_files=False
+            )
+
+    expected_fragment = (
+        "captured "
+        f"{debug_info.CORRELATOR_SHADOW_SAMPLE_SIZE_DEFAULT} sampled native rows"
+    )
+    assert any(expected_fragment in record.message for record in caplog.records)
+
+
+def test_correlator_shadow_mode_keeps_python_authoritative_and_logs_mismatch(
+    monkeypatch, caplog
+):
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = [{"type_arguments": [0], "file_location": "/src/a.c:7"}]
+    captured_payload = {}
+
+    def _fake_run_correlator_backend(payload, **_kwargs):
+        captured_payload.update(payload)
+        output_dir = payload["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        shard_path = os.path.join(output_dir, "correlated-shadow-00000.ndjson")
+        with open(shard_path, "w", encoding="utf-8") as shard_fp:
+            json.dump(
+                {
+                    "row_idx": 0,
+                    "func_signature_elems": {
+                        "return_type": ["native"],
+                        "params": ["native-param"],
+                    },
+                    "source": {"source_file": "/native/a.c", "source_line": "70"},
+                },
+                shard_fp,
+            )
+            shard_fp.write("\n")
+        return debug_info.backend_loaders.CorrelatorBackendResult(
+            selected_backend="rust",
+            strict_mode=False,
+            response={
+                "schema_version": 1,
+                "status": "success",
+                "counters": {"updated_functions": 1},
+                "artifacts": {"correlated_shards": [shard_path]},
+                "timings": {},
+            },
+        )
+
+    def _fake_python_correlate(func_slice, _debug_type_dictionary):
+        for debug_func in func_slice:
+            debug_func["func_signature_elems"] = {
+                "return_type": ["python"],
+                "params": ["python-param"],
+            }
+            debug_func["source"] = {
+                "source_file": "/python/a.c",
+                "source_line": "7",
+            }
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_SHADOW", "1")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "0")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_PARALLEL", "0")
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "run_correlator_backend",
+        _fake_run_correlator_backend,
+    )
+    monkeypatch.setattr(debug_info, "_correlate_function_slice", _fake_python_correlate)
+    monkeypatch.setattr(
+        debug_info, "create_friendly_debug_types", lambda *_args, **_kwargs: None
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with caplog.at_level(logging.WARNING):
+            debug_info.correlate_debugged_function_to_debug_types(
+                types, funcs, tmpdir, dump_files=False
+            )
+
+    assert "debug_types_paths" in captured_payload
+    assert "debug_functions_paths" in captured_payload
+    assert funcs[0]["func_signature_elems"]["return_type"] == ["python"]
+    assert funcs[0]["func_signature_elems"]["params"] == ["python-param"]
+    assert funcs[0]["source"]["source_file"] == "/python/a.c"
+    assert funcs[0]["source"]["source_line"] == "7"
+    assert any(
+        debug_info.backend_loaders.FI_CORR_PARITY_MISMATCH in record.message
+        for record in caplog.records
+    )
+
+
+def test_correlator_shadow_mode_strict_mismatch_raises(monkeypatch):
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = [{"type_arguments": [0], "file_location": "/src/a.c:7"}]
+
+    def _fake_run_correlator_backend(payload, **_kwargs):
+        output_dir = payload["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        shard_path = os.path.join(output_dir, "correlated-shadow-00000.ndjson")
+        with open(shard_path, "w", encoding="utf-8") as shard_fp:
+            json.dump(
+                {
+                    "row_idx": 0,
+                    "func_signature_elems": {
+                        "return_type": ["native"],
+                        "params": [],
+                    },
+                    "source": {"source_file": "/native/a.c", "source_line": "70"},
+                },
+                shard_fp,
+            )
+            shard_fp.write("\n")
+        return debug_info.backend_loaders.CorrelatorBackendResult(
+            selected_backend="rust",
+            strict_mode=True,
+            response={
+                "schema_version": 1,
+                "status": "success",
+                "counters": {"updated_functions": 1},
+                "artifacts": {"correlated_shards": [shard_path]},
+                "timings": {},
+            },
+        )
+
+    def _fake_python_correlate(func_slice, _debug_type_dictionary):
+        for debug_func in func_slice:
+            debug_func["func_signature_elems"] = {
+                "return_type": ["python"],
+                "params": [],
+            }
+            debug_func["source"] = {
+                "source_file": "/python/a.c",
+                "source_line": "7",
+            }
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_SHADOW", "1")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "1")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_PARALLEL", "0")
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "run_correlator_backend",
+        _fake_run_correlator_backend,
+    )
+    monkeypatch.setattr(debug_info, "_correlate_function_slice", _fake_python_correlate)
+    monkeypatch.setattr(
+        debug_info, "create_friendly_debug_types", lambda *_args, **_kwargs: None
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with pytest.raises(
+            debug_info.backend_loaders.CorrelatorBackendError
+        ) as exc_info:
+            debug_info.correlate_debugged_function_to_debug_types(
+                types, funcs, tmpdir, dump_files=False
+            )
+
+    assert exc_info.value.reason_code == (
+        debug_info.backend_loaders.FI_CORR_PARITY_MISMATCH
+    )
 
 
 def test_create_friendly_debug_types_skips_work_when_dump_disabled(monkeypatch):
@@ -282,8 +1178,9 @@ def test_create_friendly_debug_types_skips_work_when_dump_disabled(monkeypatch):
         called["value"] = True
         raise AssertionError("Should not process friendly types when dump is disabled")
 
-    monkeypatch.setattr(debug_info, "extract_func_sig_friendly_type_tags",
-                        _fail_if_called)
+    monkeypatch.setattr(
+        debug_info, "extract_func_sig_friendly_type_tags", _fail_if_called
+    )
 
     debug_info.create_friendly_debug_types(
         {
@@ -319,8 +1216,7 @@ Subprogram: bar
 """
     all_functions = {}
     all_files = {}
-    debug_info.extract_all_functions_in_debug_info(content, all_functions,
-                                                   all_files)
+    debug_info.extract_all_functions_in_debug_info(content, all_functions, all_files)
 
     assert "/src/foo.c10" in all_functions
     assert "/src/bar.c20" in all_functions
@@ -333,8 +1229,9 @@ Subprogram: bar
 def test_load_debug_report_parallel_matches_serial(monkeypatch):
     def _canonicalize(report):
         return {
-            key: sorted((json.dumps(item, sort_keys=True)
-                         for item in report.get(key, [])))
+            key: sorted(
+                (json.dumps(item, sort_keys=True) for item in report.get(key, []))
+            )
             for key in (
                 "all_files_in_project",
                 "all_functions_in_project",
