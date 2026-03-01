@@ -883,6 +883,7 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
             selected_backend,
         )
 
+    logger.info("[yaml-loader] using python backend")
     parallel_enabled = _parse_bool_env("FI_DEBUG_PARALLEL", True)
     max_workers_default = min(os.cpu_count() or 1, 8)
     worker_count = _parse_int_env("FI_DEBUG_MAX_WORKERS", max_workers_default, 1)
@@ -2022,6 +2023,7 @@ def correlate_debugged_function_to_debug_types(
     # Index debug types by address. We need to do a lot of look ups when
     # refining data types where the address is the key, so a fast
     # look-up mechanism is useful here.
+    logger.info("[correlator] using python backend")
     debug_type_dictionary = dict()
     for debug_type in all_debug_types:
         debug_type_dictionary[int(debug_type["addr"])] = debug_type

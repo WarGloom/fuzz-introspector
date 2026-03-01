@@ -784,6 +784,7 @@ def run_overlay_backend(
         selection = parse_overlay_backend_selection()
         selected_backend = selection.requested_backend
     if selected_backend == BACKEND_PYTHON:
+        logger.info("[overlay] using python backend")
         return OverlayBackendResult(
             selected_backend=selected_backend,
             strict_mode=strict_mode,
@@ -822,6 +823,7 @@ def run_overlay_backend(
             reason_details=missing_command_details,
         )
 
+    logger.info("[overlay] using %s backend (%s)", selected_backend, command[0])
     request_payload = dict(payload)
     request_payload["schema_version"] = OVERLAY_SCHEMA_VERSION
     timeout_seconds = _parse_timeout_seconds(timeout_env)
@@ -1093,6 +1095,7 @@ def run_correlator_backend(
     if selected_backend is None:
         selected_backend = parse_correlator_backend_env()
     if selected_backend == BACKEND_PYTHON:
+        logger.info("[correlator] using python backend")
         return CorrelatorBackendResult(
             selected_backend=selected_backend,
             strict_mode=strict_mode,
@@ -1128,6 +1131,7 @@ def run_correlator_backend(
             reason_details=missing_details,
         )
 
+    logger.info("[correlator] using %s backend (%s)", selected_backend, command[0])
     request_payload = dict(payload)
     request_payload["schema_version"] = CORRELATOR_SCHEMA_VERSION
     timeout_seconds = _parse_timeout_seconds(timeout_env)

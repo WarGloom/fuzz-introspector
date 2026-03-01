@@ -1421,6 +1421,7 @@ def overlay_calltree_with_coverage(
             )
             return
 
+        logger.info("[overlay] using %s backend (%s)", selected_backend, command[0])
         request_payload = _build_overlay_native_payload(
             profile, proj_profile, coverage_url, str(out_dir)
         )
