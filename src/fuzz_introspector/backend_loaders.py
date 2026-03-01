@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import threading
@@ -175,6 +176,91 @@ def resolve_backend_command(command_env_prefix: str, backend: str) -> list[str] 
         if cmd_parts:
             return cmd_parts
     return None
+
+
+def _resolve_overlay_native_command_with_fallback(
+    command_env_prefix: str,
+    backend: str,
+) -> tuple[list[str] | None, list[dict[str, Any]]]:
+    """Resolve overlay native backend command from env, then discovery fallbacks."""
+    command = resolve_backend_command(command_env_prefix, backend)
+    if command is not None:
+        return command, []
+
+    checked_candidates: list[dict[str, Any]] = []
+    if command_env_prefix != "FI_OVERLAY" or backend != BACKEND_NATIVE:
+        return None, checked_candidates
+
+    repo_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
+    )
+    rust_repo_candidate = os.path.join(
+        repo_root,
+        "tools",
+        "native_overlay_backend_rust",
+        "target",
+        "release",
+        "native_overlay_backend_rust",
+    )
+    rust_repo_found = os.path.isfile(rust_repo_candidate) and os.access(
+        rust_repo_candidate, os.X_OK
+    )
+    checked_candidates.append(
+        {
+            "source": "repo",
+            "candidate": rust_repo_candidate,
+            "found": rust_repo_found,
+        }
+    )
+    if rust_repo_found:
+        return [rust_repo_candidate], checked_candidates
+
+    rust_path_candidate = "native_overlay_backend_rust"
+    rust_path_resolved = shutil.which(rust_path_candidate)
+    checked_candidates.append(
+        {
+            "source": "path",
+            "candidate": rust_path_candidate,
+            "resolved": rust_path_resolved,
+            "found": bool(rust_path_resolved),
+        }
+    )
+    if rust_path_resolved:
+        return [rust_path_resolved], checked_candidates
+
+    go_repo_candidate = os.path.join(
+        repo_root,
+        "tools",
+        "native_overlay_backend_go",
+        "native_overlay_backend_go",
+    )
+    go_repo_found = os.path.isfile(go_repo_candidate) and os.access(
+        go_repo_candidate, os.X_OK
+    )
+    checked_candidates.append(
+        {
+            "source": "repo",
+            "candidate": go_repo_candidate,
+            "found": go_repo_found,
+        }
+    )
+    if go_repo_found:
+        return [go_repo_candidate], checked_candidates
+
+    go_path_candidate = "native_overlay_backend_go"
+    go_path_resolved = shutil.which(go_path_candidate)
+    checked_candidates.append(
+        {
+            "source": "path",
+            "candidate": go_path_candidate,
+            "resolved": go_path_resolved,
+            "found": bool(go_path_resolved),
+        }
+    )
+    if go_path_resolved:
+        return [go_path_resolved], checked_candidates
+
+    return None, checked_candidates
 
 
 def run_external_json_loader(
@@ -681,8 +767,11 @@ def run_overlay_backend(
             requested_backend=selected_backend,
             execution_backend=_canonicalize_overlay_backend(selected_backend),
         )
+    execution_backend = selection.execution_backend
 
-    command = resolve_backend_command(command_env_prefix, selected_backend)
+    command, checked_candidates = _resolve_overlay_native_command_with_fallback(
+        command_env_prefix, execution_backend
+    )
     if not command:
         return _handle_overlay_failure(
             FI_OVERLAY_COMMAND_MISSING,
@@ -690,7 +779,10 @@ def run_overlay_backend(
             strict_mode,
             details={
                 "backend": selected_backend,
+                "execution_backend": execution_backend,
                 "command_env_prefix": command_env_prefix,
+                "checked_candidates": checked_candidates,
+                "env_hint": "Set FI_OVERLAY_NATIVE_BIN or FI_OVERLAY_BIN",
             },
         )
 

@@ -15,9 +15,7 @@
 
 import json
 import io
-import shlex
 import subprocess
-import sys
 
 from typing import Any
 
@@ -322,100 +320,42 @@ def test_resolve_overlay_command_go_alias_falls_back_to_native_bin(
     ]
 
 
-def test_run_overlay_backend_go_alias_uses_go_bin_from_env(
+@pytest.mark.parametrize(
+    "requested_backend",
+    [backend_loaders.BACKEND_GO, backend_loaders.BACKEND_RUST],
+)
+def test_run_overlay_backend_alias_uses_native_command_resolution(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    requested_backend: str,
 ) -> None:
-    overlay_nodes = tmp_path / "overlay_nodes.json"
-    overlay_nodes.write_text("[]", encoding="utf-8")
-    branch_complexities = tmp_path / "branch_complexities.json"
-    branch_complexities.write_text("[]", encoding="utf-8")
-    branch_blockers = tmp_path / "branch_blockers.json"
-    branch_blockers.write_text("[]", encoding="utf-8")
+    resolve_calls = []
 
-    script_path = tmp_path / "overlay_success.py"
-    script_path.write_text(
-        "\n".join(
-            [
-                "import json",
-                "import sys",
-                "json.load(sys.stdin)",
-                "print(json.dumps({",
-                "  'schema_version': 1,",
-                "  'status': 'success',",
-                "  'counters': {},",
-                "  'timings': {},",
-                "  'artifacts': {",
-                f"    'overlay_nodes': {repr(str(overlay_nodes))},",
-                f"    'branch_complexities': {repr(str(branch_complexities))},",
-                f"    'branch_blockers': {repr(str(branch_blockers))},",
-                "  },",
-                "}))",
-            ]
-        ),
-        encoding="utf-8",
+    def _capture_resolve(prefix: str, backend: str) -> list[str] | None:
+        resolve_calls.append((prefix, backend))
+        return None
+
+    monkeypatch.setattr(backend_loaders, "resolve_backend_command", _capture_resolve)
+    monkeypatch.setattr(backend_loaders.os.path, "isfile", lambda _path: False)
+    monkeypatch.setattr(backend_loaders.os, "access", lambda _path, _mode: False)
+    monkeypatch.setattr(backend_loaders.shutil, "which", lambda _name: None)
+
+    result = backend_loaders.run_overlay_backend(
+        payload={"fuzzer": "fuzz_target"},
+        selected_backend=requested_backend,
+        strict_mode=False,
     )
 
-    cmd = " ".join([shlex.quote(sys.executable), shlex.quote(str(script_path))])
-    monkeypatch.setenv("FI_OVERLAY_BACKEND", "go")
-    monkeypatch.setenv("FI_OVERLAY_GO_BIN", cmd)
-    monkeypatch.delenv("FI_OVERLAY_NATIVE_BIN", raising=False)
-    monkeypatch.delenv("FI_OVERLAY_BIN", raising=False)
-
-    result = backend_loaders.run_overlay_backend(payload={"fuzzer": "fuzz_target"})
-
-    assert result.selected_backend == backend_loaders.BACKEND_GO
-    assert result.reason_code is None
-    assert result.response is not None
-    assert result.response["status"] == "success"
-
-
-def test_run_overlay_backend_rust_alias_uses_rust_bin_from_env(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    overlay_nodes = tmp_path / "overlay_nodes.json"
-    overlay_nodes.write_text("[]", encoding="utf-8")
-    branch_complexities = tmp_path / "branch_complexities.json"
-    branch_complexities.write_text("[]", encoding="utf-8")
-    branch_blockers = tmp_path / "branch_blockers.json"
-    branch_blockers.write_text("[]", encoding="utf-8")
-
-    script_path = tmp_path / "overlay_success.py"
-    script_path.write_text(
-        "\n".join(
-            [
-                "import json",
-                "import sys",
-                "json.load(sys.stdin)",
-                "print(json.dumps({",
-                "  'schema_version': 1,",
-                "  'status': 'success',",
-                "  'counters': {},",
-                "  'timings': {},",
-                "  'artifacts': {",
-                f"    'overlay_nodes': {repr(str(overlay_nodes))},",
-                f"    'branch_complexities': {repr(str(branch_complexities))},",
-                f"    'branch_blockers': {repr(str(branch_blockers))},",
-                "  },",
-                "}))",
-            ]
-        ),
-        encoding="utf-8",
+    assert resolve_calls == [("FI_OVERLAY", backend_loaders.BACKEND_NATIVE)]
+    assert result.selected_backend == backend_loaders.BACKEND_PYTHON
+    assert result.reason_code == backend_loaders.FI_OVERLAY_COMMAND_MISSING
+    assert result.reason_details is not None
+    assert result.reason_details["backend"] == requested_backend
+    assert result.reason_details["execution_backend"] == backend_loaders.BACKEND_NATIVE
+    assert result.reason_details["command_env_prefix"] == "FI_OVERLAY"
+    assert result.reason_details["env_hint"] == (
+        "Set FI_OVERLAY_NATIVE_BIN or FI_OVERLAY_BIN"
     )
-
-    cmd = " ".join([shlex.quote(sys.executable), shlex.quote(str(script_path))])
-    monkeypatch.setenv("FI_OVERLAY_BACKEND", "rust")
-    monkeypatch.setenv("FI_OVERLAY_RUST_BIN", cmd)
-    monkeypatch.delenv("FI_OVERLAY_NATIVE_BIN", raising=False)
-    monkeypatch.delenv("FI_OVERLAY_BIN", raising=False)
-
-    result = backend_loaders.run_overlay_backend(payload={"fuzzer": "fuzz_target"})
-
-    assert result.selected_backend == backend_loaders.BACKEND_RUST
-    assert result.reason_code is None
-    assert result.response is not None
-    assert result.response["status"] == "success"
+    assert len(result.reason_details["checked_candidates"]) == 4
 
 
 def test_parse_overlay_shadow_mode(
@@ -435,6 +375,80 @@ def test_resolve_overlay_command_uses_fi_overlay_bin_when_specific_missing(
     assert backend_loaders.resolve_backend_command(
         "FI_OVERLAY", backend_loaders.BACKEND_NATIVE
     ) == ["overlay-native", "--json"]
+
+
+def test_overlay_native_command_autodiscovery_uses_repo_rust_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FI_OVERLAY_NATIVE_BIN", raising=False)
+    monkeypatch.delenv("FI_OVERLAY_BIN", raising=False)
+    monkeypatch.setattr(backend_loaders.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        backend_loaders.os.path,
+        "isfile",
+        lambda path: path.endswith(
+            "tools/native_overlay_backend_rust/target/release/"
+            "native_overlay_backend_rust"
+        ),
+    )
+    monkeypatch.setattr(backend_loaders.os, "access", lambda _path, _mode: True)
+
+    captured_command = {}
+    monkeypatch.setattr(
+        backend_loaders.subprocess,
+        "Popen",
+        lambda command, *_args, **_kwargs: (
+            captured_command.update({"command": command})
+            or _FakePopen(
+                returncode=0,
+                stdout=(
+                    '{"schema_version":1,"status":"success",'
+                    '"counters":{},"artifacts":{'
+                    '"overlay_nodes":"a.json","branch_complexities":"b.json",'
+                    '"branch_blockers":"c.json"},"timings":{}}'
+                ),
+            )
+        ),
+    )
+
+    result = backend_loaders.run_overlay_backend(
+        payload={"fuzzer": "fuzz_target"},
+        selected_backend=backend_loaders.BACKEND_NATIVE,
+        strict_mode=False,
+    )
+
+    assert result.selected_backend == backend_loaders.BACKEND_NATIVE
+    assert result.response is not None
+    assert captured_command["command"][0].endswith(
+        "tools/native_overlay_backend_rust/target/release/native_overlay_backend_rust"
+    )
+
+
+def test_overlay_native_command_missing_reports_discovery_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FI_OVERLAY_NATIVE_BIN", raising=False)
+    monkeypatch.delenv("FI_OVERLAY_BIN", raising=False)
+    monkeypatch.setattr(backend_loaders.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(backend_loaders.os.path, "isfile", lambda _path: False)
+    monkeypatch.setattr(backend_loaders.os, "access", lambda _path, _mode: False)
+
+    result = backend_loaders.run_overlay_backend(
+        payload={"fuzzer": "fuzz_target"},
+        selected_backend=backend_loaders.BACKEND_NATIVE,
+        strict_mode=False,
+    )
+
+    assert result.selected_backend == backend_loaders.BACKEND_PYTHON
+    assert result.reason_code == backend_loaders.FI_OVERLAY_COMMAND_MISSING
+    assert result.reason_details is not None
+    assert result.reason_details["env_hint"] == (
+        "Set FI_OVERLAY_NATIVE_BIN or FI_OVERLAY_BIN"
+    )
+    checked_candidates = result.reason_details["checked_candidates"]
+    assert len(checked_candidates) == 4
+    assert checked_candidates[1]["candidate"] == "native_overlay_backend_rust"
+    assert checked_candidates[3]["candidate"] == "native_overlay_backend_go"
 
 
 def test_overlay_non_strict_invalid_contract_falls_back_to_python(
