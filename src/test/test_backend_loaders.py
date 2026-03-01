@@ -442,6 +442,13 @@ def test_overlay_native_command_missing_reports_discovery_candidates(
     assert result.selected_backend == backend_loaders.BACKEND_PYTHON
     assert result.reason_code == backend_loaders.FI_OVERLAY_COMMAND_MISSING
     assert result.reason_details is not None
+    assert set(result.reason_details) == {
+        "backend",
+        "execution_backend",
+        "command_env_prefix",
+        "checked_candidates",
+        "env_hint",
+    }
     assert result.reason_details["env_hint"] == (
         "Set FI_OVERLAY_NATIVE_BIN or FI_OVERLAY_BIN"
     )
@@ -449,6 +456,63 @@ def test_overlay_native_command_missing_reports_discovery_candidates(
     assert len(checked_candidates) == 4
     assert checked_candidates[1]["candidate"] == "native_overlay_backend_rust"
     assert checked_candidates[3]["candidate"] == "native_overlay_backend_go"
+
+
+def test_resolve_overlay_backend_command_details_use_custom_env_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        backend_loaders,
+        "_resolve_overlay_native_command_with_fallback",
+        lambda *_args, **_kwargs: (None, []),
+    )
+
+    _command, details = backend_loaders.resolve_overlay_backend_command_with_details(
+        backend_loaders.BACKEND_NATIVE,
+        command_env_prefix="FI_ALT_OVERLAY",
+    )
+
+    assert details["command_env_prefix"] == "FI_ALT_OVERLAY"
+    assert details["env_hint"] == "Set FI_ALT_OVERLAY_NATIVE_BIN or FI_ALT_OVERLAY_BIN"
+
+
+def test_overlay_native_command_missing_strict_falls_back_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Binary absence is a config gap, not a correctness failure.
+
+    strict_mode must NOT raise for COMMAND_MISSING; it should always fall back
+    to Python and emit a prominent warning so operators know the binary is missing.
+    """
+    monkeypatch.delenv("FI_OVERLAY_NATIVE_BIN", raising=False)
+    monkeypatch.delenv("FI_OVERLAY_BIN", raising=False)
+    monkeypatch.setattr(backend_loaders.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(backend_loaders.os.path, "isfile", lambda _path: False)
+    monkeypatch.setattr(backend_loaders.os, "access", lambda _path, _mode: False)
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        result = backend_loaders.run_overlay_backend(
+            payload={"fuzzer": "fuzz_target"},
+            selected_backend=backend_loaders.BACKEND_NATIVE,
+            strict_mode=True,
+        )
+
+    assert result.selected_backend == backend_loaders.BACKEND_PYTHON
+    assert result.reason_code == backend_loaders.FI_OVERLAY_COMMAND_MISSING
+    assert set(result.reason_details or {}) == {
+        "backend",
+        "execution_backend",
+        "command_env_prefix",
+        "checked_candidates",
+        "env_hint",
+    }
+    assert any(
+        backend_loaders.FI_OVERLAY_COMMAND_MISSING in record.message
+        for record in caplog.records
+    )
 
 
 def test_overlay_non_strict_invalid_contract_falls_back_to_python(

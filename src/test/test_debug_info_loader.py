@@ -23,6 +23,12 @@ import pytest
 from fuzz_introspector import debug_info
 
 
+@pytest.fixture(autouse=True)
+def _default_native_correlator_command(monkeypatch):
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_RUST_BIN", "fake-correlator")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_GO_BIN", "fake-correlator")
+
+
 def _write_yaml(tmpdir, name, payload):
     path = os.path.join(tmpdir, name)
     with open(path, "w", encoding="utf-8") as fp:
@@ -35,6 +41,23 @@ def _write_text(tmpdir, name, content):
     with open(path, "w", encoding="utf-8") as fp:
         fp.write(content)
     return path
+
+
+def test_parse_bool_env_invalid_value_warns_and_uses_default(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_SHADOW", "flase")
+
+    with caplog.at_level(logging.WARNING):
+        parsed = debug_info._parse_bool_env("FI_DEBUG_CORRELATOR_SHADOW", False)
+
+    assert parsed is False
+    assert any(
+        "Invalid FI_DEBUG_CORRELATOR_SHADOW" in record.message
+        and "using default False" in record.message
+        for record in caplog.records
+    )
 
 
 def test_load_debug_all_yaml_files_serial(monkeypatch):
@@ -630,6 +653,140 @@ def test_correlator_native_zero_functions_strict_accepts_empty_shards(monkeypatc
         )
 
     assert funcs == []
+
+
+def test_correlator_preflight_command_missing_non_strict_skips_native_setup(
+    monkeypatch,
+    caplog,
+):
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = [{"type_arguments": [0], "file_location": "/src/a.c:7"}]
+
+    def _fake_python_correlate(func_slice, _debug_type_dictionary):
+        for debug_func in func_slice:
+            debug_func["func_signature_elems"] = {
+                "return_type": ["python"],
+                "params": [],
+            }
+            debug_func["source"] = {
+                "source_file": "/python/fallback.c",
+                "source_line": "1",
+            }
+
+    original_mkdtemp = debug_info.tempfile.mkdtemp
+
+    def _guarded_mkdtemp(*args, **kwargs):
+        prefix = kwargs.get("prefix", "")
+        if not prefix and len(args) >= 2:
+            prefix = args[1]
+        if str(prefix).startswith("fi-correlator-"):
+            raise AssertionError("native temp setup should be skipped")
+        return original_mkdtemp(*args, **kwargs)
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "0")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_PARALLEL", "0")
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "resolve_backend_command",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        debug_info.tempfile,
+        "mkdtemp",
+        _guarded_mkdtemp,
+    )
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "run_correlator_backend",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("native correlator should not run")
+        ),
+    )
+    monkeypatch.setattr(debug_info, "_correlate_function_slice", _fake_python_correlate)
+    monkeypatch.setattr(
+        debug_info,
+        "create_friendly_debug_types",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with caplog.at_level(logging.WARNING):
+            debug_info.correlate_debugged_function_to_debug_types(
+                types, funcs, tmpdir, dump_files=False
+            )
+
+    assert funcs[0]["func_signature_elems"]["return_type"] == ["python"]
+    assert any(
+        debug_info.backend_loaders.FI_CORR_COMMAND_MISSING in record.message
+        for record in caplog.records
+    )
+
+
+def test_correlator_preflight_command_missing_strict_falls_back_with_warning(
+    monkeypatch, caplog
+):
+    """Binary absence must not raise even in strict mode.
+
+    strict_mode guards against native-backend *correctness failures*.  A missing
+    binary is a configuration gap — the native backend was never invoked — so we
+    always fall back to Python and emit a prominent warning instead of crashing.
+    """
+    types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = [{"type_arguments": [0], "file_location": "/src/a.c:7"}]
+
+    def _fake_python_correlate(func_slice, _debug_type_dictionary):
+        for debug_func in func_slice:
+            debug_func["func_signature_elems"] = {
+                "return_type": ["python"],
+                "params": [],
+            }
+            debug_func["source"] = {
+                "source_file": "/python/fallback.c",
+                "source_line": "1",
+            }
+
+    original_mkdtemp = debug_info.tempfile.mkdtemp
+
+    def _guarded_mkdtemp(*args, **kwargs):
+        prefix = kwargs.get("prefix", "")
+        if not prefix and len(args) >= 2:
+            prefix = args[1]
+        if str(prefix).startswith("fi-correlator-"):
+            raise AssertionError("native temp setup should be skipped")
+        return original_mkdtemp(*args, **kwargs)
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "1")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_PARALLEL", "0")
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "resolve_backend_command",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        debug_info.tempfile,
+        "mkdtemp",
+        _guarded_mkdtemp,
+    )
+    monkeypatch.setattr(debug_info, "_correlate_function_slice", _fake_python_correlate)
+    monkeypatch.setattr(
+        debug_info,
+        "create_friendly_debug_types",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with caplog.at_level(logging.WARNING):
+            debug_info.correlate_debugged_function_to_debug_types(
+                types, funcs, tmpdir, dump_files=False
+            )
+
+    assert funcs[0]["func_signature_elems"]["return_type"] == ["python"]
+    assert any(
+        debug_info.backend_loaders.FI_CORR_COMMAND_MISSING in record.message
+        for record in caplog.records
+    )
 
 
 def test_correlator_native_shard_schema_error_non_strict_falls_back_without_partial_mutation(

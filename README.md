@@ -87,9 +87,10 @@ defaults and only set the minimal correlator variables listed below.
   - `FI_DEBUG_CORRELATOR_SHADOW` (default: `0`)
 - `FI_DEBUG_CORRELATOR_BACKEND` (default: `python`): native correlator stage
   backend selector. Supported: `python`, `rust`, `go`.
-- Rollout gate decision (2026-02-28): keep `FI_DEBUG_CORRELATOR_BACKEND=python`
-  as authoritative default. Latest local introtest evidence shows rust/go
-  parity with python, but switch thresholds for performance/memory are not met.
+- Rollout gate decision (refreshed 2026-03-01): keep
+  `FI_DEBUG_CORRELATOR_BACKEND=python` as authoritative default. Latest local
+  introtest gate-cycle evidence keeps rust/go parity with python, but switch
+  thresholds for performance/memory are not met.
 - `FI_DEBUG_CORRELATOR_BACKEND=go` is currently shadow-only and never
   authoritative; if `FI_DEBUG_CORRELATOR_SHADOW=0` is configured, shadow mode
   is forced and Python output remains authoritative.
@@ -122,10 +123,10 @@ defaults and only set the minimal correlator variables listed below.
     family.
   - `FI_OVERLAY_BACKEND=go` is currently probe/shadow-only and never authoritative;
     Python overlay output remains authoritative even when `FI_OVERLAY_SHADOW=0`.
-  - Rollout gate decision (2026-02-28): keep `FI_OVERLAY_BACKEND=python` as
-    default/authoritative. Native rust/go backends are parity-validated on the
-    local introtest fixture, but default switch remains pending stronger
-    performance evidence.
+  - Rollout gate decision (refreshed 2026-03-01): keep
+    `FI_OVERLAY_BACKEND=python` as default/authoritative. Native rust/go
+    backends remain parity-validated on the local introtest fixture, but the
+    default switch remains pending stronger performance evidence.
   - Native authoritative overlay application is currently gated to `target_lang=c-cpp`.
     Other languages use Python overlay output.
 - Optional correlator advanced tuning (not required for normal operation):
@@ -150,8 +151,9 @@ defaults and only set the minimal correlator variables listed below.
   - `FI_DEBUG_YAML_LOADER_<BACKEND>_BIN` or `FI_DEBUG_YAML_LOADER_BIN`
   - `FI_PROFILE_YAML_LOADER_<BACKEND>_BIN` or `FI_PROFILE_YAML_LOADER_BIN`
   - `FI_LLVM_COV_LOADER_<BACKEND>_BIN` or `FI_LLVM_COV_LOADER_BIN`
-  - Prefer `FI_DEBUG_CORRELATOR_BIN`; `FI_DEBUG_CORRELATOR_RUST_BIN` and
-    `FI_DEBUG_CORRELATOR_GO_BIN` are compatibility aliases.
+  - Resolve `FI_DEBUG_CORRELATOR_<BACKEND>_BIN` first, then
+    `FI_DEBUG_CORRELATOR_BIN`; `FI_DEBUG_CORRELATOR_RUST_BIN` and
+    `FI_DEBUG_CORRELATOR_GO_BIN` remain compatibility aliases.
   where `<BACKEND>` is uppercase (`GO`, `RUST`, `CPP`).
 - Backend policy:
   - Rust is the default backend for all three loader surfaces.

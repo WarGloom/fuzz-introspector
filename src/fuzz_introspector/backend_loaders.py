@@ -263,6 +263,32 @@ def _resolve_overlay_native_command_with_fallback(
     return None, checked_candidates
 
 
+def _build_overlay_command_env_hint(command_env_prefix: str) -> str:
+    return (
+        f"Set {command_env_prefix}_{BACKEND_NATIVE.upper()}_BIN or "
+        f"{command_env_prefix}_BIN"
+    )
+
+
+def resolve_overlay_backend_command_with_details(
+    selected_backend: str,
+    command_env_prefix: str = "FI_OVERLAY",
+) -> tuple[list[str] | None, dict[str, Any]]:
+    """Resolve overlay command and deterministic command-missing details."""
+    execution_backend = _canonicalize_overlay_backend(selected_backend)
+    command, checked_candidates = _resolve_overlay_native_command_with_fallback(
+        command_env_prefix, execution_backend
+    )
+    details = {
+        "backend": selected_backend,
+        "execution_backend": execution_backend,
+        "command_env_prefix": command_env_prefix,
+        "checked_candidates": checked_candidates,
+        "env_hint": _build_overlay_command_env_hint(command_env_prefix),
+    }
+    return command, details
+
+
 def run_external_json_loader(
     command: list[str], payload: dict[str, Any], timeout_seconds: int = 0
 ) -> Any | None:
@@ -767,23 +793,33 @@ def run_overlay_backend(
             requested_backend=selected_backend,
             execution_backend=_canonicalize_overlay_backend(selected_backend),
         )
-    execution_backend = selection.execution_backend
-
-    command, checked_candidates = _resolve_overlay_native_command_with_fallback(
-        command_env_prefix, execution_backend
+    command, missing_command_details = resolve_overlay_backend_command_with_details(
+        selected_backend,
+        command_env_prefix=command_env_prefix,
     )
     if not command:
-        return _handle_overlay_failure(
-            FI_OVERLAY_COMMAND_MISSING,
-            "No overlay command configured for selected backend",
-            strict_mode,
-            details={
-                "backend": selected_backend,
-                "execution_backend": execution_backend,
-                "command_env_prefix": command_env_prefix,
-                "checked_candidates": checked_candidates,
-                "env_hint": "Set FI_OVERLAY_NATIVE_BIN or FI_OVERLAY_BIN",
-            },
+        # Binary absence is a configuration gap, not a correctness failure.
+        # Always fall back to Python regardless of strict_mode; emit a prominent
+        # warning when strict mode is on so operators know the binary is missing.
+        if strict_mode:
+            logger.warning(
+                "%s: Native overlay binary not found; falling back to Python "
+                "(strict mode does not apply to binary absence) | details=%s",
+                FI_OVERLAY_COMMAND_MISSING,
+                _format_reason_details(missing_command_details),
+            )
+        else:
+            logger.warning(
+                "%s: No overlay command configured for selected backend; "
+                "falling back to Python | details=%s",
+                FI_OVERLAY_COMMAND_MISSING,
+                _format_reason_details(missing_command_details),
+            )
+        return OverlayBackendResult(
+            selected_backend=BACKEND_PYTHON,
+            strict_mode=strict_mode,
+            reason_code=FI_OVERLAY_COMMAND_MISSING,
+            reason_details=missing_command_details,
         )
 
     request_payload = dict(payload)
@@ -1064,15 +1100,32 @@ def run_correlator_backend(
 
     command = resolve_backend_command(command_env_prefix, selected_backend)
     if not command:
-        return _handle_correlator_failure(
-            FI_CORR_COMMAND_MISSING,
-            "No correlator command configured for selected backend",
-            strict_mode,
-            cleanup_hook,
-            details={
-                "backend": selected_backend,
-                "command_env_prefix": command_env_prefix,
-            },
+        # Binary absence is a configuration gap, not a correctness failure.
+        # Always fall back to Python regardless of strict_mode; emit a prominent
+        # warning when strict mode is on so operators know the binary is missing.
+        missing_details: dict[str, Any] = {
+            "backend": selected_backend,
+            "command_env_prefix": command_env_prefix,
+        }
+        if strict_mode:
+            logger.warning(
+                "%s: Native correlator binary not found; falling back to Python "
+                "(strict mode does not apply to binary absence) | details=%s",
+                FI_CORR_COMMAND_MISSING,
+                _format_reason_details(missing_details),
+            )
+        else:
+            logger.warning(
+                "%s: No correlator command configured for selected backend; "
+                "falling back to Python | details=%s",
+                FI_CORR_COMMAND_MISSING,
+                _format_reason_details(missing_details),
+            )
+        return CorrelatorBackendResult(
+            selected_backend=BACKEND_PYTHON,
+            strict_mode=strict_mode,
+            reason_code=FI_CORR_COMMAND_MISSING,
+            reason_details=missing_details,
         )
 
     request_payload = dict(payload)

@@ -51,6 +51,8 @@ DebugPayload = tuple[
     str | None,
 ]
 CORRELATOR_SHADOW_SAMPLE_SIZE_DEFAULT = 256
+_BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
+_BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
 
 # Pre-compiled regex patterns for debug info parsing (performance optimization)
 # These patterns are used in extract_all_functions_in_debug_info
@@ -295,7 +297,7 @@ def extract_all_functions_in_debug_info(
     for line in functions_section.splitlines():
         if line.startswith("Subprogram: "):
             _finalize_current_function()
-            function_name = line[len("Subprogram: ") :].strip()
+            function_name = line[len("Subprogram: "):].strip()
             current_function = {"name": function_name}
             named_args = []
             operand_args = []
@@ -625,9 +627,15 @@ def load_debug_all_yaml_files(debug_all_types_files):
 
 def _parse_bool_env(var_name: str, default: bool) -> bool:
     raw = os.environ.get(var_name, "")
-    if raw == "":
+    raw_value = raw.strip().lower()
+    if not raw_value:
         return default
-    return raw.strip().lower() not in ("0", "false", "no", "off")
+    if raw_value in _BOOL_TRUE_VALUES:
+        return True
+    if raw_value in _BOOL_FALSE_VALUES:
+        return False
+    logger.warning("Invalid %s=%r; using default %s", var_name, raw, default)
+    return default
 
 
 def _parse_int_env(
@@ -652,7 +660,7 @@ def _parse_int_env(
 def _chunked(iterable: list[_T], size: int) -> list[list[_T]]:
     if size <= 0:
         return [iterable]
-    return [iterable[i : i + size] for i in range(0, len(iterable), size)]
+    return [iterable[i:i + size] for i in range(0, len(iterable), size)]
 
 
 def _safe_file_size(path: str) -> int:
@@ -1583,6 +1591,41 @@ def _extract_correlator_shard_paths(
     return shard_paths
 
 
+def _resolve_correlator_shard_path(
+    shard_path: str,
+    expected_native_output_dir: str | None = None,
+) -> str:
+    candidate_path = shard_path.strip()
+    if expected_native_output_dir and not os.path.isabs(candidate_path):
+        candidate_path = os.path.join(expected_native_output_dir, candidate_path)
+
+    resolved_shard_path = os.path.realpath(os.path.abspath(candidate_path))
+    if expected_native_output_dir is None:
+        return resolved_shard_path
+
+    expected_output_realpath = os.path.realpath(
+        os.path.abspath(expected_native_output_dir)
+    )
+    try:
+        common_path = os.path.commonpath(
+            [resolved_shard_path, expected_output_realpath]
+        )
+    except ValueError as err:
+        raise ValueError(
+            "Correlator shard path escapes expected native output dir: "
+            f"shard={shard_path!r} resolved={resolved_shard_path!r} "
+            f"expected_dir={expected_output_realpath!r}"
+        ) from err
+
+    if common_path != expected_output_realpath:
+        raise ValueError(
+            "Correlator shard path escapes expected native output dir: "
+            f"shard={shard_path!r} resolved={resolved_shard_path!r} "
+            f"expected_dir={expected_output_realpath!r}"
+        )
+    return resolved_shard_path
+
+
 def _parse_correlator_shard_record(
     record: Any,
 ) -> tuple[int, dict[str, Any], dict[str, Any]]:
@@ -1637,6 +1680,7 @@ def _collect_correlator_shard_updates(
     all_debug_functions: list[dict[str, Any]],
     response: dict[str, Any],
     require_complete_coverage: bool = True,
+    expected_native_output_dir: str | None = None,
 ) -> list[tuple[int, dict[str, Any], dict[str, Any]]]:
     function_count = len(all_debug_functions)
     shard_paths = _extract_correlator_shard_paths(
@@ -1646,10 +1690,16 @@ def _collect_correlator_shard_updates(
     seen_row_indexes: set[int] = set()
 
     for shard_path in shard_paths:
-        if not os.path.isfile(shard_path):
-            raise ValueError(f"Correlator shard file not found: {shard_path}")
+        resolved_shard_path = _resolve_correlator_shard_path(
+            shard_path, expected_native_output_dir=expected_native_output_dir
+        )
+        if not os.path.isfile(resolved_shard_path):
+            raise ValueError(
+                "Correlator shard file not found: "
+                f"shard={shard_path!r} resolved={resolved_shard_path!r}"
+            )
 
-        shard_updates = list(_iter_correlator_shard_updates(shard_path))
+        shard_updates = list(_iter_correlator_shard_updates(resolved_shard_path))
         for row_idx, _, _ in shard_updates:
             if row_idx < 0 or row_idx >= function_count:
                 raise ValueError(f"Correlator shard row index out of range: {row_idx}")
@@ -1827,7 +1877,35 @@ def correlate_debugged_function_to_debug_types(
     )
     native_shadow_snapshot: dict[int, tuple[str, str]] = {}
     native_backend_succeeded = False
-    if correlator_backend != backend_loaders.BACKEND_PYTHON:
+    native_backend_enabled = correlator_backend != backend_loaders.BACKEND_PYTHON
+    if native_backend_enabled:
+        command_env_prefix = "FI_DEBUG_CORRELATOR"
+        command = backend_loaders.resolve_backend_command(
+            command_env_prefix,
+            correlator_backend,
+        )
+        if not command:
+            reason_details = {
+                "backend": correlator_backend,
+                "command_env_prefix": command_env_prefix,
+            }
+            if correlator_strict_mode:
+                logger.warning(
+                    "%s: Native correlator binary not found; falling back to Python "
+                    "(strict mode does not apply to binary absence) | details=%s",
+                    backend_loaders.FI_CORR_COMMAND_MISSING,
+                    json.dumps(reason_details, sort_keys=True, default=str),
+                )
+            else:
+                logger.warning(
+                    "%s: No correlator command configured for selected backend; "
+                    "falling back to python | details=%s",
+                    backend_loaders.FI_CORR_COMMAND_MISSING,
+                    json.dumps(reason_details, sort_keys=True, default=str),
+                )
+            native_backend_enabled = False
+
+    if native_backend_enabled:
         native_artifact_root = out_dir if os.path.isdir(out_dir) else None
         native_attempt_dir = tempfile.mkdtemp(
             prefix="fi-correlator-", dir=native_artifact_root
@@ -1887,6 +1965,7 @@ def correlate_debugged_function_to_debug_types(
                     require_complete_coverage=(
                         correlator_strict_mode or not correlator_shadow_mode
                     ),
+                    expected_native_output_dir=native_output_dir,
                 )
                 _validate_correlator_native_counters(
                     native_result.response, len(native_validated_updates)

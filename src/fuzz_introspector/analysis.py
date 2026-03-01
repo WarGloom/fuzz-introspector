@@ -922,7 +922,8 @@ def _serialize_branch_blockers(
         serialized.append(
             {
                 "blocked_side": repr(blocker.blocked_side),
-                "blocked_unique_not_covered_complexity": blocker.blocked_unique_not_covered_complexity,
+                "blocked_unique_not_covered_complexity":
+                blocker.blocked_unique_not_covered_complexity,
                 "blocked_unique_reachable_complexity": blocker.blocked_unique_reachable_complexity,
                 "blocked_unique_functions": blocker.blocked_unique_funcs,
                 "blocked_not_covered_complexity": blocker.blocked_not_covered_complexity,
@@ -1395,6 +1396,31 @@ def overlay_calltree_with_coverage(
         )
 
     if selected_backend != backend_loaders.BACKEND_PYTHON:
+        command, missing_command_details = (
+            backend_loaders.resolve_overlay_backend_command_with_details(
+                selected_backend,
+                command_env_prefix="FI_OVERLAY",
+            )
+        )
+        if not command:
+            if strict_mode:
+                logger.warning(
+                    "%s: Native overlay binary not found; falling back to Python "
+                    "(strict mode does not apply to binary absence) | details=%s",
+                    backend_loaders.FI_OVERLAY_COMMAND_MISSING,
+                    json.dumps(missing_command_details, sort_keys=True, default=str),
+                )
+            else:
+                logger.warning(
+                    "%s: No overlay command configured; falling back to Python | details=%s",
+                    backend_loaders.FI_OVERLAY_COMMAND_MISSING,
+                    json.dumps(missing_command_details, sort_keys=True, default=str),
+                )
+            _overlay_calltree_with_coverage_python(
+                profile, proj_profile, coverage_url, basefolder, out_dir
+            )
+            return
+
         request_payload = _build_overlay_native_payload(
             profile, proj_profile, coverage_url, str(out_dir)
         )

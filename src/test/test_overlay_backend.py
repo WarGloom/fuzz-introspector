@@ -206,6 +206,115 @@ def test_overlay_native_strict_failure_raises(
     assert python_overlay_calls == []
 
 
+def test_overlay_preflight_command_missing_non_strict_falls_back_to_python(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("FI_OVERLAY_BACKEND", "native")
+    monkeypatch.setenv("FI_OVERLAY_STRICT", "0")
+    python_overlay_calls = []
+
+    monkeypatch.setattr(
+        backend_loaders,
+        "resolve_overlay_backend_command_with_details",
+        lambda *_args, **_kwargs: (
+            None,
+            {
+                "backend": backend_loaders.BACKEND_NATIVE,
+                "execution_backend": backend_loaders.BACKEND_NATIVE,
+                "command_env_prefix": "FI_OVERLAY",
+                "checked_candidates": [],
+                "env_hint": "Set FI_OVERLAY_NATIVE_BIN or FI_OVERLAY_BIN",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        analysis,
+        "_build_overlay_native_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("native payload build should be skipped")
+        ),
+    )
+    monkeypatch.setattr(
+        backend_loaders,
+        "run_overlay_backend",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("native backend execution should be skipped")
+        ),
+    )
+    monkeypatch.setattr(
+        analysis,
+        "_overlay_calltree_with_coverage_python",
+        lambda *_args, **_kwargs: python_overlay_calls.append(1),
+    )
+
+    with caplog.at_level("WARNING"):
+        analysis.overlay_calltree_with_coverage(
+            _dummy_profile(),
+            _dummy_project(),
+            "",
+            "",
+            "",
+        )
+
+    assert python_overlay_calls == [1]
+    assert any(
+        backend_loaders.FI_OVERLAY_COMMAND_MISSING in record.message
+        for record in caplog.records
+    )
+
+
+def test_overlay_preflight_command_missing_strict_falls_back_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Binary absence must not raise even in strict mode.
+
+    strict_mode guards against native-backend *correctness failures* (wrong
+    results, schema errors, exit failures).  A missing binary is a configuration
+    gap — the native backend was never invoked — so we always fall back to Python
+    and emit a prominent warning instead of crashing.
+    """
+    monkeypatch.setenv("FI_OVERLAY_BACKEND", "native")
+    monkeypatch.setenv("FI_OVERLAY_STRICT", "1")
+    python_overlay_calls = []
+
+    monkeypatch.setattr(
+        backend_loaders,
+        "resolve_overlay_backend_command_with_details",
+        lambda *_args, **_kwargs: (
+            None,
+            {
+                "backend": backend_loaders.BACKEND_NATIVE,
+                "execution_backend": backend_loaders.BACKEND_NATIVE,
+                "command_env_prefix": "FI_OVERLAY",
+                "checked_candidates": [],
+                "env_hint": "Set FI_OVERLAY_NATIVE_BIN or FI_OVERLAY_BIN",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        analysis,
+        "_overlay_calltree_with_coverage_python",
+        lambda *_args, **_kwargs: python_overlay_calls.append(1),
+    )
+
+    with caplog.at_level("WARNING"):
+        analysis.overlay_calltree_with_coverage(
+            _dummy_profile(),
+            _dummy_project(),
+            "",
+            "",
+            "",
+        )
+
+    assert python_overlay_calls == [1]
+    assert any(
+        backend_loaders.FI_OVERLAY_COMMAND_MISSING in record.message
+        for record in caplog.records
+    )
+
+
 def test_overlay_unsupported_language_skips_native_authoritative(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

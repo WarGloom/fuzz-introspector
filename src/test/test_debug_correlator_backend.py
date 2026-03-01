@@ -608,3 +608,93 @@ def test_correlator_shards_keep_one_update_per_original_row(tmp_path) -> None:
     )
 
     assert [row_idx for row_idx, _sig, _source in updates] == [0, 1, 2]
+
+
+def test_correlator_shard_path_outside_expected_output_dir_rejected(tmp_path) -> None:
+    allowed_dir = tmp_path / "native-output"
+    allowed_dir.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    shard_path = outside_dir / "correlated-debug-00000.ndjson"
+    shard_path.write_text(
+        json.dumps(
+            {
+                "row_idx": 0,
+                "func_signature_elems": {"return_type": [], "params": []},
+                "source": {"source_file": "a.c", "source_line": "1"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    response = {"artifacts": {"correlated_shards": [str(shard_path)]}}
+
+    with pytest.raises(ValueError, match="escapes expected native output dir"):
+        debug_info._collect_correlator_shard_updates(
+            [{}],
+            response,
+            require_complete_coverage=True,
+            expected_native_output_dir=str(allowed_dir),
+        )
+
+
+def test_correlator_shard_symlink_escape_rejected(tmp_path) -> None:
+    allowed_dir = tmp_path / "native-output"
+    allowed_dir.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+
+    outside_target = outside_dir / "correlated-debug-00000.ndjson"
+    outside_target.write_text(
+        json.dumps(
+            {
+                "row_idx": 0,
+                "func_signature_elems": {"return_type": [], "params": []},
+                "source": {"source_file": "a.c", "source_line": "1"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    symlink_path = allowed_dir / "correlated-debug-00000.ndjson"
+    try:
+        symlink_path.symlink_to(outside_target)
+    except OSError as err:
+        pytest.skip(f"Symlink creation not supported: {err}")
+
+    response = {"artifacts": {"correlated_shards": [str(symlink_path)]}}
+
+    with pytest.raises(ValueError, match="escapes expected native output dir"):
+        debug_info._collect_correlator_shard_updates(
+            [{}],
+            response,
+            require_complete_coverage=True,
+            expected_native_output_dir=str(allowed_dir),
+        )
+
+
+def test_correlator_shard_path_within_expected_output_dir_accepted(tmp_path) -> None:
+    allowed_dir = tmp_path / "native-output"
+    allowed_dir.mkdir()
+    shard_path = allowed_dir / "correlated-debug-00000.ndjson"
+    shard_path.write_text(
+        json.dumps(
+            {
+                "row_idx": 0,
+                "func_signature_elems": {"return_type": ["void"], "params": []},
+                "source": {"source_file": "a.c", "source_line": "1"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    response = {"artifacts": {"correlated_shards": [str(shard_path)]}}
+
+    updates = debug_info._collect_correlator_shard_updates(
+        [{}],
+        response,
+        require_complete_coverage=True,
+        expected_native_output_dir=str(allowed_dir),
+    )
+
+    assert [row_idx for row_idx, _sig, _source in updates] == [0]
