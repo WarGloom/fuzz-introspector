@@ -37,6 +37,10 @@ jobs:
         if: matrix.lane == 'jit'
         run: |
           python -c "import sys; has_jit = hasattr(sys, '_jit') and hasattr(sys._jit, 'is_available') and sys._jit.is_available(); print(f'available={str(has_jit).lower()}')" >> "$GITHUB_OUTPUT"
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxml2-dev libxslt-dev
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

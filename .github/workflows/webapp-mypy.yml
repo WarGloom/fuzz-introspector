@@ -18,8 +18,10 @@ jobs:
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v3.0.0
       with:
         python-version: "3.14"
-    - name: Install venv
-      run: sudo apt-get install python3-venv
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libxml2-dev libxslt-dev python3-venv
     - name: Set up venv
       run: cd tools/web-fuzzing-introspection && python3 -m venv .venv
     - name: Active venv dependencies
