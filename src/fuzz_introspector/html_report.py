@@ -380,7 +380,7 @@ def _run_parallel_analyses(
     total_workers = min(worker_count, len(analysis_interfaces))
 
     for idx in range(0, len(analysis_interfaces), total_workers):
-        batch = analysis_interfaces[idx : idx + total_workers]
+        batch = analysis_interfaces[idx:idx + total_workers]
         result_dir = tempfile.mkdtemp(prefix="fi-pr6-worker-results-")
         processes: List[Tuple[Any, str]] = []
         thread_futures: Dict[str, Any] = {}

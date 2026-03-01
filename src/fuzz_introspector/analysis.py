@@ -920,7 +920,8 @@ def _serialize_branch_blockers(
         serialized.append(
             {
                 "blocked_side": repr(blocker.blocked_side),
-                "blocked_unique_not_covered_complexity": blocker.blocked_unique_not_covered_complexity,
+                "blocked_unique_not_covered_complexity":
+                    blocker.blocked_unique_not_covered_complexity,
                 "blocked_unique_reachable_complexity": blocker.blocked_unique_reachable_complexity,
                 "blocked_unique_functions": blocker.blocked_unique_funcs,
                 "blocked_not_covered_complexity": blocker.blocked_not_covered_complexity,

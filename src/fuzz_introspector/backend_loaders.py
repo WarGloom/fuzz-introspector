@@ -477,7 +477,7 @@ def _format_reason_details(details: dict[str, Any] | None) -> str:
     return json.dumps(details, sort_keys=True, default=str)
 
 
-def _terminate_process_group(proc: subprocess.Popen[str], grace_seconds: int) -> str:
+def _terminate_process_group(proc: subprocess.Popen[Any], grace_seconds: int) -> str:
     if proc.poll() is not None:
         return "already_exited"
 
@@ -776,7 +776,7 @@ class _BoundedStreamReader(threading.Thread):
 
 
 def _cleanup_process_io_threads(
-    proc: subprocess.Popen[str],
+    proc: subprocess.Popen[Any],
     stdout_reader: _BoundedStreamReader,
     stderr_reader: _BoundedStreamReader,
     join_timeout_sec: float = 0.5,
