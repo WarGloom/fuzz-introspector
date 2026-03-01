@@ -20,6 +20,10 @@ tests/tree-sitter-frontend/
 .claude/settings.local.json
 .agents/
 .work*
+AGENTS.md
+AGENTS_QUICKREF.md
+CLAUDE.md
+CODEX.md
 plan.md
 docs/perf/debug_info_remediation_plan.md
 docs/perf/p2_2_process_pool_plan.md

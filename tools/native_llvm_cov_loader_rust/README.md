@@ -30,6 +30,9 @@ and emits sorted JSON object keys for map fields.
 ## Implementation notes
 
 - Input/output JSON is parsed/serialized with `serde_json`.
+- Coverage report files are parsed in parallel with `rayon`; results are
+  merged in original input order so that duplicate keys follow "last file
+  wins" semantics, matching the sequential baseline.
 - Coverage pattern parsing uses precompiled `regex` expressions for:
   - switch-line detection,
   - case-line detection,

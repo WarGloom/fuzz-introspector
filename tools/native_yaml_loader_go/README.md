@@ -24,4 +24,7 @@ Outputs:
 Implementation note:
 
 - Uses `gopkg.in/yaml.v3` for YAML parsing.
+- In debug (multi-path) mode, all YAML files are loaded concurrently using
+  goroutines; results are merged in original input order to preserve
+  `appendPythonExtend` semantics.
 - Per-file parse failures in debug mode are skipped and processing continues.

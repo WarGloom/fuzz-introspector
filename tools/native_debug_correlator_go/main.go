@@ -10,8 +10,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -134,28 +132,8 @@ type memberEntry struct {
 	BaseTypeAddr string
 }
 
-type indexedCorrelatedRecord struct {
-	chunkOffset int
-	record      correlatedRecord
-}
-
 func toMS(duration time.Duration) uint64 {
 	return uint64(duration.Milliseconds())
-}
-
-func minInt(left int, right int) int {
-	if left < right {
-		return left
-	}
-	return right
-}
-
-func availableWorkerCount() int {
-	workers := runtime.GOMAXPROCS(0)
-	if workers < 1 {
-		return 1
-	}
-	return workers
 }
 
 func asString(value any) string {
@@ -427,73 +405,33 @@ func parseRecordsFromFile(path string) ([]any, *appError) {
 	return records, nil
 }
 
-type indexedParsedRecords struct {
-	pathIdx int
-	records []any
-	err     *appError
-}
-
 func loadRecordsFromPaths(paths []string) ([]any, *appError) {
 	if len(paths) == 0 {
 		return []any{}, nil
 	}
 
-	workerCount := minInt(availableWorkerCount(), len(paths))
-	if workerCount <= 1 {
-		merged := make([]any, 0)
-		for _, path := range paths {
-			records, err := parseRecordsFromFile(path)
-			if err != nil {
-				return nil, err
-			}
-			merged = append(merged, records...)
-		}
-		return merged, nil
+	type result struct {
+		records []any
+		err     *appError
 	}
-
-	perFile := make([][]any, len(paths))
-	jobs := make(chan int)
-	results := make(chan indexedParsedRecords, len(paths))
-
-	var workers sync.WaitGroup
-	for workerIdx := 0; workerIdx < workerCount; workerIdx++ {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for pathIdx := range jobs {
-				records, err := parseRecordsFromFile(paths[pathIdx])
-				results <- indexedParsedRecords{
-					pathIdx: pathIdx,
-					records: records,
-					err:     err,
-				}
-			}
-		}()
+	results := make([]result, len(paths))
+	var wg sync.WaitGroup
+	for i, path := range paths {
+		wg.Add(1)
+		go func(idx int, p string) {
+			defer wg.Done()
+			records, err := parseRecordsFromFile(p)
+			results[idx] = result{records: records, err: err}
+		}(i, path)
 	}
-
-	go func() {
-		for pathIdx := range paths {
-			jobs <- pathIdx
-		}
-		close(jobs)
-		workers.Wait()
-		close(results)
-	}()
-
-	var firstErr *appError
-	for result := range results {
-		if result.err != nil && firstErr == nil {
-			firstErr = result.err
-		}
-		perFile[result.pathIdx] = result.records
-	}
-	if firstErr != nil {
-		return nil, firstErr
-	}
+	wg.Wait()
 
 	merged := make([]any, 0)
-	for _, records := range perFile {
-		merged = append(merged, records...)
+	for _, r := range results {
+		if r.err != nil {
+			return nil, r.err
+		}
+		merged = append(merged, r.records...)
 	}
 	return merged, nil
 }
@@ -914,55 +852,16 @@ func correlateChunkParallel(functionChunk []functionEntry, typeMap map[string]ty
 		return []correlatedRecord{}
 	}
 
-	workerCount := minInt(availableWorkerCount(), len(functionChunk))
-	if workerCount <= 1 {
-		records := make([]correlatedRecord, 0, len(functionChunk))
-		for _, function := range functionChunk {
-			records = append(records, correlateFunction(function, typeMap))
-		}
-		return records
+	records := make([]correlatedRecord, len(functionChunk))
+	var wg sync.WaitGroup
+	for i, function := range functionChunk {
+		wg.Add(1)
+		go func(idx int, fn functionEntry) {
+			defer wg.Done()
+			records[idx] = correlateFunction(fn, typeMap)
+		}(i, function)
 	}
-
-	results := make(chan indexedCorrelatedRecord, len(functionChunk))
-	var workers sync.WaitGroup
-	for workerIdx := 0; workerIdx < workerCount; workerIdx++ {
-		workers.Add(1)
-		go func(workerStart int) {
-			defer workers.Done()
-			for chunkOffset := workerStart; chunkOffset < len(functionChunk); chunkOffset += workerCount {
-				results <- indexedCorrelatedRecord{
-					chunkOffset: chunkOffset,
-					record:      correlateFunction(functionChunk[chunkOffset], typeMap),
-				}
-			}
-		}(workerIdx)
-	}
-
-	go func() {
-		workers.Wait()
-		close(results)
-	}()
-
-	indexedRecords := make([]indexedCorrelatedRecord, 0, len(functionChunk))
-	for result := range results {
-		indexedRecords = append(indexedRecords, result)
-	}
-	if len(indexedRecords) != len(functionChunk) {
-		records := make([]correlatedRecord, 0, len(functionChunk))
-		for _, function := range functionChunk {
-			records = append(records, correlateFunction(function, typeMap))
-		}
-		return records
-	}
-
-	sort.Slice(indexedRecords, func(left int, right int) bool {
-		return indexedRecords[left].chunkOffset < indexedRecords[right].chunkOffset
-	})
-
-	records := make([]correlatedRecord, 0, len(functionChunk))
-	for _, indexedRecord := range indexedRecords {
-		records = append(records, indexedRecord.record)
-	}
+	wg.Wait()
 	return records
 }
 
@@ -1012,7 +911,7 @@ func correlateAndWriteShards(
 
 	shardIdx := 0
 	for start := 0; start < len(functions); start += shardSize {
-		end := minInt(start+shardSize, len(functions))
+		end := min(start+shardSize, len(functions))
 		functionChunk := functions[start:end]
 		if len(functionChunk) == 0 {
 			continue

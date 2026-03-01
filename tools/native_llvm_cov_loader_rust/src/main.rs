@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::sync::OnceLock;
 
+use rayon::prelude::*;
 use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
@@ -115,7 +116,8 @@ fn extract_function_name(line: &str) -> String {
         .collect()
 }
 
-fn parse_coverage_report(path: &str, out: &mut OutputPayload) -> Result<(), String> {
+fn parse_coverage_report(path: &str) -> Result<OutputPayload, String> {
+    let mut out = OutputPayload::default();
     let file = File::open(path).map_err(|err| format!("failed to open {path}: {err}"))?;
     let mut reader = BufReader::new(file);
     let mut line_buf: Vec<u8> = Vec::new();
@@ -235,7 +237,7 @@ fn parse_coverage_report(path: &str, out: &mut OutputPayload) -> Result<(), Stri
         }
     }
 
-    Ok(())
+    Ok(out)
 }
 
 fn render_output_json(payload: &OutputPayload) -> Result<String, String> {
@@ -250,9 +252,18 @@ fn run() -> Result<(), String> {
 
     let coverage_reports = parse_coverage_reports(&raw_input)?;
 
+    // Parse all report files in parallel; collect in original order.
+    let partial_outputs: Vec<Result<OutputPayload, String>> = coverage_reports
+        .par_iter()
+        .map(|path| parse_coverage_report(path))
+        .collect();
+
+    // Merge results sequentially to preserve file order (last file wins for duplicate keys).
     let mut output = OutputPayload::with_coverage_files(coverage_reports.clone());
-    for report_path in &coverage_reports {
-        parse_coverage_report(report_path, &mut output)?;
+    for partial in partial_outputs {
+        let partial = partial?;
+        output.covmap.extend(partial.covmap);
+        output.branch_cov_map.extend(partial.branch_cov_map);
     }
 
     let json_output = render_output_json(&output)?;

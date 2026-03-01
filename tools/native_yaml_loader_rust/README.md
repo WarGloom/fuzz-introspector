@@ -23,5 +23,6 @@ Outputs:
 
 Implementation note:
 
-- Uses `yaml_serde` for YAML parsing and `serde_json` for JSON I/O.
+- Uses `serde_yaml` for YAML parsing, `serde_json` for JSON I/O, and
+  `rayon` for parallel file loading in debug (multi-path) mode.
 - Per-file parse errors in debug mode are skipped and processing continues.

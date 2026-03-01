@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -286,15 +287,33 @@ func run() error {
 		return err
 	}
 
+	// Load and normalize all YAML files in parallel.
+	type loadResult struct {
+		value any
+		err   error
+	}
+	results := make([]loadResult, len(paths))
+	var wg sync.WaitGroup
+	for i, path := range paths {
+		wg.Add(1)
+		go func(idx int, p string) {
+			defer wg.Done()
+			v, loadErr := loadYAML(p)
+			results[idx] = loadResult{value: v, err: loadErr}
+		}(i, path)
+	}
+	wg.Wait()
+
+	// Merge results sequentially to preserve original file order.
 	items := make([]any, 0)
-	for _, path := range paths {
-		parsed, loadErr := loadYAML(path)
-		if loadErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to parse %s: %v\n", path, loadErr)
+	for i, path := range paths {
+		r := results[i]
+		if r.err != nil {
+			fmt.Fprintf(os.Stderr, "failed to parse %s: %v\n", path, r.err)
 			continue
 		}
 		var extended bool
-		items, extended = appendPythonExtend(items, parsed)
+		items, extended = appendPythonExtend(items, r.value)
 		if !extended {
 			fmt.Fprintf(os.Stderr,
 				"skipping non-iterable payload in %s\n", path)

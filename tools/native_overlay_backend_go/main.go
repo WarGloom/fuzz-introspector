@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 const schemaVersion = 1
@@ -279,14 +280,17 @@ func run() error {
 	branchComplexityPath := filepath.Join(req.OutputDir, "branch_complexities.json")
 	blockerPath := filepath.Join(req.OutputDir, "branch_blockers.json")
 
-	if err := writeJSON(overlayPath, nodes); err != nil {
-		return err
-	}
-	if err := writeJSON(branchComplexityPath, complexities); err != nil {
-		return err
-	}
-	if err := writeJSON(blockerPath, blockers); err != nil {
-		return err
+	errs := make([]error, 3)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() { defer wg.Done(); errs[0] = writeJSON(overlayPath, nodes) }()
+	go func() { defer wg.Done(); errs[1] = writeJSON(branchComplexityPath, complexities) }()
+	go func() { defer wg.Done(); errs[2] = writeJSON(blockerPath, blockers) }()
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
 	}
 
 	payload := response{

@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use std::collections::{HashMap, HashSet};
@@ -149,13 +150,6 @@ fn to_ms(duration: std::time::Duration) -> u64 {
     duration.as_millis() as u64
 }
 
-fn available_worker_count() -> usize {
-    std::thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(1)
-        .max(1)
-}
-
 fn extract_schema_version(raw_payload: &str) -> i64 {
     match serde_json::from_str::<JsonValue>(raw_payload) {
         Ok(payload) => payload
@@ -238,10 +232,8 @@ fn parse_records_from_file(path: &str) -> Result<Vec<JsonValue>, AppError> {
         return Ok(ndjson_records);
     }
 
-    // Fallback for full JSON/YAML payloads.
-    let file = File::open(path)
-        .map_err(|err| AppError::new("io_error", format!("failed opening {path}: {err}")))?;
-    let parsed = yaml_serde::from_reader::<_, JsonValue>(file).map_err(|err| {
+    // Fallback for full JSON/YAML payloads (reuse already-read string; no second file open).
+    let parsed: JsonValue = serde_yaml::from_str(&content).map_err(|err| {
         AppError::new(
             "parse_error",
             format!("failed parsing YAML/JSON in {path}: {err}"),
@@ -258,54 +250,15 @@ fn load_records_from_paths(paths: &[String]) -> Result<Vec<JsonValue>, AppError>
         return Ok(Vec::new());
     }
 
-    let worker_count = available_worker_count().min(paths.len());
-    if worker_count <= 1 {
-        let mut merged: Vec<JsonValue> = Vec::new();
-        for path in paths {
-            let mut records = parse_records_from_file(path)?;
-            merged.append(&mut records);
-        }
-        return Ok(merged);
-    }
-
-    let mut indexed_results: Vec<(usize, Result<Vec<JsonValue>, AppError>)> = Vec::new();
-    std::thread::scope(|scope| {
-        let mut handles = Vec::new();
-        for worker_idx in 0..worker_count {
-            handles.push(scope.spawn(move || {
-                let mut worker_results: Vec<(usize, Result<Vec<JsonValue>, AppError>)> = Vec::new();
-                for path_idx in (worker_idx..paths.len()).step_by(worker_count) {
-                    worker_results.push((path_idx, parse_records_from_file(&paths[path_idx])));
-                }
-                worker_results
-            }));
-        }
-
-        for handle in handles {
-            match handle.join() {
-                Ok(mut worker_results) => indexed_results.append(&mut worker_results),
-                Err(_) => indexed_results.push((
-                    usize::MAX,
-                    Err(AppError::new(
-                        "internal_error",
-                        "worker thread panicked while loading debug files",
-                    )),
-                )),
-            }
-        }
-    });
-
-    let mut per_file: Vec<Vec<JsonValue>> = vec![Vec::new(); paths.len()];
-    for (path_idx, records_result) in indexed_results {
-        if path_idx == usize::MAX {
-            return records_result;
-        }
-        per_file[path_idx] = records_result?;
-    }
+    // Parse all files in parallel; collect in original order to preserve determinism.
+    let per_file: Vec<Result<Vec<JsonValue>, AppError>> = paths
+        .par_iter()
+        .map(|path| parse_records_from_file(path))
+        .collect();
 
     let mut merged: Vec<JsonValue> = Vec::new();
-    for mut records in per_file {
-        merged.append(&mut records);
+    for result in per_file {
+        merged.extend(result?);
     }
     Ok(merged)
 }
@@ -782,69 +735,14 @@ fn correlate_chunk_parallel(
     function_chunk: &[FunctionEntry],
     type_map: &HashMap<i128, TypeEntry>,
 ) -> Vec<CorrelatedRecord> {
-    if function_chunk.is_empty() {
-        return Vec::new();
-    }
-
-    let worker_count = available_worker_count().min(function_chunk.len());
-    if worker_count <= 1 {
-        return function_chunk
-            .iter()
-            .map(|function| CorrelatedRecord {
-                row_idx: function.original_row_idx,
-                func_signature_elems: extract_debugged_function_signature(function, type_map),
-                source: extract_source_location(&function.file_location),
-            })
-            .collect();
-    }
-
-    let mut indexed_records: Vec<(usize, CorrelatedRecord)> =
-        Vec::with_capacity(function_chunk.len());
-
-    std::thread::scope(|scope| {
-        let mut handles = Vec::new();
-        for worker_idx in 0..worker_count {
-            handles.push(scope.spawn(move || {
-                let mut worker_records: Vec<(usize, CorrelatedRecord)> = Vec::new();
-                for chunk_offset in (worker_idx..function_chunk.len()).step_by(worker_count) {
-                    let function = &function_chunk[chunk_offset];
-                    worker_records.push((
-                        chunk_offset,
-                        CorrelatedRecord {
-                            row_idx: function.original_row_idx,
-                            func_signature_elems: extract_debugged_function_signature(
-                                function, type_map,
-                            ),
-                            source: extract_source_location(&function.file_location),
-                        },
-                    ));
-                }
-                worker_records
-            }));
-        }
-
-        for handle in handles {
-            if let Ok(mut worker_records) = handle.join() {
-                indexed_records.append(&mut worker_records);
-            }
-        }
-    });
-
-    if indexed_records.len() != function_chunk.len() {
-        return function_chunk
-            .iter()
-            .map(|function| CorrelatedRecord {
-                row_idx: function.original_row_idx,
-                func_signature_elems: extract_debugged_function_signature(function, type_map),
-                source: extract_source_location(&function.file_location),
-            })
-            .collect();
-    }
-
-    indexed_records.sort_by_key(|(chunk_offset, _)| *chunk_offset);
-    indexed_records
-        .into_iter()
-        .map(|(_, record)| record)
+    // rayon par_iter preserves order, so no post-sort or fallback path needed.
+    function_chunk
+        .par_iter()
+        .map(|function| CorrelatedRecord {
+            row_idx: function.original_row_idx,
+            func_signature_elems: extract_debugged_function_signature(function, type_map),
+            source: extract_source_location(&function.file_location),
+        })
         .collect()
 }
 

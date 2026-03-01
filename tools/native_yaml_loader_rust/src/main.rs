@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
 
+use rayon::prelude::*;
 use serde_json::Number;
 use serde_json::Value as JsonValue;
 
@@ -150,7 +151,7 @@ fn normalize_yaml(value: JsonValue) -> JsonValue {
 fn load_yaml(path: &str) -> Result<JsonValue, String> {
     let file = File::open(path).map_err(|err| format!("open error: {err}"))?;
     let parsed: JsonValue =
-        yaml_serde::from_reader(file).map_err(|err| format!("yaml parse error: {err}"))?;
+        serde_yaml::from_reader(file).map_err(|err| format!("yaml parse error: {err}"))?;
     Ok(normalize_yaml(parsed))
 }
 
@@ -191,27 +192,36 @@ fn handle_profile_mode(path: &str) -> Result<(), String> {
 }
 
 fn handle_debug_mode(paths: &[JsonValue]) -> Result<(), String> {
-    let mut items: Vec<JsonValue> = Vec::with_capacity(paths.len());
+    // Validate all paths upfront.
+    let string_paths: Vec<&str> = paths
+        .iter()
+        .map(|raw| {
+            raw.as_str()
+                .ok_or_else(|| "paths must be an array of strings".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
-    for raw_path in paths {
-        let Some(path) = raw_path.as_str() else {
-            return Err("paths must be an array of strings".to_string());
-        };
-
-        let parsed = match load_yaml(path) {
-            Ok(parsed) => parsed,
+    // Load and normalize all YAML files in parallel.
+    let loaded: Vec<Option<JsonValue>> = string_paths
+        .par_iter()
+        .map(|path| match load_yaml(path) {
+            Ok(parsed) => Some(parsed),
             Err(err) => {
                 eprintln!("failed to parse {path}: {err}");
-                continue;
+                None
             }
-        };
+        })
+        .collect();
 
+    // Merge results sequentially to preserve original order.
+    let mut items: Vec<JsonValue> = Vec::with_capacity(loaded.len());
+    for (idx, entry) in loaded.into_iter().enumerate() {
+        let Some(parsed) = entry else { continue };
         if !is_truthy(&parsed) {
             continue;
         }
-
         if let Err(err) = extend_python_style(&mut items, parsed) {
-            eprintln!("failed to parse {path}: {err}");
+            eprintln!("failed to parse {}: {err}", string_paths[idx]);
         }
     }
 

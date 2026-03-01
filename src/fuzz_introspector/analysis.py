@@ -61,8 +61,17 @@ FI_STAGE_WARN_SECONDS_DEFAULT = 0
 FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT = 0
 _BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
 _BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
-_SOURCES_SCAN_CACHE: dict[tuple[str, tuple[str, ...], str], frozenset[str]] = {}
+_SOURCES_SCAN_CACHE: dict[tuple[str, tuple[str, ...], str, str], frozenset[str]] = {}
 _OVERLAY_AUTHORITATIVE_LANGS = {"c-cpp"}
+
+
+def _matches_any_pattern(
+    path: str,
+    compiled_patterns: list[re.Pattern[str]],
+) -> bool:
+    """Return True if *path* matches any of the pre-compiled exclude patterns."""
+    normalized = os.path.normpath(path)
+    return any(p.search(normalized) for p in compiled_patterns)
 
 
 def _parse_profile_worker_count() -> int:
@@ -395,17 +404,26 @@ class IntrospectionProject:
                 self.base_folder, self.language, parallelise
             )
 
-        # Apply exclude patterns to filter out entire profiles and their functions
+        # Apply exclude patterns to filter out entire profiles and their functions.
+        # Always propagate the (possibly empty) pattern lists so every profile
+        # has a consistent state regardless of whether the guard below fires.
+        for profile in self.profiles:
+            profile.set_exclude_patterns(
+                self.exclude_patterns,
+                self.exclude_function_patterns,
+            )
+
         if self.exclude_patterns or self.exclude_function_patterns:
+            def _filter_func_dict(p, d):
+                return {
+                    name: func
+                    for name, func in d.items()
+                    if not p._should_exclude_function_profile(func)
+                }
+
             filtered_profiles = []
             for profile in self.profiles:
-                # Set the exclude patterns on the profile so the matching logic works
-                profile.set_exclude_patterns(
-                    self.exclude_patterns,
-                    self.exclude_function_patterns,
-                )
-
-                # Drop the entire profile if the fuzzer itself is a system path
+                # Drop the entire profile if the fuzzer itself matches an exclude pattern.
                 if profile._matches_exclude_pattern(profile.fuzzer_source_file):
                     logger.info(
                         "Skipping profile for excluded fuzzer source: %s",
@@ -413,17 +431,12 @@ class IntrospectionProject:
                     )
                     continue
 
-                # Filter functions within the profile
-                profile.all_class_functions = {
-                    name: func
-                    for name, func in profile.all_class_functions.items()
-                    if not profile._should_exclude_function_profile(func)
-                }
-                profile.all_class_constructors = {
-                    name: func
-                    for name, func in profile.all_class_constructors.items()
-                    if not profile._should_exclude_function_profile(func)
-                }
+                profile.all_class_functions = _filter_func_dict(
+                    profile, profile.all_class_functions
+                )
+                profile.all_class_constructors = _filter_func_dict(
+                    profile, profile.all_class_constructors
+                )
                 filtered_profiles.append(profile)
 
             self.profiles = filtered_profiles
@@ -803,23 +816,7 @@ def get_node_coverage_hitcount(
             )
             if ih:
                 node_hitcount = 200
-        elif profile.target_lang == "jvm":
-            coverage_data = profile.coverage.get_hit_details(
-                callstack_get_parent(node, callstack)
-            )
-            for n_line_number, hit_count_cov in coverage_data:
-                logger.debug("  - iterating %d : %d", n_line_number, hit_count_cov)
-                if n_line_number == node.src_linenumber and hit_count_cov > 0:
-                    node_hitcount = hit_count_cov
-        elif profile.target_lang == "rust":
-            coverage_data = profile.coverage.get_hit_details(
-                callstack_get_parent(node, callstack)
-            )
-            for n_line_number, hit_count_cov in coverage_data:
-                logger.debug("  - iterating %d : %d", n_line_number, hit_count_cov)
-                if n_line_number == node.src_linenumber and hit_count_cov > 0:
-                    node_hitcount = hit_count_cov
-        elif profile.target_lang == "go":
+        elif profile.target_lang in ("jvm", "rust", "go"):
             coverage_data = profile.coverage.get_hit_details(
                 callstack_get_parent(node, callstack)
             )
@@ -1228,8 +1225,8 @@ def _compare_overlay_outputs(
                 len(native_items) - len(python_items)
             )
             continue
-        for idx in range(len(native_items)):
-            if native_items[idx] != python_items[idx]:
+        for native_item, python_item in zip(native_items, python_items):
+            if native_item != python_item:
                 mismatch_counts[f"{key}_values"] += 1
 
     return mismatch_counts
@@ -1638,7 +1635,6 @@ def _overlay_calltree_with_coverage_python(
             forward_red += 1
             idx2 += 1
         prev_end = idx2 - 1
-        # logger.info("Assigning forward red: %d for index %d"%(forward_red, idx1))
         n1.cov_forward_reds = forward_red
         n1.cov_largest_blocked_func = largest_blocked_name
 
@@ -1851,15 +1847,12 @@ def detect_branch_level_blockers(
 
 
 def extract_namespace(mangled_function_name, return_type=None):
-    # logger.info("Demangling: %s" % (mangled_function_name))
     demangled_func_name = utils.demangle_rust_func(
         utils.demangle_cpp_func(mangled_function_name)
     )
-    # logger.info("Demangled name: %s" % (demangled_func_name))
     if return_type is not None and demangled_func_name.startswith(f"{return_type} "):
         return_type_offset = len(return_type) + 1
         demangled_func_name = demangled_func_name[return_type_offset:]
-        # logger.info("Removed function type: %s" % (demangled_func_name))
     if "::" not in demangled_func_name:
         return []
 
@@ -2053,7 +2046,6 @@ def correlate_introspector_func_to_debug_information(
             return func_signature, debug_function
 
     # We could not find the right one, let's search more broadly for it.
-    del all_debug_functions
     source_file = os.path.normpath(if_func.get("Functions filename", ""))
     source_line_begin = _safe_int(if_func.get("source_line_begin"), default=None)
     if source_line_begin is None:
@@ -2256,19 +2248,12 @@ def _scan_source_tree(
         "/src/source-code/",
     ]
 
-    def is_excluded_by_pattern(path):
-        normalized_path = os.path.normpath(path)
-        for pattern in compiled_exclude_patterns:
-            if pattern.search(normalized_path):
-                return True
-        return False
-
     def is_interesting_source_file(path):
         if not any(path.endswith(ext) for ext in source_extensions):
             return False
-        if is_excluded_by_pattern(path):
+        if _matches_any_pattern(path, compiled_exclude_patterns):
             return False
-        if any([avoid in path for avoid in to_avoid]):
+        if any(avoid in path for avoid in to_avoid):
             return False
         if path.startswith("/src/source-code"):
             return False
@@ -2280,7 +2265,7 @@ def _scan_source_tree(
         dirs[:] = [
             d
             for d in dirs
-            if not is_excluded_by_pattern(os.path.join(root, d))
+            if not _matches_any_pattern(os.path.join(root, d), compiled_exclude_patterns)
             and not any(avoid in os.path.join(root, d) for avoid in to_avoid)
         ]
         for f in files:
@@ -2420,17 +2405,10 @@ def extract_tests_from_directories(
         "/src/inspector",
     ]
 
-    def is_excluded_by_pattern(path):
-        normalized_path = os.path.normpath(path)
-        for pattern in compiled_exclude_patterns:
-            if pattern.search(normalized_path):
-                return True
-        return False
-
     def is_candidate_source(absolute_path):
-        if is_excluded_by_pattern(absolute_path):
+        if _matches_any_pattern(absolute_path, compiled_exclude_patterns):
             return False
-        if any([avoid in absolute_path for avoid in to_avoid]):
+        if any(avoid in absolute_path for avoid in to_avoid):
             return False
         if absolute_path.startswith("/out/"):
             return False
@@ -2584,7 +2562,7 @@ def _extract_test_information_jvm():
         for root, _, files in os.walk(test_path):
             for file in files:
                 if file.endswith(source_code_extensions):
-                    path = os.path.join(root, file).replace(f"{test_path}/", "")
+                    path = os.path.relpath(os.path.join(root, file), test_path)
                     all_test_files.add(path)
 
     # Walk through all the packages under source paths and locate example sources
@@ -2594,7 +2572,7 @@ def _extract_test_information_jvm():
                 if file.endswith(source_code_extensions) and any(
                     inspiration in file for inspiration in inspirations
                 ):
-                    path = os.path.join(root, file).replace(f"{source_path}/", "")
+                    path = os.path.relpath(os.path.join(root, file), source_path)
                     all_test_files.add(path)
 
     # Walk through all the files under possible sample path and locate example sources
@@ -2602,7 +2580,7 @@ def _extract_test_information_jvm():
         for root, _, files in os.walk(sample_path):
             for file in files:
                 if file.endswith(source_code_extensions):
-                    path = os.path.join(root, file).replace(f"{sample_path}/", "")
+                    path = os.path.relpath(os.path.join(root, file), sample_path)
                     all_test_files.add(path)
 
     return all_test_files
@@ -2625,7 +2603,7 @@ def light_correlate_source_to_executable(language, exclude_patterns=None):
         if cov_report.endswith(".covreport"):
             cov_reports.append(os.path.join(textcov_dir, cov_report))
     for cov_report in cov_reports:
-        print("- cov report: %s" % (cov_report))
+        logger.info("- cov report: %s", cov_report)
 
     all_source_files = extract_all_sources(language, exclude_patterns)
     pairs = []

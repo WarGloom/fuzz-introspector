@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type inputPayload struct {
@@ -247,13 +248,15 @@ func makeCoverageKey(functionName string, lineNo int, columnNo int) string {
 	return functionName + ":" + strconv.Itoa(lineNo) + "," + strconv.Itoa(columnNo)
 }
 
-func parseCoverageReport(path string, out *outputPayload) error {
+func parseCoverageReport(path string) (map[string][][]int, map[string][]int, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	defer file.Close()
 
+	covMap := map[string][][]int{}
+	branchCovMap := map[string][]int{}
 	currentFunc := ""
 	currentFuncCoverage := make([][]int, 0, 64)
 	switchString := ""
@@ -271,13 +274,13 @@ func parseCoverageReport(path string, out *outputPayload) error {
 		//   LLVMFuzzerTestOneInput:
 		if len(line) > 0 && line[len(line)-1] == ':' && !strings.Contains(line, "|") {
 			if currentFunc != "" {
-				out.CovMap[currentFunc] = currentFuncCoverage
+				covMap[currentFunc] = currentFuncCoverage
 			}
 			currentFunc = extractFunctionName(line)
 			switchString = ""
 			switchLineNumber = -1
 			clear(caseLineNumbers)
-			if existing, exists := out.CovMap[currentFunc]; exists {
+			if existing, exists := covMap[currentFunc]; exists {
 				currentFuncCoverage = existing[:0]
 			} else {
 				currentFuncCoverage = make([][]int, 0, 64)
@@ -293,17 +296,17 @@ func parseCoverageReport(path string, out *outputPayload) error {
 			branchLine, branchCol, trueHit, falseHit, ok := parseBranchLine(line)
 			if ok {
 				if switchLineNumber > 0 && branchLine == switchLineNumber {
-					out.BranchCovMap[switchString] = []int{trueHit, falseHit}
+					branchCovMap[switchString] = []int{trueHit, falseHit}
 				} else if _, seenCase := caseLineNumbers[branchLine]; seenCase {
-					existing, exists := out.BranchCovMap[switchString]
+					existing, exists := branchCovMap[switchString]
 					if !exists {
-						out.BranchCovMap[switchString] = []int{trueHit, falseHit, trueHit}
+						branchCovMap[switchString] = []int{trueHit, falseHit, trueHit}
 					} else {
-						out.BranchCovMap[switchString] = append(existing, trueHit)
+						branchCovMap[switchString] = append(existing, trueHit)
 					}
 				} else {
 					branchKey := makeCoverageKey(currentFunc, branchLine, branchCol)
-					out.BranchCovMap[branchKey] = []int{trueHit, falseHit}
+					branchCovMap[branchKey] = []int{trueHit, falseHit}
 				}
 			}
 		}
@@ -339,12 +342,12 @@ func parseCoverageReport(path string, out *outputPayload) error {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return err
+		return nil, nil, err
 	}
 	if currentFunc != "" {
-		out.CovMap[currentFunc] = currentFuncCoverage
+		covMap[currentFunc] = currentFuncCoverage
 	}
-	return nil
+	return covMap, branchCovMap, nil
 }
 
 func run() error {
@@ -364,9 +367,32 @@ func run() error {
 		CoverageFiles: append([]string{}, input.CoverageReports...),
 	}
 
-	for _, reportPath := range input.CoverageReports {
-		if err := parseCoverageReport(reportPath, &output); err != nil {
-			return fmt.Errorf("failed parsing coverage report %s: %w", reportPath, err)
+	type partialCoverage struct {
+		covMap       map[string][][]int
+		branchCovMap map[string][]int
+		path         string
+		err          error
+	}
+	results := make([]partialCoverage, len(input.CoverageReports))
+	var wg sync.WaitGroup
+	for i, reportPath := range input.CoverageReports {
+		wg.Add(1)
+		go func(idx int, path string) {
+			defer wg.Done()
+			covMap, branchCovMap, err := parseCoverageReport(path)
+			results[idx] = partialCoverage{covMap: covMap, branchCovMap: branchCovMap, path: path, err: err}
+		}(i, reportPath)
+	}
+	wg.Wait()
+	for _, r := range results {
+		if r.err != nil {
+			return fmt.Errorf("failed parsing coverage report %s: %w", r.path, r.err)
+		}
+		for k, v := range r.covMap {
+			output.CovMap[k] = v
+		}
+		for k, v := range r.branchCovMap {
+			output.BranchCovMap[k] = v
 		}
 	}
 
