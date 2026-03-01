@@ -101,10 +101,9 @@ FI_OVERLAY_PARITY_MISMATCH = "FI_OVERLAY_PARITY_MISMATCH"
 class CorrelatorBackendError(RuntimeError):
     """Error raised when strict correlator backend mode is enabled."""
 
-    def __init__(self,
-                 reason_code: str,
-                 message: str,
-                 details: dict[str, Any] | None = None):
+    def __init__(
+        self, reason_code: str, message: str, details: dict[str, Any] | None = None
+    ):
         self.reason_code = reason_code
         self.details = details or {}
         super().__init__(f"{reason_code}: {message}")
@@ -113,10 +112,9 @@ class CorrelatorBackendError(RuntimeError):
 class OverlayBackendError(RuntimeError):
     """Error raised when strict overlay backend mode is enabled."""
 
-    def __init__(self,
-                 reason_code: str,
-                 message: str,
-                 details: dict[str, Any] | None = None):
+    def __init__(
+        self, reason_code: str, message: str, details: dict[str, Any] | None = None
+    ):
         self.reason_code = reason_code
         self.details = details or {}
         super().__init__(f"{reason_code}: {message}")
@@ -162,8 +160,7 @@ def parse_backend_env(
     return default
 
 
-def resolve_backend_command(command_env_prefix: str,
-                            backend: str) -> list[str] | None:
+def resolve_backend_command(command_env_prefix: str, backend: str) -> list[str] | None:
     """Resolve backend command from env vars.
 
     Lookup order:
@@ -171,8 +168,7 @@ def resolve_backend_command(command_env_prefix: str,
     2) <PREFIX>_BIN
     """
     candidates = [f"{command_env_prefix}_{backend.upper()}_BIN"]
-    if command_env_prefix == "FI_OVERLAY" and backend in (BACKEND_RUST,
-                                                          BACKEND_GO):
+    if command_env_prefix == "FI_OVERLAY" and backend in (BACKEND_RUST, BACKEND_GO):
         candidates.append(f"{command_env_prefix}_{BACKEND_NATIVE.upper()}_BIN")
     candidates.append(f"{command_env_prefix}_BIN")
 
@@ -184,8 +180,7 @@ def resolve_backend_command(command_env_prefix: str,
         try:
             cmd_parts = shlex.split(raw_cmd)
         except ValueError as err:
-            logger.warning("Invalid command in %s=%r: %s", env_name, raw_cmd,
-                           err)
+            logger.warning("Invalid command in %s=%r: %s", env_name, raw_cmd, err)
             return None
         if cmd_parts:
             return cmd_parts
@@ -215,7 +210,8 @@ def _resolve_overlay_native_command_with_fallback(
         return None, checked_candidates
 
     repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
+        os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
+    )
     rust_repo_candidate = os.path.join(
         repo_root,
         "tools",
@@ -225,23 +221,28 @@ def _resolve_overlay_native_command_with_fallback(
         "native_overlay_backend_rust",
     )
     rust_repo_found = os.path.isfile(rust_repo_candidate) and os.access(
-        rust_repo_candidate, os.X_OK)
-    checked_candidates.append({
-        "source": "repo",
-        "candidate": rust_repo_candidate,
-        "found": rust_repo_found,
-    })
+        rust_repo_candidate, os.X_OK
+    )
+    checked_candidates.append(
+        {
+            "source": "repo",
+            "candidate": rust_repo_candidate,
+            "found": rust_repo_found,
+        }
+    )
     if rust_repo_found:
         return [rust_repo_candidate], checked_candidates
 
     rust_path_candidate = "native_overlay_backend_rust"
     rust_path_resolved = shutil.which(rust_path_candidate)
-    checked_candidates.append({
-        "source": "path",
-        "candidate": rust_path_candidate,
-        "resolved": rust_path_resolved,
-        "found": bool(rust_path_resolved),
-    })
+    checked_candidates.append(
+        {
+            "source": "path",
+            "candidate": rust_path_candidate,
+            "resolved": rust_path_resolved,
+            "found": bool(rust_path_resolved),
+        }
+    )
     if rust_path_resolved:
         return [rust_path_resolved], checked_candidates
 
@@ -252,23 +253,28 @@ def _resolve_overlay_native_command_with_fallback(
         "native_overlay_backend_go",
     )
     go_repo_found = os.path.isfile(go_repo_candidate) and os.access(
-        go_repo_candidate, os.X_OK)
-    checked_candidates.append({
-        "source": "repo",
-        "candidate": go_repo_candidate,
-        "found": go_repo_found,
-    })
+        go_repo_candidate, os.X_OK
+    )
+    checked_candidates.append(
+        {
+            "source": "repo",
+            "candidate": go_repo_candidate,
+            "found": go_repo_found,
+        }
+    )
     if go_repo_found:
         return [go_repo_candidate], checked_candidates
 
     go_path_candidate = "native_overlay_backend_go"
     go_path_resolved = shutil.which(go_path_candidate)
-    checked_candidates.append({
-        "source": "path",
-        "candidate": go_path_candidate,
-        "resolved": go_path_resolved,
-        "found": bool(go_path_resolved),
-    })
+    checked_candidates.append(
+        {
+            "source": "path",
+            "candidate": go_path_candidate,
+            "resolved": go_path_resolved,
+            "found": bool(go_path_resolved),
+        }
+    )
     if go_path_resolved:
         return [go_path_resolved], checked_candidates
 
@@ -276,8 +282,10 @@ def _resolve_overlay_native_command_with_fallback(
 
 
 def _build_overlay_command_env_hint(command_env_prefix: str) -> str:
-    return (f"Set {command_env_prefix}_{BACKEND_NATIVE.upper()}_BIN or "
-            f"{command_env_prefix}_BIN")
+    return (
+        f"Set {command_env_prefix}_{BACKEND_NATIVE.upper()}_BIN or "
+        f"{command_env_prefix}_BIN"
+    )
 
 
 def resolve_overlay_backend_command_with_details(
@@ -285,10 +293,10 @@ def resolve_overlay_backend_command_with_details(
     command_env_prefix: str = "FI_OVERLAY",
 ) -> tuple[list[str] | None, dict[str, Any]]:
     """Resolve overlay command and deterministic command-missing details."""
-    execution_backend = _map_overlay_backend_to_execution_backend(
-        selected_backend)
+    execution_backend = _map_overlay_backend_to_execution_backend(selected_backend)
     command, checked_candidates = _resolve_overlay_native_command_with_fallback(
-        command_env_prefix, execution_backend)
+        command_env_prefix, execution_backend
+    )
     details = {
         "backend": selected_backend,
         "execution_backend": execution_backend,
@@ -299,9 +307,9 @@ def resolve_overlay_backend_command_with_details(
     return command, details
 
 
-def run_external_json_loader(command: list[str],
-                             payload: dict[str, Any],
-                             timeout_seconds: int = 0) -> Any | None:
+def run_external_json_loader(
+    command: list[str], payload: dict[str, Any], timeout_seconds: int = 0
+) -> Any | None:
     """Run an external loader process using JSON stdin/stdout protocol."""
     timeout = timeout_seconds if timeout_seconds > 0 else None
     try:
@@ -314,8 +322,7 @@ def run_external_json_loader(command: list[str],
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError) as err:
-        logger.warning("External loader execution failed for %s: %s", command,
-                       err)
+        logger.warning("External loader execution failed for %s: %s", command, err)
         return None
 
     if completed.returncode != 0:
@@ -329,15 +336,13 @@ def run_external_json_loader(command: list[str],
 
     stdout = (completed.stdout or "").strip()
     if not stdout:
-        logger.warning("External loader returned empty payload for %s",
-                       command)
+        logger.warning("External loader returned empty payload for %s", command)
         return None
 
     try:
         return json.loads(stdout)
     except json.JSONDecodeError as err:
-        logger.warning("External loader returned invalid JSON for %s: %s",
-                       command, err)
+        logger.warning("External loader returned invalid JSON for %s: %s", command, err)
         return None
 
 
@@ -374,8 +379,9 @@ def load_json_with_backend(
             try:
                 timeout_seconds = int(raw_timeout)
             except ValueError:
-                logger.warning("Invalid %s=%r; ignoring timeout", timeout_env,
-                               raw_timeout)
+                logger.warning(
+                    "Invalid %s=%r; ignoring timeout", timeout_env, raw_timeout
+                )
 
     result = run_external_json_loader(command, payload, timeout_seconds)
     if result is None:
@@ -384,7 +390,8 @@ def load_json_with_backend(
 
 
 def parse_correlator_backend_env(
-    env_name: str = "FI_DEBUG_CORRELATOR_BACKEND", ) -> str:
+    env_name: str = "FI_DEBUG_CORRELATOR_BACKEND",
+) -> str:
     """Resolve correlator backend selector."""
     raw = os.environ.get(env_name, "").strip().lower()
     if not raw:
@@ -408,7 +415,8 @@ def _map_overlay_backend_to_execution_backend(backend: str) -> str:
 
 
 def parse_overlay_backend_selection(
-    env_name: str = "FI_OVERLAY_BACKEND", ) -> OverlayBackendSelection:
+    env_name: str = "FI_OVERLAY_BACKEND",
+) -> OverlayBackendSelection:
     """Resolve overlay backend selector and canonical execution backend."""
     raw = os.environ.get(env_name, "").strip().lower()
     if not raw:
@@ -432,25 +440,32 @@ def parse_overlay_backend_selection(
     return OverlayBackendSelection(BACKEND_PYTHON, BACKEND_PYTHON)
 
 
-def parse_overlay_backend_env(env_name: str = "FI_OVERLAY_BACKEND", ) -> str:
+def parse_overlay_backend_env(
+    env_name: str = "FI_OVERLAY_BACKEND",
+) -> str:
     """Resolve requested overlay backend selector."""
     return parse_overlay_backend_selection(env_name).requested_backend
 
 
-def parse_overlay_strict_mode(env_name: str = "FI_OVERLAY_STRICT", ) -> bool:
+def parse_overlay_strict_mode(
+    env_name: str = "FI_OVERLAY_STRICT",
+) -> bool:
     """Return strict mode state for overlay backend selection."""
     raw = os.environ.get(env_name, "").strip().lower()
     return raw == "1"
 
 
-def parse_overlay_shadow_mode(env_name: str = "FI_OVERLAY_SHADOW", ) -> bool:
+def parse_overlay_shadow_mode(
+    env_name: str = "FI_OVERLAY_SHADOW",
+) -> bool:
     """Return shadow mode state for overlay backend selection."""
     raw = os.environ.get(env_name, "").strip().lower()
     return raw == "1"
 
 
 def parse_correlator_strict_mode(
-    env_name: str = "FI_DEBUG_CORRELATOR_STRICT", ) -> bool:
+    env_name: str = "FI_DEBUG_CORRELATOR_STRICT",
+) -> bool:
     """Return strict mode state for correlator backend selection."""
     raw = os.environ.get(env_name, "").strip().lower()
     return raw == "1"
@@ -462,8 +477,7 @@ def _format_reason_details(details: dict[str, Any] | None) -> str:
     return json.dumps(details, sort_keys=True, default=str)
 
 
-def _terminate_process_group(proc: subprocess.Popen[Any],
-                             grace_seconds: int) -> str:
+def _terminate_process_group(proc: subprocess.Popen[Any], grace_seconds: int) -> str:
     if proc.poll() is not None:
         return "already_exited"
 
@@ -512,14 +526,34 @@ def _parse_timeout_seconds(timeout_env: str) -> int:
     try:
         timeout_value = int(raw_timeout)
     except ValueError:
-        logger.warning("Invalid %s=%r; ignoring timeout", timeout_env,
-                       raw_timeout)
+        logger.warning("Invalid %s=%r; ignoring timeout", timeout_env, raw_timeout)
         return 0
     if timeout_value <= 0:
-        logger.warning("Invalid %s=%r; timeout must be positive", timeout_env,
-                       raw_timeout)
+        logger.warning(
+            "Invalid %s=%r; timeout must be positive", timeout_env, raw_timeout
+        )
         return 0
     return timeout_value
+
+
+def _parse_max_loop_iterations(
+    env_var: str = "FI_DEBUG_CORRELATOR_MAX_ITERATIONS",
+) -> int:
+    """Parse max loop iterations from environment, with sensible default."""
+    raw_value = os.environ.get(env_var, "").strip()
+    if not raw_value:
+        return 100000  # Default: 1000 seconds at 0.01s/iteration
+    try:
+        iterations = int(raw_value)
+    except ValueError:
+        logger.warning("Invalid %s=%r; using default 100000", env_var, raw_value)
+        return 100000
+    if iterations <= 0:
+        logger.warning(
+            "Invalid %s=%r; must be positive, using default 100000", env_var, raw_value
+        )
+        return 100000
+    return iterations
 
 
 def _handle_correlator_failure(
@@ -540,8 +574,7 @@ def _handle_correlator_failure(
 
     detail_text = _format_reason_details(merged_details)
     if detail_text:
-        logger.warning("%s: %s | details=%s", reason_code, message,
-                       detail_text)
+        logger.warning("%s: %s | details=%s", reason_code, message, detail_text)
     else:
         logger.warning("%s: %s", reason_code, message)
 
@@ -557,14 +590,13 @@ def _handle_correlator_failure(
 
 
 def _validate_correlator_response(
-    response: Any, ) -> tuple[str, str, dict[str, Any]] | None:
+    response: Any,
+) -> tuple[str, str, dict[str, Any]] | None:
     if not isinstance(response, dict):
         return (
             FI_CORR_SCHEMA_ERROR,
             "Correlator response must be a JSON object",
-            {
-                "response_type": type(response).__name__
-            },
+            {"response_type": type(response).__name__},
         )
 
     missing_keys = [
@@ -574,9 +606,7 @@ def _validate_correlator_response(
         return (
             FI_CORR_SCHEMA_ERROR,
             "Correlator response missing required metadata keys",
-            {
-                "missing_keys": missing_keys
-            },
+            {"missing_keys": missing_keys},
         )
 
     schema_version = response.get("schema_version")
@@ -584,23 +614,17 @@ def _validate_correlator_response(
         return (
             FI_CORR_SCHEMA_ERROR,
             "Correlator response schema_version must be an int",
-            {
-                "schema_version_type": type(schema_version).__name__
-            },
+            {"schema_version_type": type(schema_version).__name__},
         )
     if schema_version != CORRELATOR_SCHEMA_VERSION:
         return (
             FI_CORR_SCHEMA_VERSION_MISMATCH,
             "Correlator response schema_version is unsupported",
-            {
-                "expected": CORRELATOR_SCHEMA_VERSION,
-                "actual": schema_version
-            },
+            {"expected": CORRELATOR_SCHEMA_VERSION, "actual": schema_version},
         )
 
     if not isinstance(response.get("status"), str):
-        return (FI_CORR_SCHEMA_ERROR,
-                "Correlator response status must be a string", {})
+        return (FI_CORR_SCHEMA_ERROR, "Correlator response status must be a string", {})
     if not isinstance(response.get("counters"), dict):
         return (
             FI_CORR_SCHEMA_ERROR,
@@ -630,8 +654,7 @@ def _handle_overlay_failure(
 ) -> OverlayBackendResult:
     detail_text = _format_reason_details(details)
     if detail_text:
-        logger.warning("%s: %s | details=%s", reason_code, message,
-                       detail_text)
+        logger.warning("%s: %s | details=%s", reason_code, message, detail_text)
     else:
         logger.warning("%s: %s", reason_code, message)
 
@@ -647,14 +670,13 @@ def _handle_overlay_failure(
 
 
 def _validate_overlay_response(
-    response: Any, ) -> tuple[str, str, dict[str, Any]] | None:
+    response: Any,
+) -> tuple[str, str, dict[str, Any]] | None:
     if not isinstance(response, dict):
         return (
             FI_OVERLAY_SCHEMA_ERROR,
             "Overlay response must be a JSON object",
-            {
-                "response_type": type(response).__name__
-            },
+            {"response_type": type(response).__name__},
         )
 
     missing_keys = [
@@ -664,9 +686,7 @@ def _validate_overlay_response(
         return (
             FI_OVERLAY_SCHEMA_ERROR,
             "Overlay response missing required metadata keys",
-            {
-                "missing_keys": missing_keys
-            },
+            {"missing_keys": missing_keys},
         )
 
     schema_version = response.get("schema_version")
@@ -674,24 +694,18 @@ def _validate_overlay_response(
         return (
             FI_OVERLAY_SCHEMA_ERROR,
             "Overlay response schema_version must be an int",
-            {
-                "schema_version_type": type(schema_version).__name__
-            },
+            {"schema_version_type": type(schema_version).__name__},
         )
     if schema_version != OVERLAY_SCHEMA_VERSION:
         return (
             FI_OVERLAY_SCHEMA_VERSION_MISMATCH,
             "Overlay response schema_version is unsupported",
-            {
-                "expected": OVERLAY_SCHEMA_VERSION,
-                "actual": schema_version
-            },
+            {"expected": OVERLAY_SCHEMA_VERSION, "actual": schema_version},
         )
 
     status = response.get("status")
     if not isinstance(status, str):
-        return (FI_OVERLAY_SCHEMA_ERROR,
-                "Overlay response status must be a string", {})
+        return (FI_OVERLAY_SCHEMA_ERROR, "Overlay response status must be a string", {})
 
     if not isinstance(response.get("counters"), dict):
         return (
@@ -722,16 +736,13 @@ def _validate_overlay_response(
         return (
             FI_OVERLAY_SCHEMA_ERROR,
             "Overlay response artifacts must include non-empty file paths",
-            {
-                "invalid_artifact_keys": invalid_artifact_keys
-            },
+            {"invalid_artifact_keys": invalid_artifact_keys},
         )
 
     return None
 
 
 class _BoundedStreamReader(threading.Thread):
-
     def __init__(
         self,
         stream: Any,
@@ -833,7 +844,8 @@ def run_overlay_backend(
         selection = OverlayBackendSelection(
             requested_backend=selected_backend,
             execution_backend=_map_overlay_backend_to_execution_backend(
-                selected_backend),
+                selected_backend
+            ),
         )
     command, missing_command_details = resolve_overlay_backend_command_with_details(
         selected_backend,
@@ -864,8 +876,7 @@ def run_overlay_backend(
             reason_details=missing_command_details,
         )
 
-    logger.info("[overlay] using %s backend (%s)", selected_backend,
-                command[0])
+    logger.info("[overlay] using %s backend (%s)", selected_backend, command[0])
     request_payload = dict(payload)
     request_payload["schema_version"] = OVERLAY_SCHEMA_VERSION
     timeout_seconds = _parse_timeout_seconds(timeout_env)
@@ -915,7 +926,8 @@ def run_overlay_backend(
                 proc.stdin.close()
         except (BrokenPipeError, OSError, ValueError) as err:
             cleanup_status = _terminate_process_group(
-                proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+            )
             return _handle_overlay_failure(
                 FI_OVERLAY_EXECUTION_FAILED,
                 "Overlay backend stdin write failed",
@@ -929,18 +941,19 @@ def run_overlay_backend(
             )
 
         _loop_iteration = 0
-        _max_loop_iterations = 10000  # 100 s at 0.01 s/iteration; defensive ceiling
+        _max_loop_iterations = _parse_max_loop_iterations()
         try:
             while True:
                 _loop_iteration += 1
                 if _loop_iteration > _max_loop_iterations:
                     logger.error(
                         "[overlay] process monitor loop exceeded %d iterations; "
-                        "forcing termination",
+                        "forcing termination (adjust via FI_DEBUG_CORRELATOR_MAX_ITERATIONS if needed)",
                         _max_loop_iterations,
                     )
                     cleanup_status = _terminate_process_group(
-                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
                     return _handle_overlay_failure(
                         FI_OVERLAY_EXECUTION_FAILED,
                         "Process monitoring loop exceeded iteration limit",
@@ -955,7 +968,8 @@ def run_overlay_backend(
                 if timeout is not None and elapsed > timeout:
                     elapsed_ms = int(elapsed * 1000)
                     cleanup_status = _terminate_process_group(
-                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
                     return _handle_overlay_failure(
                         FI_OVERLAY_TIMEOUT,
                         "Overlay backend timed out",
@@ -970,7 +984,8 @@ def run_overlay_backend(
 
                 if stdout_reader.overflowed:
                     cleanup_status = _terminate_process_group(
-                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
                     return _handle_overlay_failure(
                         FI_OVERLAY_STDOUT_TOO_LARGE,
                         "Overlay backend stdout exceeded metadata-only limit",
@@ -985,7 +1000,8 @@ def run_overlay_backend(
 
                 if stderr_reader.overflowed:
                     cleanup_status = _terminate_process_group(
-                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
                     return _handle_overlay_failure(
                         FI_OVERLAY_STDERR_TOO_LARGE,
                         "Overlay backend stderr exceeded cap; process terminated",
@@ -1000,7 +1016,8 @@ def run_overlay_backend(
 
                 if stdout_reader.error is not None:
                     cleanup_status = _terminate_process_group(
-                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
                     return _handle_overlay_failure(
                         FI_OVERLAY_EXECUTION_FAILED,
                         "Overlay backend stdout read failed during execution",
@@ -1014,7 +1031,8 @@ def run_overlay_backend(
 
                 if stderr_reader.error is not None:
                     cleanup_status = _terminate_process_group(
-                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
                     return _handle_overlay_failure(
                         FI_OVERLAY_EXECUTION_FAILED,
                         "Overlay backend stderr read failed during execution",
@@ -1026,9 +1044,9 @@ def run_overlay_backend(
                         },
                     )
 
-                if proc.poll() is not None and (not stdout_reader.is_alive()
-                                                and
-                                                not stderr_reader.is_alive()):
+                if proc.poll() is not None and (
+                    not stdout_reader.is_alive() and not stderr_reader.is_alive()
+                ):
                     break
 
                 time.sleep(0.01)
@@ -1037,7 +1055,8 @@ def run_overlay_backend(
             stderr_reader.join(timeout=0.1)
         except (OSError, subprocess.SubprocessError) as err:
             cleanup_status = _terminate_process_group(
-                proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+            )
             return _handle_overlay_failure(
                 FI_OVERLAY_EXECUTION_FAILED,
                 "Overlay backend communication failed",
@@ -1115,8 +1134,7 @@ def run_overlay_backend(
     if validation_error is not None:
         reason_code, message, details = validation_error
         details["backend"] = selected_backend
-        return _handle_overlay_failure(reason_code, message, strict_mode,
-                                       details)
+        return _handle_overlay_failure(reason_code, message, strict_mode, details)
 
     response_status = response.get("status")
     if response_status not in ("success", "ok"):
@@ -1188,8 +1206,7 @@ def run_correlator_backend(
             reason_details=missing_details,
         )
 
-    logger.info("[correlator] using %s backend (%s)", selected_backend,
-                command[0])
+    logger.info("[correlator] using %s backend (%s)", selected_backend, command[0])
     request_payload = dict(payload)
     request_payload["schema_version"] = CORRELATOR_SCHEMA_VERSION
     timeout_seconds = _parse_timeout_seconds(timeout_env)
@@ -1240,7 +1257,8 @@ def run_correlator_backend(
                 proc.stdin.close()
         except (BrokenPipeError, OSError, ValueError) as err:
             cleanup_status = _terminate_process_group(
-                proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+            )
             return _handle_correlator_failure(
                 FI_CORR_EXECUTION_FAILED,
                 "Correlator backend stdin write failed",
@@ -1255,18 +1273,19 @@ def run_correlator_backend(
             )
 
         _loop_iteration = 0
-        _max_loop_iterations = 10000  # 100 s at 0.01 s/iteration; defensive ceiling
+        _max_loop_iterations = _parse_max_loop_iterations()
         try:
             while True:
                 _loop_iteration += 1
                 if _loop_iteration > _max_loop_iterations:
                     logger.error(
                         "[correlator] process monitor loop exceeded %d iterations; "
-                        "forcing termination",
+                        "forcing termination (adjust via FI_DEBUG_CORRELATOR_MAX_ITERATIONS if needed)",
                         _max_loop_iterations,
                     )
                     cleanup_status = _terminate_process_group(
-                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
                     return _handle_correlator_failure(
                         FI_CORR_EXECUTION_FAILED,
                         "Process monitoring loop exceeded iteration limit",
@@ -1282,7 +1301,8 @@ def run_correlator_backend(
                 if timeout is not None and elapsed > timeout:
                     elapsed_ms = int(elapsed * 1000)
                     cleanup_status = _terminate_process_group(
-                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
                     return _handle_correlator_failure(
                         FI_CORR_TIMEOUT,
                         "Correlator backend timed out",
@@ -1298,7 +1318,8 @@ def run_correlator_backend(
 
                 if stdout_reader.overflowed:
                     cleanup_status = _terminate_process_group(
-                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
                     return _handle_correlator_failure(
                         FI_CORR_STDOUT_TOO_LARGE,
                         "Correlator backend stdout exceeded metadata-only limit",
@@ -1314,7 +1335,8 @@ def run_correlator_backend(
 
                 if stdout_reader.error is not None:
                     cleanup_status = _terminate_process_group(
-                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
                     return _handle_correlator_failure(
                         FI_CORR_EXECUTION_FAILED,
                         "Correlator backend stdout read failed during execution",
@@ -1329,7 +1351,8 @@ def run_correlator_backend(
 
                 if stderr_reader.error is not None:
                     cleanup_status = _terminate_process_group(
-                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
                     return _handle_correlator_failure(
                         FI_CORR_EXECUTION_FAILED,
                         "Correlator backend stderr read failed during execution",
@@ -1342,9 +1365,9 @@ def run_correlator_backend(
                         },
                     )
 
-                if proc.poll() is not None and (not stdout_reader.is_alive()
-                                                and
-                                                not stderr_reader.is_alive()):
+                if proc.poll() is not None and (
+                    not stdout_reader.is_alive() and not stderr_reader.is_alive()
+                ):
                     break
 
                 time.sleep(0.01)
@@ -1353,7 +1376,8 @@ def run_correlator_backend(
             stderr_reader.join(timeout=0.1)
         except (OSError, subprocess.SubprocessError) as err:
             cleanup_status = _terminate_process_group(
-                proc, CORRELATOR_TIMEOUT_GRACE_SECONDS)
+                proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+            )
             return _handle_correlator_failure(
                 FI_CORR_EXECUTION_FAILED,
                 "Correlator backend communication failed",
@@ -1408,8 +1432,7 @@ def run_correlator_backend(
             },
         )
 
-    raw_stdout = stdout_reader.content.decode("utf-8",
-                                              errors="replace").strip()
+    raw_stdout = stdout_reader.content.decode("utf-8", errors="replace").strip()
     if not raw_stdout:
         return _handle_correlator_failure(
             FI_CORR_EMPTY_STDOUT,
@@ -1437,8 +1460,9 @@ def run_correlator_backend(
     if validation_error is not None:
         reason_code, message, details = validation_error
         details["backend"] = selected_backend
-        return _handle_correlator_failure(reason_code, message, strict_mode,
-                                          cleanup_hook, response, details)
+        return _handle_correlator_failure(
+            reason_code, message, strict_mode, cleanup_hook, response, details
+        )
 
     if response.get("status") != "success":
         return _handle_correlator_failure(
