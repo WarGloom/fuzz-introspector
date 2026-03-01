@@ -17,6 +17,7 @@ tests/java/.coverage
 tests/java/result/
 tests/tree-sitter-frontend/
 .pytest_cache/
+fuzzerLogFile-*
 
 .claude/settings.local.json
 .agents/

@@ -1,2 +1,0 @@
-Call tree
-LLVMFuzzerTestOneInput src/test/data/source-code/cpp/unicode-error/simple.cpp -1
