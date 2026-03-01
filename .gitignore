@@ -16,6 +16,7 @@ __pycache__/
 tests/java/.coverage
 tests/java/result/
 tests/tree-sitter-frontend/
+.pytest_cache/
 
 .claude/settings.local.json
 .agents/
