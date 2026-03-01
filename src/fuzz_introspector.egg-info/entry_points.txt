@@ -1,0 +1,2 @@
+[console_scripts]
+fuzz-introspector = fuzz_introspector.cli:main
