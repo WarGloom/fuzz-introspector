@@ -7,6 +7,14 @@ on:
       - 'src/**'
       - 'test/**'
       - '.github/workflows/testing.yml'
+  push:
+    branches:
+      - memory-improvements
+    paths:
+      - 'frontends/**'
+      - 'src/**'
+      - 'test/**'
+      - '.github/workflows/testing.yml'
 permissions: read-all
 jobs:
   unittests:

@@ -8,6 +8,13 @@ on:
       - 'tools/web-fuzzing-introspection/**'
       - '.github/helper/**'
       - '.github/workflows/webapp-api-test.yml'
+  push:
+    branches:
+      - memory-improvements
+    paths:
+      - 'tools/web-fuzzing-introspection/**'
+      - '.github/helper/**'
+      - '.github/workflows/webapp-api-test.yml'
 permissions: read-all
 jobs:
   build:

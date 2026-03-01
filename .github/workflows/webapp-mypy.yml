@@ -7,6 +7,12 @@ on:
     paths:
       - 'tools/web-fuzzing-introspection/**'
       - '.github/workflows/webapp-mypy.yml'
+  push:
+    branches:
+      - memory-improvements
+    paths:
+      - 'tools/web-fuzzing-introspection/**'
+      - '.github/workflows/webapp-mypy.yml'
 permissions: read-all
 jobs:
   build:
