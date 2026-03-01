@@ -19,6 +19,7 @@ This module provides functions to parse and extract debug information
 from various sources, including DWARF debug info and other debug formats.
 """
 
+import collections
 import hashlib
 import json
 import logging
@@ -34,15 +35,9 @@ import yaml
 
 logger = logging.getLogger(name=__name__)
 _T = TypeVar("_T")
-DebugPayload = tuple[
-    str,
-    dict[str, dict[str, str]],
-    dict[str, dict[str, Any]],
-    dict[str, dict[str, Any]],
-    dict[str, dict[str, Any]],
-    dict[str, str],
-    str | None,
-]
+DebugPayload = tuple[str, dict[str, dict[str, str]], dict[str, dict[str, Any]],
+                     dict[str, dict[str, Any]], dict[str, dict[str, Any]],
+                     dict[str, str], str | None, ]
 
 # Pre-compiled regex patterns for debug info parsing (performance optimization)
 # These patterns are used in extract_all_functions_in_debug_info
@@ -811,7 +806,8 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
     if selected_backend == "process":
         executor_worker_count = min(process_worker_count, worker_count)
 
-    raw_max_inflight = os.environ.get("FI_DEBUG_MAX_INFLIGHT_SHARDS", "").strip()
+    raw_max_inflight = os.environ.get("FI_DEBUG_MAX_INFLIGHT_SHARDS",
+                                      "").strip()
     if raw_max_inflight:
         max_inflight_default = shard_count
     elif category == "debug-info":
@@ -958,8 +954,9 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                                 logger.warning(
                                     ("No shard completion for %s in %.1fs "
                                      "(progress: %d/%d, in-flight: %d)"),
-                                    category, now - last_progress, loaded_count,
-                                    shard_count, len(future_to_idx))
+                                    category, now - last_progress,
+                                    loaded_count, shard_count,
+                                    len(future_to_idx))
                                 next_stall_warn = now + stall_warn_seconds
                         continue
                     for future in done_futures:
@@ -997,12 +994,13 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                                         adaptive_inflight_cap = min(
                                             adaptive_inflight_cap, 2)
                                     if adaptive_inflight_cap < previous_cap:
-                                        logger.info(
-                                            ("Memory pressure downshift for %s: "
-                                             "rss=%.2fMB limit=%dMB "
-                                             "max in-flight %d -> %d"),
+                                        logger.info((
+                                            "Memory pressure downshift for %s: "
+                                            "rss=%.2fMB limit=%dMB "
+                                            "max in-flight %d -> %d"),
                                             category, rss_mb,
-                                            rss_soft_limit_mb, previous_cap,
+                                            rss_soft_limit_mb,
+                                            previous_cap,
                                             adaptive_inflight_cap)
                                 elif (rss_mb <= rss_soft_limit_mb * 0.85
                                       and adaptive_inflight_cap <
@@ -1014,12 +1012,13 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                                             max_inflight_shards,
                                             adaptive_inflight_cap + 1)
                                         rss_relief_streak = 0
-                                        logger.info(
-                                            ("Memory pressure recovery for %s: "
-                                             "rss=%.2fMB limit=%dMB "
-                                             "max in-flight %d -> %d"),
+                                        logger.info((
+                                            "Memory pressure recovery for %s: "
+                                            "rss=%.2fMB limit=%dMB "
+                                            "max in-flight %d -> %d"),
                                             category, rss_mb,
-                                            rss_soft_limit_mb, previous_cap,
+                                            rss_soft_limit_mb,
+                                            previous_cap,
                                             adaptive_inflight_cap)
                                 else:
                                     rss_relief_streak = 0
@@ -1275,10 +1274,9 @@ def create_friendly_debug_types(debug_type_dictionary,
     logging.info("Have to create for %d addresses" %
                  (len(debug_type_dictionary)))
 
-    addr_members = dict()
+    addr_members = collections.defaultdict(list)
     for elem_addr, elem_val in debug_type_dictionary.items():
         if elem_val["tag"] == "DW_TAG_member":
-            current_members = addr_members.get(int(elem_val["scope"]), [])
             elem_dict = {
                 "addr":
                 elem_addr,
@@ -1289,8 +1287,7 @@ def create_friendly_debug_types(debug_type_dictionary,
                     extract_func_sig_friendly_type_tags(
                         elem_val["base_type_addr"], debug_type_dictionary)),
             }
-            current_members.append(elem_dict)
-            addr_members[int(elem_val["scope"])] = current_members
+            addr_members[int(elem_val["scope"])].append(elem_dict)
 
     # Nothing consumes this structure in-memory today; it is only persisted.
     # Avoid large temporary maps and serialize incrementally.
