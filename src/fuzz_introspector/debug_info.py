@@ -27,10 +27,17 @@ import shutil
 import sys
 import tempfile
 import time
-from concurrent.futures import (FIRST_COMPLETED, ProcessPoolExecutor,
-                                ThreadPoolExecutor, as_completed, wait)
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    as_completed,
+    wait,
+)
 from typing import Any, TypeVar
 import yaml
+
+from fuzz_introspector import backend_loaders
 
 logger = logging.getLogger(name=__name__)
 _T = TypeVar("_T")
@@ -43,6 +50,9 @@ DebugPayload = tuple[
     dict[str, str],
     str | None,
 ]
+CORRELATOR_SHADOW_SAMPLE_SIZE_DEFAULT = 256
+_BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
+_BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
 
 # Pre-compiled regex patterns for debug info parsing (performance optimization)
 # These patterns are used in extract_all_functions_in_debug_info
@@ -233,7 +243,7 @@ def extract_all_functions_in_debug_info(content, all_functions_in_debug,
                 pass
 
     def _maybe_extract_source_location(line: str) -> tuple[str, str] | None:
-        if (" from " not in line or " - Operand" in line or "Elem " in line):
+        if " from " not in line or " - Operand" in line or "Elem " in line:
             return None
         location = line.rsplit(" from ", maxsplit=1)[-1].strip()
         source_file, separator, source_line_tail = location.partition(":")
@@ -265,8 +275,8 @@ def extract_all_functions_in_debug_info(content, all_functions_in_debug,
         if " - Operand" not in line:
             return None
 
-        l1 = (line.replace("Operand Type:", "").replace("Type: ",
-                                                        "").replace("-", ""))
+        l1 = line.replace("Operand Type:", "").replace("Type: ",
+                                                       "").replace("-", "")
         pointer_count = l1.count("DW_TAG_pointer_type")
         const_count = l1.count("DW_TAG_const_type")
         parts = l1.split(",")
@@ -378,8 +388,15 @@ def load_debug_report(debug_files, base_dir=None):
     def _merge_debug_payload(payload: DebugPayload) -> None:
         nonlocal path_mapping
         nonlocal original_base_dir
-        (content_hash, payload_files, payload_functions, payload_globals,
-         payload_types, payload_path_mapping, payload_base_dir) = payload
+        (
+            content_hash,
+            payload_files,
+            payload_functions,
+            payload_globals,
+            payload_types,
+            payload_path_mapping,
+            payload_base_dir,
+        ) = payload
         if content_hash in seen_hashes:
             return
         seen_hashes.add(content_hash)
@@ -398,8 +415,11 @@ def load_debug_report(debug_files, base_dir=None):
                                   max_workers_default, 1)
 
     if parallel_enabled and worker_count > 1 and len(debug_files) > 1:
-        logger.info("Loading %d debug report files with %d workers",
-                    len(debug_files), min(worker_count, len(debug_files)))
+        logger.info(
+            "Loading %d debug report files with %d workers",
+            len(debug_files),
+            min(worker_count, len(debug_files)),
+        )
         indexed_payloads: dict[int, DebugPayload] = {}
         fallback_to_serial = False
         try:
@@ -414,15 +434,20 @@ def load_debug_report(debug_files, base_dir=None):
                     try:
                         indexed_payloads[idx] = future.result()
                     except Exception as err:
-                        logger.warning((
-                            "Parallel debug report parsing failed at index %d: "
-                            "%s. Falling back to serial parsing."), idx, err)
+                        logger.warning(
+                            ("Parallel debug report parsing failed at index %d: "
+                             "%s. Falling back to serial parsing."),
+                            idx,
+                            err,
+                        )
                         fallback_to_serial = True
                         break
         except (OSError, RuntimeError, ValueError) as err:
             logger.warning(
                 "Failed to initialize parallel debug report parsing: %s. "
-                "Falling back to serial parsing.", err)
+                "Falling back to serial parsing.",
+                err,
+            )
             fallback_to_serial = True
         if not fallback_to_serial:
             for idx in range(len(debug_files)):
@@ -598,9 +623,15 @@ def load_debug_all_yaml_files(debug_all_types_files):
 
 def _parse_bool_env(var_name: str, default: bool) -> bool:
     raw = os.environ.get(var_name, "")
-    if raw == "":
+    raw_value = raw.strip().lower()
+    if not raw_value:
         return default
-    return raw.strip().lower() not in ("0", "false", "no", "off")
+    if raw_value in _BOOL_TRUE_VALUES:
+        return True
+    if raw_value in _BOOL_FALSE_VALUES:
+        return False
+    logger.warning("Invalid %s=%r; using default %s", var_name, raw, default)
+    return default
 
 
 def _parse_int_env(var_name: str,
@@ -691,16 +722,16 @@ def _build_size_balanced_shards(paths: list[str],
 
 
 def _build_yaml_shards(paths: list[str], shard_size: int) -> list[list[str]]:
-    strategy = os.environ.get("FI_DEBUG_SHARD_STRATEGY",
-                              "fixed_count").strip().lower() or "fixed_count"
+    strategy = (os.environ.get("FI_DEBUG_SHARD_STRATEGY",
+                               "fixed_count").strip().lower() or "fixed_count")
     if strategy == "fixed_count":
         return _chunked(paths, shard_size)
     if strategy == "size_balanced":
         return _build_size_balanced_shards(paths, shard_size)
 
     logger.warning(
-        "Invalid FI_DEBUG_SHARD_STRATEGY=%r; using default "
-        "'fixed_count'", strategy)
+        "Invalid FI_DEBUG_SHARD_STRATEGY=%r; using default 'fixed_count'",
+        strategy)
     return _chunked(paths, shard_size)
 
 
@@ -726,8 +757,10 @@ def _write_spill(items: list[Any], category: str) -> tuple[str, int]:
                                       suffix=".jsonl")
     os.close(fd)
     try:
-        with open(spill_path, "w") as spill_fp:
-            json.dump(items, spill_fp)
+        with open(spill_path, "w", encoding="utf-8") as spill_fp:
+            for item in items:
+                spill_fp.write(json.dumps(item))
+                spill_fp.write("\n")
     except Exception:
         try:
             os.remove(spill_path)
@@ -735,6 +768,41 @@ def _write_spill(items: list[Any], category: str) -> tuple[str, int]:
             pass
         raise
     return spill_path, len(items)
+
+
+def _iter_spill_items(spill_path: str):
+    with open(spill_path, "r", encoding="utf-8") as spill_fp:
+        # Backward compatibility: legacy spill files were written as one JSON
+        # array. New spill files are NDJSON (one JSON value per line).
+        first_non_whitespace = ""
+        while True:
+            char = spill_fp.read(1)
+            if not char:
+                return
+            if not char.isspace():
+                first_non_whitespace = char
+                break
+        spill_fp.seek(0)
+
+        if first_non_whitespace == "[":
+            payload = json.load(spill_fp)
+            if isinstance(payload, list):
+                for item in payload:
+                    yield item
+                return
+            yield payload
+            return
+
+        for line in spill_fp:
+            line = line.strip()
+            if not line:
+                continue
+            payload = json.loads(line)
+            if isinstance(payload, list):
+                for item in payload:
+                    yield item
+                continue
+            yield payload
 
 
 def _estimate_list_bytes(items: list[Any]) -> int:
@@ -771,7 +839,8 @@ def _select_debug_parallel_backend(category: str, shard_count: int) -> str:
     if configured_backend not in ("auto", "thread", "process"):
         logger.warning(
             "Invalid FI_DEBUG_PARALLEL_BACKEND=%r; using default 'auto'",
-            configured_backend)
+            configured_backend,
+        )
         configured_backend = "auto"
 
     if configured_backend != "auto":
@@ -791,6 +860,33 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
     if not paths:
         return []
 
+    selected_backend, external_items = backend_loaders.load_json_with_backend(
+        backend_env="FI_DEBUG_YAML_LOADER",
+        command_env_prefix="FI_DEBUG_YAML_LOADER",
+        payload={
+            "paths": paths,
+            "category": category
+        },
+        default_backend=backend_loaders.BACKEND_RUST,
+        timeout_env="FI_DEBUG_YAML_LOADER_TIMEOUT_SEC",
+    )
+    if external_items is not None:
+        if isinstance(external_items, dict):
+            external_items = external_items.get("items", [])
+        if isinstance(external_items, list):
+            logger.info(
+                "Loaded %d %s items with %s backend",
+                len(external_items),
+                category,
+                selected_backend,
+            )
+            return external_items
+        logger.warning(
+            "External %s backend returned non-list payload; falling back to python",
+            selected_backend,
+        )
+
+    logger.info("[yaml-loader] using python backend")
     parallel_enabled = _parse_bool_env("FI_DEBUG_PARALLEL", True)
     max_workers_default = min(os.cpu_count() or 1, 8)
     worker_count = _parse_int_env("FI_DEBUG_MAX_WORKERS", max_workers_default,
@@ -811,7 +907,8 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
     if selected_backend == "process":
         executor_worker_count = min(process_worker_count, worker_count)
 
-    raw_max_inflight = os.environ.get("FI_DEBUG_MAX_INFLIGHT_SHARDS", "").strip()
+    raw_max_inflight = os.environ.get("FI_DEBUG_MAX_INFLIGHT_SHARDS",
+                                      "").strip()
     if raw_max_inflight:
         max_inflight_default = shard_count
     elif category == "debug-info":
@@ -823,12 +920,12 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                                          max_inflight_default, 1, shard_count)
     adaptive_workers_enabled = _parse_bool_env("FI_DEBUG_ADAPTIVE_WORKERS",
                                                False)
-    spill_policy = os.environ.get("FI_DEBUG_SPILL_POLICY",
-                                  "oldest").strip().lower() or "oldest"
+    spill_policy = (os.environ.get("FI_DEBUG_SPILL_POLICY",
+                                   "oldest").strip().lower() or "oldest")
     if spill_policy not in ("oldest", "largest"):
         logger.warning(
-            "Invalid FI_DEBUG_SPILL_POLICY=%r; using default "
-            "'oldest'", spill_policy)
+            "Invalid FI_DEBUG_SPILL_POLICY=%r; using default 'oldest'",
+            spill_policy)
         spill_policy = "oldest"
     shard_items_by_idx: dict[int, list[Any]] = {}
     shard_bytes_by_idx: dict[int, int] = {}
@@ -844,6 +941,12 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
             return True
         return False
 
+    category_progress_unit = "items"
+    if category == "debug-info":
+        category_progress_unit = "types"
+    elif category == "debug-functions":
+        category_progress_unit = "functions"
+
     def _record_shard_items(shard_idx: int, items: list[Any]) -> int:
         nonlocal current_mem_bytes
         spill_count = 0
@@ -856,9 +959,10 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
         current_mem_bytes += shard_bytes
         while _should_spill() and shard_items_by_idx:
             if spill_policy == "largest":
-                spill_idx = max(shard_items_by_idx,
-                                key=lambda idx:
-                                (shard_bytes_by_idx.get(idx, 0), -idx))
+                spill_idx = max(
+                    shard_items_by_idx,
+                    key=lambda idx: (shard_bytes_by_idx.get(idx, 0), -idx),
+                )
             else:
                 spill_idx = min(shard_items_by_idx)
             spill_items = shard_items_by_idx[spill_idx]
@@ -926,145 +1030,194 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                     len(shards[shard_idx]),
                 )
 
+        ex = None
+        executor_aborted = False
         try:
-            with executor_cls(max_workers=min(max_workers, len(shards))) as ex:
-                future_to_idx: dict[Any, int] = {}
+            ex = executor_cls(max_workers=min(max_workers, len(shards)))
+            future_to_idx: dict[Any, int] = {}
 
-                def _submit_shard(shard_idx: int) -> None:
-                    shard = shards[shard_idx]
-                    shard_start_elapsed[shard_idx] = (time.perf_counter() -
-                                                      run_start)
-                    future_to_idx[ex.submit(_load_yaml_shard,
-                                            shard)] = shard_idx
-
-                next_idx = 0
-                initial_inflight = min(adaptive_inflight_cap, len(shards))
-                while next_idx < initial_inflight:
-                    _submit_shard(next_idx)
-                    next_idx += 1
-                logger.info(
-                    "Submitted %d/%d %s shards to %s pool (max in-flight %d)",
-                    len(future_to_idx), len(shards), category, execution_label,
-                    max_inflight_shards)
-                loaded_count = 0
-                while future_to_idx:
-                    done_futures, _ = wait(set(future_to_idx),
-                                           timeout=1.0,
-                                           return_when=FIRST_COMPLETED)
-                    if not done_futures:
-                        if stall_warn_seconds > 0:
-                            now = time.perf_counter()
-                            if now >= next_stall_warn:
-                                logger.warning(
-                                    ("No shard completion for %s in %.1fs "
-                                     "(progress: %d/%d, in-flight: %d)"),
-                                    category, now - last_progress, loaded_count,
-                                    shard_count, len(future_to_idx))
-                                next_stall_warn = now + stall_warn_seconds
+            def _abort_parallel_execution() -> None:
+                nonlocal executor_aborted
+                executor_aborted = True
+                for pending_future in future_to_idx:
+                    try:
+                        pending_future.cancel()
+                    except Exception:
                         continue
-                    for future in done_futures:
-                        idx = future_to_idx.pop(future)
-                        shard_end_elapsed[idx] = time.perf_counter(
-                        ) - run_start
-                        try:
-                            items = future.result()
-                        except Exception as exc:  # pragma: no cover - defensive
-                            _log_parallel_shard_telemetry()
+                if ex is None:
+                    return
+                shutdown_fn = getattr(ex, "shutdown", None)
+                if shutdown_fn is None:
+                    return
+                try:
+                    shutdown_fn(wait=True, cancel_futures=True)
+                except TypeError:
+                    shutdown_fn(wait=True)
+
+            def _submit_shard(shard_idx: int) -> None:
+                shard = shards[shard_idx]
+                shard_start_elapsed[shard_idx] = time.perf_counter(
+                ) - run_start
+                future_to_idx[ex.submit(_load_yaml_shard, shard)] = shard_idx
+
+            next_idx = 0
+            initial_inflight = min(adaptive_inflight_cap, len(shards))
+            while next_idx < initial_inflight:
+                _submit_shard(next_idx)
+                next_idx += 1
+            logger.info(
+                "Submitted %d/%d %s shards to %s pool (max in-flight %d)",
+                len(future_to_idx),
+                len(shards),
+                category,
+                execution_label,
+                max_inflight_shards,
+            )
+            loaded_count = 0
+            while future_to_idx:
+                done_futures, _ = wait(set(future_to_idx),
+                                       timeout=1.0,
+                                       return_when=FIRST_COMPLETED)
+                if not done_futures:
+                    if stall_warn_seconds > 0:
+                        now = time.perf_counter()
+                        if now >= next_stall_warn:
                             logger.warning(
-                                ("%s shard %d failed: %s; aborting %s "
-                                 "execution"), execution_label.capitalize(),
-                                idx, exc, execution_label)
-                            return False
-                        logger.info("Loaded shard %d/%d (%d files)", idx + 1,
-                                    shard_count, len(shards[idx]))
-                        spill_count = _record_shard_items(idx, items)
-                        loaded_count += 1
-                        logger.info("Shard load progress for %s: %d/%d",
-                                    category, loaded_count, shard_count)
-                        last_progress = time.perf_counter()
-                        if stall_warn_seconds > 0:
-                            next_stall_warn = last_progress + stall_warn_seconds
+                                ("No shard completion for %s in %.1fs "
+                                 "(progress: %d/%d, in-flight: %d)"),
+                                category,
+                                now - last_progress,
+                                loaded_count,
+                                shard_count,
+                                len(future_to_idx),
+                            )
+                            next_stall_warn = now + stall_warn_seconds
+                    continue
+                for future in done_futures:
+                    idx = future_to_idx.pop(future)
+                    shard_end_elapsed[idx] = time.perf_counter() - run_start
+                    try:
+                        items = future.result()
+                    except Exception as exc:  # pragma: no cover - defensive
+                        _log_parallel_shard_telemetry()
+                        _abort_parallel_execution()
+                        logger.warning(
+                            "%s shard %d failed: %s; aborting %s execution",
+                            execution_label.capitalize(),
+                            idx,
+                            exc,
+                            execution_label,
+                        )
+                        return False
+                    logger.info(
+                        "Loaded shard %d/%d (%d files)",
+                        idx + 1,
+                        shard_count,
+                        len(shards[idx]),
+                    )
+                    spill_count = _record_shard_items(idx, items)
+                    loaded_count += 1
+                    logger.info(
+                        "Shard load progress for %s: %d/%d",
+                        category,
+                        loaded_count,
+                        shard_count,
+                    )
+                    last_progress = time.perf_counter()
+                    if stall_warn_seconds > 0:
+                        next_stall_warn = last_progress + stall_warn_seconds
 
-                        if rss_soft_limit_mb > 0:
-                            rss_mb = _get_process_rss_mb()
-                            if rss_mb is not None:
-                                if rss_mb > rss_soft_limit_mb:
-                                    rss_relief_streak = 0
-                                    previous_cap = adaptive_inflight_cap
-                                    if rss_mb >= rss_soft_limit_mb * 1.10:
-                                        adaptive_inflight_cap = 1
-                                    else:
-                                        adaptive_inflight_cap = min(
-                                            adaptive_inflight_cap, 2)
-                                    if adaptive_inflight_cap < previous_cap:
-                                        logger.info(
-                                            ("Memory pressure downshift for %s: "
-                                             "rss=%.2fMB limit=%dMB "
-                                             "max in-flight %d -> %d"),
-                                            category, rss_mb,
-                                            rss_soft_limit_mb, previous_cap,
-                                            adaptive_inflight_cap)
-                                elif (rss_mb <= rss_soft_limit_mb * 0.85
-                                      and adaptive_inflight_cap <
-                                      max_inflight_shards):
-                                    rss_relief_streak += 1
-                                    if rss_relief_streak >= 2:
-                                        previous_cap = adaptive_inflight_cap
-                                        adaptive_inflight_cap = min(
-                                            max_inflight_shards,
-                                            adaptive_inflight_cap + 1)
-                                        rss_relief_streak = 0
-                                        logger.info(
-                                            ("Memory pressure recovery for %s: "
-                                             "rss=%.2fMB limit=%dMB "
-                                             "max in-flight %d -> %d"),
-                                            category, rss_mb,
-                                            rss_soft_limit_mb, previous_cap,
-                                            adaptive_inflight_cap)
-                                else:
-                                    rss_relief_streak = 0
-                        if adaptive_workers_enabled:
-                            if spill_count > 0:
-                                spill_streak += 1
-                            else:
-                                spill_streak = 0
-
-                            shard_elapsed = (shard_end_elapsed[idx] -
-                                             shard_start_elapsed.get(idx, 0.0))
-                            shard_elapsed_seconds.append(shard_elapsed)
-                            if len(shard_elapsed_seconds) >= 4:
-                                sorted_elapsed = sorted(shard_elapsed_seconds)
-                                median_elapsed = sorted_elapsed[
-                                    len(sorted_elapsed) // 2]
-                                tail_threshold = max(0.2, median_elapsed * 2.5)
-                                if shard_elapsed >= tail_threshold:
-                                    tail_latency_streak += 1
-                                else:
-                                    tail_latency_streak = 0
-
-                            pressure_detected = (spill_streak >= 2
-                                                 or tail_latency_streak >= 2)
-                            if adaptive_inflight_cap > 1 and pressure_detected:
+                    if rss_soft_limit_mb > 0:
+                        rss_mb = _get_process_rss_mb()
+                        if rss_mb is not None:
+                            if rss_mb > rss_soft_limit_mb:
+                                rss_relief_streak = 0
                                 previous_cap = adaptive_inflight_cap
-                                adaptive_inflight_cap -= 1
-                                spill_streak = 0
+                                if rss_mb >= rss_soft_limit_mb * 1.10:
+                                    adaptive_inflight_cap = 1
+                                else:
+                                    adaptive_inflight_cap = min(
+                                        adaptive_inflight_cap, 2)
+                                if adaptive_inflight_cap < previous_cap:
+                                    logger.info(
+                                        ("Memory pressure downshift for %s: "
+                                         "rss=%.2fMB limit=%dMB "
+                                         "max in-flight %d -> %d"),
+                                        category,
+                                        rss_mb,
+                                        rss_soft_limit_mb,
+                                        previous_cap,
+                                        adaptive_inflight_cap,
+                                    )
+                            elif (rss_mb <= rss_soft_limit_mb * 0.85 and
+                                  adaptive_inflight_cap < max_inflight_shards):
+                                rss_relief_streak += 1
+                                if rss_relief_streak >= 2:
+                                    previous_cap = adaptive_inflight_cap
+                                    adaptive_inflight_cap = min(
+                                        max_inflight_shards,
+                                        adaptive_inflight_cap + 1,
+                                    )
+                                    rss_relief_streak = 0
+                                    logger.info(
+                                        ("Memory pressure recovery for %s: "
+                                         "rss=%.2fMB limit=%dMB "
+                                         "max in-flight %d -> %d"),
+                                        category,
+                                        rss_mb,
+                                        rss_soft_limit_mb,
+                                        previous_cap,
+                                        adaptive_inflight_cap,
+                                    )
+                            else:
+                                rss_relief_streak = 0
+                    if adaptive_workers_enabled:
+                        if spill_count > 0:
+                            spill_streak += 1
+                        else:
+                            spill_streak = 0
+
+                        shard_elapsed = shard_end_elapsed[
+                            idx] - shard_start_elapsed.get(idx, 0.0)
+                        shard_elapsed_seconds.append(shard_elapsed)
+                        if len(shard_elapsed_seconds) >= 4:
+                            sorted_elapsed = sorted(shard_elapsed_seconds)
+                            median_elapsed = sorted_elapsed[len(sorted_elapsed)
+                                                            // 2]
+                            tail_threshold = max(0.2, median_elapsed * 2.5)
+                            if shard_elapsed >= tail_threshold:
+                                tail_latency_streak += 1
+                            else:
                                 tail_latency_streak = 0
-                                logger.info(
-                                    ("Adaptive worker downshift for %s: "
-                                     "max in-flight %d -> %d"),
-                                    category,
-                                    previous_cap,
-                                    adaptive_inflight_cap,
-                                )
-                        while (next_idx < len(shards)
-                               and len(future_to_idx) < adaptive_inflight_cap):
-                            _submit_shard(next_idx)
-                            next_idx += 1
-                _log_parallel_shard_telemetry()
+
+                        pressure_detected = (spill_streak >= 2
+                                             or tail_latency_streak >= 2)
+                        if adaptive_inflight_cap > 1 and pressure_detected:
+                            previous_cap = adaptive_inflight_cap
+                            adaptive_inflight_cap -= 1
+                            spill_streak = 0
+                            tail_latency_streak = 0
+                            logger.info(
+                                ("Adaptive worker downshift for %s: "
+                                 "max in-flight %d -> %d"),
+                                category,
+                                previous_cap,
+                                adaptive_inflight_cap,
+                            )
+                    while (next_idx < len(shards)
+                           and len(future_to_idx) < adaptive_inflight_cap):
+                        _submit_shard(next_idx)
+                        next_idx += 1
+            _log_parallel_shard_telemetry()
         except (OSError, RuntimeError, ValueError) as exc:
             logger.warning("Failed to initialize %s shard pool: %s",
                            execution_label, exc)
             return False
+        finally:
+            shutdown_fn = getattr(ex, "shutdown",
+                                  None) if ex is not None else None
+            if shutdown_fn is not None and not executor_aborted:
+                shutdown_fn(wait=True)
         return True
 
     try:
@@ -1107,8 +1260,12 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                 )
                 _load_serial_shards()
         else:
-            logger.info("Loading %d %s files serially (shard size %d)",
-                        len(paths), category, shard_size)
+            logger.info(
+                "Loading %d %s files serially (shard size %d)",
+                len(paths),
+                category,
+                shard_size,
+            )
             _load_serial_shards()
 
         results: list[Any] = []
@@ -1119,25 +1276,40 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
         for idx in range(shard_count):
             spill_path = spilled_by_idx.pop(idx, None)
             if spill_path is not None:
-                logger.info("Merging spilled shard %d/%d from %s", idx + 1,
-                            shard_count, spill_path)
+                logger.info(
+                    "Merging spilled shard %d/%d from %s",
+                    idx + 1,
+                    shard_count,
+                    spill_path,
+                )
                 try:
-                    with open(spill_path, "r") as spill_fp:
-                        items = json.load(spill_fp)
-                        results.extend(items)
+                    for item in _iter_spill_items(spill_path):
+                        results.append(item)
                 finally:
                     try:
                         os.remove(spill_path)
                     except OSError:
                         pass
                 merged_count += 1
-                logger.info("Shard merge progress for %s: %d/%d", category,
-                            merged_count, shard_count)
+                logger.info(
+                    "Shard merge progress for %s: %d/%d (%d %s)",
+                    category,
+                    merged_count,
+                    shard_count,
+                    len(results),
+                    category_progress_unit,
+                )
                 continue
             results.extend(shard_items_by_idx.get(idx, []))
             merged_count += 1
-            logger.info("Shard merge progress for %s: %d/%d", category,
-                        merged_count, shard_count)
+            logger.info(
+                "Shard merge progress for %s: %d/%d (%d %s)",
+                category,
+                merged_count,
+                shard_count,
+                len(results),
+                category_progress_unit,
+            )
         return results
     finally:
         for spill_path in spilled_by_idx.values():
@@ -1275,56 +1447,86 @@ def create_friendly_debug_types(debug_type_dictionary,
     logging.info("Have to create for %d addresses" %
                  (len(debug_type_dictionary)))
 
-    addr_members = dict()
-    for elem_addr, elem_val in debug_type_dictionary.items():
-        if elem_val["tag"] == "DW_TAG_member":
-            current_members = addr_members.get(int(elem_val["scope"]), [])
-            elem_dict = {
-                "addr":
-                elem_addr,
-                "elem_name":
-                elem_val["name"],
-                "elem_friendly_type":
-                convert_param_list_to_str_v2(
-                    extract_func_sig_friendly_type_tags(
-                        elem_val["base_type_addr"], debug_type_dictionary)),
-            }
-            current_members.append(elem_dict)
-            addr_members[int(elem_val["scope"])] = current_members
-
     # Nothing consumes this structure in-memory today; it is only persisted.
     # Avoid large temporary maps and serialize incrementally.
     if not dump_files:
         return
 
+    member_entries_by_scope: dict[int, list[dict[str, Any]]] = {}
+    for elem_addr, elem_val in debug_type_dictionary.items():
+        if elem_val["tag"] != "DW_TAG_member":
+            continue
+        scope_addr = int(elem_val["scope"])
+        member_entries_by_scope.setdefault(scope_addr, []).append({
+            "addr":
+            elem_addr,
+            "elem_name":
+            elem_val["name"],
+            "base_type_addr":
+            elem_val["base_type_addr"],
+        })
+
+    cached_members_by_scope: dict[int, list[dict[str, Any]]] = {}
+    friendly_type_cache: dict[int | str, list[Any]] = {}
+
+    def _get_friendly_type(addr: int | str) -> list[Any]:
+        cache_key: int | str = addr
+        if not isinstance(cache_key, int):
+            try:
+                cache_key = int(cache_key)
+            except (TypeError, ValueError):
+                cache_key = str(cache_key)
+
+        friendly_type = friendly_type_cache.get(cache_key)
+        if friendly_type is None:
+            friendly_type = extract_func_sig_friendly_type_tags(
+                addr, debug_type_dictionary)
+            friendly_type_cache[cache_key] = friendly_type
+        return friendly_type
+
+    def _get_struct_members(scope_addr: int) -> list[dict[str, Any]]:
+        struct_members = cached_members_by_scope.get(scope_addr)
+        if struct_members is not None:
+            return struct_members
+
+        struct_members = []
+        for entry in member_entries_by_scope.get(scope_addr, []):
+            member_friendly_type = _get_friendly_type(entry["base_type_addr"])
+            struct_members.append({
+                "addr":
+                entry["addr"],
+                "elem_name":
+                entry["elem_name"],
+                "elem_friendly_type":
+                convert_param_list_to_str_v2(member_friendly_type),
+            })
+        cached_members_by_scope[scope_addr] = struct_members
+        return struct_members
+
     output_path = os.path.join(out_dir, "all-friendly-debug-types.json")
     with open(output_path, "w") as f:
         f.write("{")
-        for idx, addr in enumerate(debug_type_dictionary):
+        for idx, (addr,
+                  debug_entry) in enumerate(debug_type_dictionary.items()):
             if idx % 2500 == 0 and idx > 0:
                 logging.info("Idx: %d" % (idx))
 
-            friendly_type = extract_func_sig_friendly_type_tags(
-                addr, debug_type_dictionary)
+            addr_int = int(addr)
+            friendly_type = _get_friendly_type(addr_int)
+            is_struct_type = is_struct(friendly_type)
             structure_elems = []
-            if is_struct(friendly_type):
-                structure_elems = addr_members.get(int(addr), [])
+            if is_struct_type:
+                structure_elems = _get_struct_members(addr_int)
 
             entry = {
-                "raw_debug_info": debug_type_dictionary[addr],
+                "raw_debug_info": debug_entry,
                 "friendly-info": {
-                    "raw-types":
-                    friendly_type,
-                    "string_type":
-                    convert_param_list_to_str_v2(friendly_type),
-                    "is-struct":
-                    is_struct(friendly_type),
-                    "struct-elems":
-                    structure_elems,
-                    "is-enum":
-                    is_enumeration(friendly_type),
-                    "enum-elems":
-                    debug_type_dictionary[addr].get("enum_elems", []),
+                    "raw-types": friendly_type,
+                    "string_type": convert_param_list_to_str_v2(friendly_type),
+                    "is-struct": is_struct_type,
+                    "struct-elems": structure_elems,
+                    "is-enum": is_enumeration(friendly_type),
+                    "enum-elems": debug_entry.get("enum_elems", []),
                 },
             }
             if idx > 0:
@@ -1335,6 +1537,303 @@ def create_friendly_debug_types(debug_type_dictionary,
         f.write("}")
 
 
+def _extract_correlator_shard_paths(response: dict[str, Any],
+                                    allow_empty: bool = False) -> list[str]:
+    artifacts = response.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise ValueError("Correlator response artifacts must be a dictionary")
+
+    shard_keys = (
+        "correlated_function_shards",
+        "correlated_shards",
+        "function_shards",
+        "shards",
+    )
+    raw_shards: Any = None
+    for shard_key in shard_keys:
+        if shard_key in artifacts:
+            raw_shards = artifacts.get(shard_key)
+            break
+
+    if raw_shards is None:
+        correlated_details = artifacts.get("correlated_functions")
+        if isinstance(correlated_details, dict):
+            raw_shards = correlated_details.get("shards")
+
+    if not isinstance(raw_shards, list):
+        raise ValueError(
+            "Correlator response artifacts did not include shard paths")
+    if not raw_shards and not allow_empty:
+        raise ValueError(
+            "Correlator response artifacts did not include shard paths")
+
+    shard_paths = []
+    for shard_path in raw_shards:
+        if not isinstance(shard_path, str) or not shard_path.strip():
+            raise ValueError(
+                "Correlator shard path must be a non-empty string")
+        shard_paths.append(shard_path)
+    return shard_paths
+
+
+def _resolve_correlator_shard_path(
+    shard_path: str,
+    expected_native_output_dir: str | None = None,
+) -> str:
+    candidate_path = shard_path.strip()
+    if expected_native_output_dir and not os.path.isabs(candidate_path):
+        candidate_path = os.path.join(expected_native_output_dir,
+                                      candidate_path)
+
+    resolved_shard_path = os.path.realpath(os.path.abspath(candidate_path))
+    if expected_native_output_dir is None:
+        return resolved_shard_path
+
+    expected_output_realpath = os.path.realpath(
+        os.path.abspath(expected_native_output_dir))
+    try:
+        common_path = os.path.commonpath(
+            [resolved_shard_path, expected_output_realpath])
+    except ValueError as err:
+        raise ValueError(
+            "Correlator shard path escapes expected native output dir: "
+            f"shard={shard_path!r} resolved={resolved_shard_path!r} "
+            f"expected_dir={expected_output_realpath!r}") from err
+
+    if common_path != expected_output_realpath:
+        raise ValueError(
+            "Correlator shard path escapes expected native output dir: "
+            f"shard={shard_path!r} resolved={resolved_shard_path!r} "
+            f"expected_dir={expected_output_realpath!r}")
+    return resolved_shard_path
+
+
+def _parse_correlator_shard_record(
+    record: Any, ) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    if isinstance(record, (list, tuple)) and len(record) == 3:
+        row_idx, func_signature_elems, source_location = record
+    elif isinstance(record, dict):
+        row_idx = record.get("row_idx", record.get("idx"))
+        func_signature_elems = record.get("func_signature_elems")
+        source_location = record.get("source")
+    else:
+        raise ValueError("Invalid correlator shard record format")
+
+    if not isinstance(row_idx, int):
+        try:
+            row_idx = int(row_idx)
+        except (TypeError, ValueError):
+            raise ValueError("Correlator shard record row index is invalid")
+
+    if not isinstance(func_signature_elems, dict):
+        raise ValueError(
+            "Correlator shard record func_signature_elems must be an object")
+    if "return_type" not in func_signature_elems:
+        raise ValueError(
+            "Correlator shard record func_signature_elems missing return_type")
+    if not isinstance(func_signature_elems.get("params"), list):
+        raise ValueError(
+            "Correlator shard record func_signature_elems.params must be a list"
+        )
+
+    if not isinstance(source_location, dict):
+        raise ValueError("Correlator shard record source must be an object")
+    source_file = source_location.get("source_file")
+    source_line = source_location.get("source_line")
+    if not isinstance(source_file, str):
+        raise ValueError(
+            "Correlator shard record source.source_file must be a string")
+    if not isinstance(source_line, (str, int)):
+        raise ValueError(
+            "Correlator shard record source.source_line must be a string or integer"
+        )
+
+    return row_idx, func_signature_elems, source_location
+
+
+def _iter_correlator_shard_updates(shard_path: str):
+    for record in _iter_spill_items(shard_path):
+        yield _parse_correlator_shard_record(record)
+
+
+def _collect_correlator_shard_updates(
+    all_debug_functions: list[dict[str, Any]],
+    response: dict[str, Any],
+    require_complete_coverage: bool = True,
+    expected_native_output_dir: str | None = None,
+) -> list[tuple[int, dict[str, Any], dict[str, Any]]]:
+    function_count = len(all_debug_functions)
+    shard_paths = _extract_correlator_shard_paths(
+        response, allow_empty=(function_count == 0))
+    validated_updates: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
+    seen_row_indexes: set[int] = set()
+
+    for shard_path in shard_paths:
+        resolved_shard_path = _resolve_correlator_shard_path(
+            shard_path, expected_native_output_dir=expected_native_output_dir)
+        if not os.path.isfile(resolved_shard_path):
+            raise ValueError(
+                "Correlator shard file not found: "
+                f"shard={shard_path!r} resolved={resolved_shard_path!r}")
+
+        shard_updates = list(
+            _iter_correlator_shard_updates(resolved_shard_path))
+        for row_idx, _, _ in shard_updates:
+            if row_idx < 0 or row_idx >= function_count:
+                raise ValueError(
+                    f"Correlator shard row index out of range: {row_idx}")
+            if row_idx in seen_row_indexes:
+                raise ValueError(
+                    f"Correlator shard duplicate row index: {row_idx}")
+            seen_row_indexes.add(row_idx)
+        validated_updates.extend(shard_updates)
+
+    if require_complete_coverage and len(seen_row_indexes) != function_count:
+        missing_row_indexes = sorted(
+            set(range(function_count)) - seen_row_indexes)
+        raise ValueError(
+            "Correlator shard coverage mismatch: "
+            f"expected={function_count} updated={len(seen_row_indexes)} "
+            f"missing_rows={missing_row_indexes[:10]}")
+
+    return validated_updates
+
+
+def _apply_collected_correlator_updates_in_place(
+    all_debug_functions: list[dict[str, Any]],
+    validated_updates: list[tuple[int, dict[str, Any], dict[str, Any]]],
+) -> int:
+    for row_idx, func_signature_elems, source_location in validated_updates:
+        debug_func = all_debug_functions[row_idx]
+        debug_func["func_signature_elems"] = func_signature_elems
+        debug_func["source"] = source_location
+
+    return len(validated_updates)
+
+
+def _validate_correlator_native_counters(response: dict[str, Any],
+                                         total_updates: int) -> None:
+    counters = response.get("counters")
+    if not isinstance(counters, dict):
+        return
+    expected_updates = counters.get("updated_functions")
+    if expected_updates is None:
+        expected_updates = counters.get("correlated_functions")
+    if expected_updates is None:
+        expected_updates = counters.get("written_records")
+
+    if isinstance(expected_updates, int) and expected_updates != total_updates:
+        raise ValueError("Correlator counter mismatch")
+
+
+def _write_native_correlator_input_shards(
+    items: list[Any],
+    artifact_dir: str,
+    prefix: str,
+    shard_size: int,
+) -> list[str]:
+    if shard_size < 1:
+        shard_size = 1
+    os.makedirs(artifact_dir, exist_ok=True)
+    shard_paths: list[str] = []
+    item_count = len(items)
+    for shard_idx, start_idx in enumerate(range(0, item_count, shard_size)):
+        shard_path = os.path.join(artifact_dir,
+                                  f"{prefix}-{shard_idx:05d}.ndjson")
+        end_idx = min(start_idx + shard_size, item_count)
+        with open(shard_path, "w", encoding="utf-8") as shard_fp:
+            for item_idx in range(start_idx, end_idx):
+                json.dump(items[item_idx], shard_fp)
+                shard_fp.write("\n")
+        shard_paths.append(shard_path)
+    return shard_paths
+
+
+def _build_correlator_shadow_sample_indexes(total_functions: int,
+                                            sample_size: int) -> list[int]:
+    if total_functions <= 0:
+        return []
+    if sample_size == 0 or total_functions <= sample_size:
+        return list(range(total_functions))
+    if sample_size < 0:
+        return []
+    step = max(total_functions // sample_size, 1)
+    sample_indexes = list(range(0, total_functions, step))[:sample_size]
+    if sample_indexes:
+        sample_indexes[-1] = total_functions - 1
+    return sample_indexes
+
+
+def _snapshot_correlated_fields(
+        debug_function: dict[str, Any]) -> tuple[str, str]:
+    signature_snapshot = json.dumps(debug_function.get("func_signature_elems",
+                                                       []),
+                                    sort_keys=True,
+                                    default=str)
+    source_snapshot = json.dumps(debug_function.get("source", {}),
+                                 sort_keys=True,
+                                 default=str)
+    return signature_snapshot, source_snapshot
+
+
+def _capture_correlator_shadow_snapshot(
+        all_debug_functions: list[Any],
+        sample_indexes: list[int]) -> dict[int, tuple[str, str]]:
+    snapshot: dict[int, tuple[str, str]] = {}
+    for row_idx in sample_indexes:
+        if row_idx < 0 or row_idx >= len(all_debug_functions):
+            continue
+        debug_function = all_debug_functions[row_idx]
+        if not isinstance(debug_function, dict):
+            continue
+        snapshot[row_idx] = _snapshot_correlated_fields(debug_function)
+    return snapshot
+
+
+def _evaluate_correlator_shadow_parity(
+    all_debug_functions: list[Any],
+    native_snapshot: dict[int, tuple[str, str]],
+) -> tuple[int, list[dict[str, Any]]]:
+    mismatch_count = 0
+    mismatch_examples: list[dict[str, Any]] = []
+    for row_idx, (native_signature, native_source) in native_snapshot.items():
+        if row_idx < 0 or row_idx >= len(all_debug_functions):
+            mismatch_count += 1
+            if len(mismatch_examples) < 10:
+                mismatch_examples.append({
+                    "row_idx": row_idx,
+                    "error": "row_out_of_range"
+                })
+            continue
+
+        debug_function = all_debug_functions[row_idx]
+        if not isinstance(debug_function, dict):
+            mismatch_count += 1
+            if len(mismatch_examples) < 10:
+                mismatch_examples.append({
+                    "row_idx": row_idx,
+                    "error": "row_not_object"
+                })
+            continue
+
+        python_signature, python_source = _snapshot_correlated_fields(
+            debug_function)
+        if native_signature == python_signature and native_source == python_source:
+            continue
+
+        mismatch_count += 1
+        if len(mismatch_examples) < 10:
+            mismatch_examples.append({
+                "row_idx": row_idx,
+                "native_signature": native_signature,
+                "python_signature": python_signature,
+                "native_source": native_source,
+                "python_source": python_source,
+            })
+
+    return mismatch_count, mismatch_examples
+
+
 def correlate_debugged_function_to_debug_types(all_debug_types,
                                                all_debug_functions,
                                                out_dir,
@@ -1342,9 +1841,174 @@ def correlate_debugged_function_to_debug_types(all_debug_types,
     """Correlate debug information about all functions and all types. The
     result is a lot of atomic debug-information-extracted types are correlated
     to the debug function."""
+    correlator_backend = backend_loaders.parse_correlator_backend_env()
+    correlator_strict_mode = backend_loaders.parse_correlator_strict_mode()
+    correlator_shadow_mode = _parse_bool_env("FI_DEBUG_CORRELATOR_SHADOW",
+                                             False)
+    shadow_sample_size = _parse_int_env(
+        "FI_DEBUG_CORRELATOR_SHADOW_SAMPLE_SIZE",
+        CORRELATOR_SHADOW_SAMPLE_SIZE_DEFAULT,
+        0,
+    )
+    logger.info(
+        "[type_correlation] requested backend=%s shadow_mode=%s strict=%s"
+        " sample_size=%d",
+        correlator_backend,
+        correlator_shadow_mode,
+        correlator_strict_mode,
+        shadow_sample_size,
+    )
+    if correlator_backend == backend_loaders.BACKEND_GO and not correlator_shadow_mode:
+        logger.warning(
+            "FI_DEBUG_CORRELATOR_BACKEND=go currently runs in shadow-only mode; "
+            "forcing Python authoritative output")
+        correlator_shadow_mode = True
+    shadow_sample_indexes = _build_correlator_shadow_sample_indexes(
+        len(all_debug_functions), shadow_sample_size)
+    native_shadow_snapshot: dict[int, tuple[str, str]] = {}
+    native_backend_succeeded = False
+    native_backend_enabled = correlator_backend != backend_loaders.BACKEND_PYTHON
+    if native_backend_enabled:
+        command_env_prefix = "FI_DEBUG_CORRELATOR"
+        command = backend_loaders.resolve_backend_command(
+            command_env_prefix,
+            correlator_backend,
+        )
+        if not command:
+            reason_details = {
+                "backend": correlator_backend,
+                "command_env_prefix": command_env_prefix,
+            }
+            if correlator_strict_mode:
+                logger.warning(
+                    "%s: Native correlator binary not found; falling back to Python "
+                    "(strict mode does not apply to binary absence) | details=%s",
+                    backend_loaders.FI_CORR_COMMAND_MISSING,
+                    json.dumps(reason_details, sort_keys=True, default=str),
+                )
+            else:
+                logger.warning(
+                    "%s: No correlator command configured for selected backend; "
+                    "falling back to python | details=%s",
+                    backend_loaders.FI_CORR_COMMAND_MISSING,
+                    json.dumps(reason_details, sort_keys=True, default=str),
+                )
+            native_backend_enabled = False
+
+    if native_backend_enabled:
+        native_artifact_root = out_dir if os.path.isdir(out_dir) else None
+        native_attempt_dir = tempfile.mkdtemp(prefix="fi-correlator-",
+                                              dir=native_artifact_root)
+        native_artifact_cleaned = False
+
+        def _cleanup_native_attempt(_response: dict[str, Any] | None,
+                                    _reason_code: str) -> str:
+            nonlocal native_artifact_cleaned
+            if native_artifact_cleaned:
+                return "already_cleaned"
+            if not os.path.isdir(native_attempt_dir):
+                native_artifact_cleaned = True
+                return "artifact_dir_missing"
+            try:
+                shutil.rmtree(native_attempt_dir)
+                native_artifact_cleaned = True
+                return "artifact_dir_removed"
+            except OSError as exc:
+                return f"artifact_dir_cleanup_error:{exc}"
+
+        native_input_dir = os.path.join(native_attempt_dir, "native-input")
+        native_output_dir = os.path.join(native_attempt_dir, "native-output")
+        input_shard_size = _parse_int_env(
+            "FI_DEBUG_CORRELATOR_INPUT_SHARD_SIZE", 250000, 1)
+        native_types_paths = _write_native_correlator_input_shards(
+            all_debug_types, native_input_dir, "debug-types", input_shard_size)
+        native_functions_paths = _write_native_correlator_input_shards(
+            all_debug_functions, native_input_dir, "debug-functions",
+            input_shard_size)
+        native_output_shard_size = _parse_int_env(
+            "FI_DEBUG_CORRELATOR_OUTPUT_SHARD_SIZE", 5000, 1)
+        native_payload = {
+            "schema_version": backend_loaders.CORRELATOR_SCHEMA_VERSION,
+            "debug_types_paths": native_types_paths,
+            "debug_functions_paths": native_functions_paths,
+            "output_dir": native_output_dir,
+            "shard_size": native_output_shard_size,
+            "dump_files": dump_files,
+            "out_dir": out_dir,
+        }
+        native_result = backend_loaders.run_correlator_backend(
+            payload=native_payload,
+            cleanup_hook=_cleanup_native_attempt,
+            selected_backend=correlator_backend,
+            strict_mode=correlator_strict_mode,
+        )
+        if native_result.response is not None:
+            native_counters = native_result.response.get("counters", {})
+            logger.info(
+                "[type_correlation] native backend selected=%s counters=%s",
+                native_result.selected_backend,
+                json.dumps(native_counters, sort_keys=True) if isinstance(
+                    native_counters, dict) else native_counters,
+            )
+            try:
+                native_validated_updates = _collect_correlator_shard_updates(
+                    all_debug_functions,
+                    native_result.response,
+                    require_complete_coverage=(correlator_strict_mode
+                                               or not correlator_shadow_mode),
+                    expected_native_output_dir=native_output_dir,
+                )
+                _validate_correlator_native_counters(
+                    native_result.response, len(native_validated_updates))
+                native_updates = _apply_collected_correlator_updates_in_place(
+                    all_debug_functions, native_validated_updates)
+            except Exception as exc:
+                reason_code = backend_loaders.FI_CORR_SCHEMA_ERROR
+                if "counter mismatch" in str(exc).lower():
+                    reason_code = backend_loaders.FI_CORR_PARITY_MISMATCH
+                cleanup_status = _cleanup_native_attempt(
+                    native_result.response, reason_code)
+                reason_details = {
+                    "backend": correlator_backend,
+                    "error": str(exc),
+                    "cleanup_status": cleanup_status,
+                }
+                if native_result.strict_mode:
+                    raise backend_loaders.CorrelatorBackendError(
+                        reason_code,
+                        "Failed to consume correlator native artifacts",
+                        reason_details,
+                    ) from exc
+                logger.warning(
+                    "%s: Failed to consume correlator native artifacts; "
+                    "falling back to python | details=%s",
+                    reason_code,
+                    json.dumps(reason_details, sort_keys=True, default=str),
+                )
+            else:
+                _cleanup_native_attempt(native_result.response,
+                                        "FI_CORR_NATIVE_SUCCESS")
+                native_backend_succeeded = True
+                if correlator_shadow_mode:
+                    native_shadow_snapshot = _capture_correlator_shadow_snapshot(
+                        all_debug_functions, shadow_sample_indexes)
+                    logger.info(
+                        "Correlator shadow mode enabled; captured %d sampled "
+                        "native rows before python fallback",
+                        len(native_shadow_snapshot),
+                    )
+                else:
+                    logger.info(
+                        "Correlated %d debug functions with %s backend",
+                        native_updates,
+                        native_result.selected_backend,
+                    )
+                    return
+
     # Index debug types by address. We need to do a lot of look ups when
     # refining data types where the address is the key, so a fast
     # look-up mechanism is useful here.
+    logger.info("[correlator] using python backend")
     debug_type_dictionary = dict()
     for debug_type in all_debug_types:
         debug_type_dictionary[int(debug_type["addr"])] = debug_type
@@ -1352,44 +2016,209 @@ def correlate_debugged_function_to_debug_types(all_debug_types,
     # Create json file with addresses as indexes for type information.
     # This can be used to lookup types fast.
     logger.info("Creating dictionary")
+    create_start = time.perf_counter()
     create_friendly_debug_types(debug_type_dictionary,
                                 out_dir,
                                 dump_files=dump_files)
-    logger.info("Finished creating dictionary")
+    create_elapsed = time.perf_counter() - create_start
+    logger.info(
+        "Finished creating dictionary in %.3fs (types=%d, dump_files=%s)",
+        create_elapsed,
+        len(debug_type_dictionary),
+        dump_files,
+    )
 
     parallel_enabled = _parse_bool_env("FI_DEBUG_CORRELATE_PARALLEL", True)
+    total_funcs = len(all_debug_functions)
     max_workers_default = min(os.cpu_count() or 1, 8)
     worker_count = _parse_int_env("FI_DEBUG_CORRELATE_WORKERS",
                                   max_workers_default, 1)
-    total_funcs = len(all_debug_functions)
+    worker_backend_raw = (os.environ.get("FI_DEBUG_CORRELATE_BACKEND",
+                                         "auto").strip().lower())
+    worker_backend = worker_backend_raw or "auto"
+    if worker_backend not in ("auto", "thread", "process"):
+        logger.warning("Invalid FI_DEBUG_CORRELATE_BACKEND=%r; using 'auto'",
+                       worker_backend)
+        worker_backend = "auto"
+    if worker_backend == "auto":
+        worker_backend = "process" if total_funcs > 40000 else "thread"
     chunk_size = max(1, total_funcs // worker_count) if worker_count > 0 else 1
+    drain_timeout_seconds = _parse_int_env(
+        "FI_DEBUG_CORRELATE_DRAIN_TIMEOUT_SEC", 5, 1)
 
-    def _process_slice(func_slice):
-        _correlate_function_slice(func_slice, debug_type_dictionary)
+    def _drain_and_abort_correlation_futures(
+            executor: Any, future_to_idx: dict[Any, int]) -> None:
+        for pending_future in future_to_idx:
+            try:
+                pending_future.cancel()
+            except Exception:
+                continue
+        pending_set = set(future_to_idx)
+        drain_timed_out = False
+        if pending_set:
+            deadline = time.perf_counter() + drain_timeout_seconds
+            while pending_set:
+                remaining_seconds = deadline - time.perf_counter()
+                if remaining_seconds <= 0:
+                    drain_timed_out = True
+                    pending_chunk_idxs = sorted(
+                        future_to_idx[pending_future]
+                        for pending_future in pending_set
+                        if pending_future in future_to_idx)
+                    logger.warning(
+                        "Parallel correlation drain timed out after %.3fs; "
+                        "forcing shutdown with %d pending chunks: %s",
+                        float(drain_timeout_seconds),
+                        len(pending_chunk_idxs),
+                        pending_chunk_idxs,
+                    )
+                    break
+                done_futures, pending_set = wait(
+                    pending_set,
+                    timeout=min(0.2, remaining_seconds),
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done_futures:
+                    continue
+
+        shutdown_fn = getattr(executor, "shutdown", None)
+        if shutdown_fn is None:
+            return
+        should_wait = not drain_timed_out
+        try:
+            shutdown_fn(wait=should_wait, cancel_futures=True)
+        except TypeError:
+            shutdown_fn(wait=should_wait)
 
     if parallel_enabled and worker_count > 1 and total_funcs > 1:
-        logger.info("Correlating %d debug functions with %d threads",
-                    total_funcs, worker_count)
+        logger.info(
+            "Correlating %d debug functions with %d %s workers",
+            total_funcs,
+            worker_count,
+            worker_backend,
+        )
         chunks = _chunked(all_debug_functions, chunk_size)
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = {
-                executor.submit(_process_slice, chunk): idx
-                for idx, chunk in enumerate(chunks)
-            }
-            for future in as_completed(futures):
-                idx = futures[future]
-                try:
-                    future.result()
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.warning(
-                        "Parallel correlation chunk %d failed: %s; "
-                        "falling back to serial", idx, exc)
-                    _correlate_function_slice(all_debug_functions,
-                                              debug_type_dictionary)
-                    break
+        completed_chunks = 0
+        total_chunks = len(chunks)
+        correlate_start = time.perf_counter()
+        indexed_funcs = list(enumerate(all_debug_functions))
+        indexed_chunks = _chunked(indexed_funcs, chunk_size)
+
+        def _run_parallel_correlation(executor_cls: Any,
+                                      max_workers: int) -> bool:
+            nonlocal completed_chunks
+            parallel_updates: list[tuple[int, Any, dict[str, str]]] = []
+            executor = None
+            parallel_failed = False
+            try:
+                executor = executor_cls(max_workers=max_workers)
+                future_to_idx = {
+                    executor.submit(
+                        _correlate_function_slice_multiproc,
+                        chunk,
+                        debug_type_dictionary,
+                    ):
+                    idx
+                    for idx, chunk in enumerate(indexed_chunks)
+                }
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        result_rows = future.result()
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.warning(
+                            "Parallel correlation chunk %d failed: %s; "
+                            "falling back to serial",
+                            idx,
+                            exc,
+                        )
+                        parallel_failed = True
+                        _drain_and_abort_correlation_futures(
+                            executor, future_to_idx)
+                        break
+
+                    parallel_updates.extend(result_rows)
+                    completed_chunks += 1
+                    logger.info(
+                        "Correlation progress: %d/%d chunks (%.3fs)",
+                        completed_chunks,
+                        total_chunks,
+                        time.perf_counter() - correlate_start,
+                    )
+            finally:
+                if executor is not None and not parallel_failed:
+                    shutdown_fn = getattr(executor, "shutdown", None)
+                    if shutdown_fn is not None:
+                        shutdown_fn(wait=True)
+
+            if parallel_failed:
+                return False
+
+            _apply_collected_correlator_updates_in_place(
+                all_debug_functions, parallel_updates)
+            return True
+
+        correlation_completed = False
+        if worker_backend == "process":
+            correlation_completed = _run_parallel_correlation(
+                ProcessPoolExecutor, worker_count)
+        else:
+            correlation_completed = _run_parallel_correlation(
+                ThreadPoolExecutor, worker_count)
+
+        if not correlation_completed:
+            _correlate_function_slice(all_debug_functions,
+                                      debug_type_dictionary)
+
+        logger.info(
+            "Correlation completed in %.3fs",
+            time.perf_counter() - correlate_start,
+        )
     else:
         logger.info("Correlating %d debug functions serially", total_funcs)
+        correlate_start = time.perf_counter()
         _correlate_function_slice(all_debug_functions, debug_type_dictionary)
+        logger.info(
+            "Correlation completed serially in %.3fs",
+            time.perf_counter() - correlate_start,
+        )
+
+    if (correlator_shadow_mode
+            and correlator_backend != backend_loaders.BACKEND_PYTHON
+            and native_backend_succeeded):
+        sampled_rows = len(native_shadow_snapshot)
+        if sampled_rows == 0:
+            logger.info(
+                "Correlator shadow mode skipped parity checks because no "
+                "sampled rows were available", )
+            return
+
+        mismatch_count, mismatch_examples = _evaluate_correlator_shadow_parity(
+            all_debug_functions, native_shadow_snapshot)
+        if mismatch_count == 0:
+            logger.info(
+                "Correlator shadow parity passed for %d sampled rows",
+                sampled_rows,
+            )
+            return
+
+        reason_details = {
+            "backend": correlator_backend,
+            "sampled_rows": sampled_rows,
+            "mismatch_count": mismatch_count,
+            "mismatch_examples": mismatch_examples,
+        }
+        if correlator_strict_mode:
+            raise backend_loaders.CorrelatorBackendError(
+                backend_loaders.FI_CORR_PARITY_MISMATCH,
+                "Shadow mode parity mismatch detected",
+                reason_details,
+            )
+        logger.warning(
+            "%s: Shadow mode parity mismatch detected | details=%s",
+            backend_loaders.FI_CORR_PARITY_MISMATCH,
+            json.dumps(reason_details, sort_keys=True, default=str),
+        )
 
 
 def _correlate_function_slice(func_slice: list[Any],
@@ -1400,10 +2229,22 @@ def _correlate_function_slice(func_slice: list[Any],
     one implementation while preserving current mutation semantics.
     """
     for dfunc in func_slice:
-        func_signature_elems, source_location = (
-            extract_debugged_function_signature(dfunc, debug_type_dictionary))
+        func_signature_elems, source_location = extract_debugged_function_signature(
+            dfunc, debug_type_dictionary)
         dfunc["func_signature_elems"] = func_signature_elems
         dfunc["source"] = source_location
+
+
+def _correlate_function_slice_multiproc(
+    func_slice: list[tuple[int, dict[str, Any]]],
+    debug_type_dictionary: dict[int, Any],
+) -> list[tuple[int, Any, dict[str, str]]]:
+    results = []
+    for idx, debug_function in func_slice:
+        func_signature_elems, source_location = extract_debugged_function_signature(
+            debug_function, debug_type_dictionary)
+        results.append((idx, func_signature_elems, source_location))
+    return results
 
 
 def extract_syzkaller_type(param_list):

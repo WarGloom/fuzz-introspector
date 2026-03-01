@@ -195,8 +195,8 @@ class FrontendAnalyser(analysis.AnalysisInterface):
 
         # Generate FI backend analysis report from second frontend run result
         introspection_proj = analysis.IntrospectionProject(
-            proj_profile.language, basefolder, temp_dir)
-        introspection_proj.load_data_files(True, temp_dir, basefolder)
+            proj_profile.language, temp_dir, "")
+        introspection_proj.load_data_files(True, "", temp_dir)
 
         # Calls standalone analysis
         self.standalone_analysis(introspection_proj.proj_profile,

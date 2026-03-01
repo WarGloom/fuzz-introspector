@@ -24,7 +24,7 @@ from typing import (
     Tuple,
 )
 
-from fuzz_introspector import (code_coverage, exceptions, json_report, utils)
+from fuzz_introspector import code_coverage, exceptions, json_report, utils
 from fuzz_introspector.datatypes import function_profile, fuzzer_profile
 
 logger = logging.getLogger(name=__name__)
@@ -52,8 +52,8 @@ class MergedProjectProfile:
         self.coverage_url = "#"
         self.dst_to_fd_cache: Dict[str,
                                    function_profile.FunctionProfile] = dict()
-        self._all_functions_with_source_cache: Dict[
-            str, function_profile.FunctionProfile] | None = None
+        self._all_functions_with_source_cache: (
+            Dict[str, function_profile.FunctionProfile] | None) = None
         self._target_lang_cache: str | None = None
         self.language = language
 
@@ -107,13 +107,15 @@ class MergedProjectProfile:
                 if fd.function_name not in self.all_functions:
                     self.all_functions[fd.function_name] = fd
 
-                fd.reached_by_fuzzers = list(
-                    static_reached_by_fuzzers.get(fd.function_name, set()))
-                fd.reached_by_fuzzers_runtime = list(
-                    runtime_reached_by_fuzzers.get(fd.function_name, set()))
-                fd.reached_by_fuzzers_combined = list(
-                    static_reached_by_fuzzers.get(fd.function_name, set())
-                    | runtime_reached_by_fuzzers.get(fd.function_name, set()))
+                static_reached = static_reached_by_fuzzers.get(
+                    fd.function_name, set())
+                runtime_reached = runtime_reached_by_fuzzers.get(
+                    fd.function_name, set())
+
+                fd.reached_by_fuzzers = sorted(static_reached)
+                fd.reached_by_fuzzers_runtime = sorted(runtime_reached)
+                fd.reached_by_fuzzers_combined = sorted(static_reached
+                                                        | runtime_reached)
 
                 # Refine hitcount
                 fd.hitcount = len(fd.reached_by_fuzzers)
@@ -244,8 +246,13 @@ class MergedProjectProfile:
                                     float(total_functions)) * 100
         except ZeroDivisionError:
             unreached_percentage = 0.0
-        return (total_functions, reached_func_count, unreached_func_count,
-                reached_percentage, unreached_percentage)
+        return (
+            total_functions,
+            reached_func_count,
+            unreached_func_count,
+            reached_percentage,
+            unreached_percentage,
+        )
 
     def resolve_coverage_report_link(self, coverage_url, function_source_file,
                                      lineno, func_name):
@@ -312,8 +319,8 @@ class MergedProjectProfile:
         total_complexity = complexity_unreached + complexity_reached
 
         try:
-            unreached_complexity_percentage = ((float(complexity_unreached) /
-                                                (total_complexity)) * 100.0)
+            unreached_complexity_percentage = (float(complexity_unreached) /
+                                               (total_complexity)) * 100.0
         except Exception:
             logger.info("Total complexity is 0")
             unreached_complexity_percentage = 0
@@ -371,14 +378,19 @@ class MergedProjectProfile:
             reached_complexity_percentage = 0
 
         try:
-            unreached_complexity_percentage = ((float(complexity_unreached) /
-                                                (total_complexity)) * 100.0)
+            unreached_complexity_percentage = (float(complexity_unreached) /
+                                               (total_complexity)) * 100.0
         except Exception:
             logger.info("Total complexity is 0")
             unreached_complexity_percentage = 0
 
-        return (total_complexity, complexity_reached, complexity_unreached,
-                reached_complexity_percentage, unreached_complexity_percentage)
+        return (
+            total_complexity,
+            complexity_reached,
+            complexity_unreached,
+            reached_complexity_percentage,
+            unreached_complexity_percentage,
+        )
 
     def get_direct_parent_list(
         self, target_function: function_profile.FunctionProfile
@@ -435,13 +447,21 @@ class MergedProjectProfile:
         return (result_list, result_name_list)
 
     def write_stats_to_summary_file(self, out_dir) -> None:
-        (total_complexity, complexity_reached, complexity_unreached,
-         reached_complexity_percentage,
-         unreached_complexity_percentage) = self.get_complexity_summaries()
+        (
+            total_complexity,
+            complexity_reached,
+            complexity_unreached,
+            reached_complexity_percentage,
+            unreached_complexity_percentage,
+        ) = self.get_complexity_summaries()
 
-        (total_functions, reached_func_count, unreached_func_count,
-         reached_func_percentage,
-         unreached_func_percentage) = self.get_function_summaries()
+        (
+            total_functions,
+            reached_func_count,
+            unreached_func_count,
+            reached_func_percentage,
+            unreached_func_percentage,
+        ) = self.get_function_summaries()
 
         covered_funcs = self.get_all_runtime_covered_functions()
         try:
@@ -451,24 +471,27 @@ class MergedProjectProfile:
             cov_percentage = 0.0
 
         json_report.add_project_key_value_to_report(
-            "stats", {
+            "stats",
+            {
                 "total-complexity": total_complexity,
                 "complexity-reached": complexity_reached,
                 "complexity-unreached": complexity_unreached,
                 "reached-complexity-percentage": reached_complexity_percentage,
                 "unreached-complexity-percentage":
                 unreached_complexity_percentage,
-                'total-functions': total_functions,
-                'harness-count': len(self.profiles),
-                'reached-function-count': reached_func_count,
-                'unreached-function-count': unreached_func_count,
-                'reached-function-percentage': reached_func_percentage,
-                'unreached-function-percentage': unreached_func_percentage,
-                'code-coverage-function-count': len(covered_funcs),
-                'code-coverage-function-percentage': cov_percentage
-            }, out_dir)
+                "total-functions": total_functions,
+                "harness-count": len(self.profiles),
+                "reached-function-count": reached_func_count,
+                "unreached-function-count": unreached_func_count,
+                "reached-function-percentage": reached_func_percentage,
+                "unreached-function-percentage": unreached_func_percentage,
+                "code-coverage-function-count": len(covered_funcs),
+                "code-coverage-function-percentage": cov_percentage,
+            },
+            out_dir,
+        )
         json_report.add_project_key_value_to_report(
-            'overview', {'language': self.target_lang}, out_dir)
+            "overview", {"language": self.target_lang}, out_dir)
 
     def _set_basefolder(self) -> None:
         """Identifies a common path-prefix amongst source files in. This is
@@ -525,7 +548,7 @@ class MergedProjectProfile:
         return self.all_functions
 
     def get_all_functions_with_source(
-            self) -> Dict[str, function_profile.FunctionProfile]:
+        self, ) -> Dict[str, function_profile.FunctionProfile]:
         """Returns all functions where there was a source code location
         attached, which roughly corresponds to functions declared in the
         project or third parties where source code was pulled in.
@@ -536,8 +559,9 @@ class MergedProjectProfile:
         if self._all_functions_with_source_cache is not None:
             return self._all_functions_with_source_cache
 
-        local_functions_with_source: Dict[
-            str, function_profile.FunctionProfile] = dict()
+        local_functions_with_source: Dict[str,
+                                          function_profile.FunctionProfile] = (
+                                              dict())
         for func_name, func_profile in self.all_functions.items():
             # Go through checks to ensure we have the source code.
             if not func_profile.has_source_file:

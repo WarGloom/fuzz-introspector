@@ -248,6 +248,7 @@ def run_analysis_on_dir(
     harness_lists=None,
     exclude_patterns: Optional[list[str]] = None,
     exclude_function_patterns: Optional[list[str]] = None,
+    skip_html_report: bool = False,
 ) -> Tuple[int, Dict[str, Any]]:
     """Runs Fuzz Introspector analysis from based on the results
     from a frontend run. The primary task is to aggregate the data
@@ -256,11 +257,11 @@ def run_analysis_on_dir(
     constants.should_dump_files = dump_files
 
     if exclude_patterns is None:
-        (exclude_patterns, exclude_function_patterns
-         ) = load_report_exclusion_patterns_from_config()
+        (exclude_patterns, exclude_function_patterns) = (
+            load_report_exclusion_patterns_from_config())
     elif exclude_function_patterns is None:
-        exclude_function_patterns = (
-            load_report_exclude_function_patterns_from_config())
+        exclude_function_patterns = load_report_exclude_function_patterns_from_config(
+        )
 
     if enable_all_analyses:
         for analysis_interface in analysis.get_all_analyses():
@@ -279,18 +280,21 @@ def run_analysis_on_dir(
     )
 
     logger.info("Analyses to run: %s", str(analyses_to_run))
-    logger.info("[+] Creating HTML report")
-    if output_json is None:
-        output_json = []
-    html_report.create_html_report(
-        introspection_proj,
-        analyses_to_run,
-        output_json,
-        report_name,
-        dump_files,
-        out_dir=out_dir,
-        exclude_patterns=exclude_patterns,
-    )
+    if skip_html_report:
+        logger.info("[+] Skipping HTML report generation")
+    else:
+        logger.info("[+] Creating HTML report")
+        if output_json is None:
+            output_json = []
+        html_report.create_html_report(
+            introspection_proj,
+            analyses_to_run,
+            output_json,
+            report_name,
+            dump_files,
+            out_dir=out_dir,
+            exclude_patterns=exclude_patterns,
+        )
 
     return_values = {"introspector-project": introspection_proj}
 
@@ -308,11 +312,16 @@ def light_analysis(args) -> int:
     if not os.path.isdir(light_dir):
         os.makedirs(light_dir, exist_ok=True)
 
+    all_source_files = analysis.extract_all_sources(
+        args.language,
+        exclude_patterns,
+    )
     all_tests = analysis.extract_tests_from_directories(
         {src_dir},
         args.language,
         inspector_dir,
         exclude_patterns=exclude_patterns,
+        pre_scanned_files=all_source_files,
     )
 
     with open(os.path.join(light_dir, "all_tests.json"), "w") as f:
@@ -325,10 +334,6 @@ def light_analysis(args) -> int:
     with open(os.path.join(light_dir, "all_pairs.json"), "w") as f:
         f.write(json.dumps(list(pairs)))
 
-    all_source_files = analysis.extract_all_sources(
-        args.language,
-        exclude_patterns,
-    )
     light_out_src = os.path.join(light_dir, "source_files")
 
     for source_file in all_source_files:

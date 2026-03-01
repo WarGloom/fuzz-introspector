@@ -16,8 +16,10 @@
 import abc
 import bisect
 import concurrent.futures
+import json
 import logging
 import os
+from pathlib import Path
 import re
 import shutil
 import time
@@ -30,6 +32,7 @@ except ImportError:  # pragma: no cover
     resource = cast(Any, None)
 
 from fuzz_introspector import (
+    backend_loaders,
     cfg_load,
     code_coverage,
     constants,
@@ -53,9 +56,23 @@ FI_PROFILE_WORKERS_DEFAULT_CAP = 0
 FI_DEBUG_STAGE_RSS_ENV = "FI_DEBUG_STAGE_RSS"
 FI_DEBUG_PERF_WARN_ENV = "FI_DEBUG_PERF_WARN"
 FI_STAGE_WARN_SECONDS_ENV = "FI_STAGE_WARN_SECONDS"
+FI_DEBUG_STAGE_WARN_RSS_MB_ENV = "FI_DEBUG_STAGE_WARN_RSS_MB"
 FI_STAGE_WARN_SECONDS_DEFAULT = 0
+FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT = 0
 _BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
 _BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
+_SOURCES_SCAN_CACHE: dict[tuple[str, tuple[str, ...], str, str],
+                          frozenset[str]] = {}
+_OVERLAY_AUTHORITATIVE_LANGS = {"c-cpp"}
+
+
+def _matches_any_pattern(
+    path: str,
+    compiled_patterns: list[re.Pattern[str]],
+) -> bool:
+    """Return True if *path* matches any of the pre-compiled exclude patterns."""
+    normalized = os.path.normpath(path)
+    return any(p.search(normalized) for p in compiled_patterns)
 
 
 def _parse_profile_worker_count() -> int:
@@ -70,13 +87,19 @@ def _parse_profile_worker_count() -> int:
     try:
         worker_count = int(raw_worker_count)
     except ValueError:
-        logger.warning("Invalid %s=%r; defaulting to cpu count",
-                       FI_PROFILE_WORKERS_ENV, raw_worker_count)
+        logger.warning(
+            "Invalid %s=%r; defaulting to cpu count",
+            FI_PROFILE_WORKERS_ENV,
+            raw_worker_count,
+        )
         return cpu_count
 
     if worker_count < 1:
-        logger.warning("Invalid %s=%r; defaulting to cpu count",
-                       FI_PROFILE_WORKERS_ENV, raw_worker_count)
+        logger.warning(
+            "Invalid %s=%r; defaulting to cpu count",
+            FI_PROFILE_WORKERS_ENV,
+            raw_worker_count,
+        )
         return cpu_count
 
     return min(worker_count, cpu_count)
@@ -118,6 +141,32 @@ def _parse_stage_warn_seconds() -> int:
         )
         return FI_STAGE_WARN_SECONDS_DEFAULT
     return warn_seconds
+
+
+def _parse_stage_warn_rss_mb() -> int:
+    """Parse the per-stage RSS warning threshold in MiB."""
+    raw_value = os.environ.get(FI_DEBUG_STAGE_WARN_RSS_MB_ENV, "")
+    if not raw_value:
+        return FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT
+    try:
+        warn_rss_mb = int(raw_value)
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; defaulting to %d",
+            FI_DEBUG_STAGE_WARN_RSS_MB_ENV,
+            raw_value,
+            FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT,
+        )
+        return FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT
+    if warn_rss_mb < 0:
+        logger.warning(
+            "Invalid %s=%r; defaulting to %d",
+            FI_DEBUG_STAGE_WARN_RSS_MB_ENV,
+            raw_value,
+            FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT,
+        )
+        return FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT
+    return warn_rss_mb
 
 
 def _get_stage_rss_mb() -> float | None:
@@ -164,6 +213,7 @@ def _log_debug_load_stage(
     include_rss: bool,
     perf_warn_enabled: bool,
     warn_after_seconds: int,
+    warn_rss_mb: int,
 ) -> None:
     stage_fields: list[str] = [
         f"stage={stage_name}", f"elapsed={elapsed_seconds:.3f}s"
@@ -171,22 +221,38 @@ def _log_debug_load_stage(
     for metric_name, metric_value in metrics.items():
         stage_fields.append(f"{metric_name}={metric_value}")
 
+    stage_rss_mb = None
+    should_measure_rss = include_rss or warn_rss_mb > 0
+    if should_measure_rss:
+        stage_rss_mb = _get_stage_rss_mb()
+
     if include_rss:
-        rss_mb = _get_stage_rss_mb()
-        if rss_mb is None:
+        if stage_rss_mb is None:
             stage_fields.append("rss_mb=n/a")
         else:
-            stage_fields.append(f"rss_mb={rss_mb:.2f}")
+            stage_fields.append(f"rss_mb={stage_rss_mb:.2f}")
 
     logger.info("[debug-load] %s", " ".join(stage_fields))
 
-    if perf_warn_enabled and warn_after_seconds > 0 and elapsed_seconds > warn_after_seconds:
+    if (perf_warn_enabled and warn_after_seconds > 0
+            and elapsed_seconds > warn_after_seconds):
         logger.warning(
             ("[debug-load] stage=%s exceeded threshold=%ds with elapsed=%.3fs. "
              "Tune %s."),
             stage_name,
             warn_after_seconds,
             elapsed_seconds,
+            _get_debug_stage_tuning_hint(stage_name),
+        )
+
+    if (perf_warn_enabled and warn_rss_mb > 0 and stage_rss_mb is not None
+            and stage_rss_mb > warn_rss_mb):
+        logger.warning(
+            ("[debug-load] stage=%s exceeded rss threshold=%dMB with rss=%.2fMB. "
+             "Tune %s."),
+            stage_name,
+            warn_rss_mb,
+            stage_rss_mb,
             _get_debug_stage_tuning_hint(stage_name),
         )
 
@@ -324,17 +390,27 @@ class IntrospectionProject:
             self.profiles = data_loader.load_all_profiles(
                 self.base_folder, self.language, parallelise)
 
-        # Apply exclude patterns to filter out entire profiles and their functions
+        # Apply exclude patterns to filter out entire profiles and their functions.
+        # Always propagate the (possibly empty) pattern lists so every profile
+        # has a consistent state regardless of whether the guard below fires.
+        for profile in self.profiles:
+            profile.set_exclude_patterns(
+                self.exclude_patterns,
+                self.exclude_function_patterns,
+            )
+
         if self.exclude_patterns or self.exclude_function_patterns:
+
+            def _filter_func_dict(p, d):
+                return {
+                    name: func
+                    for name, func in d.items()
+                    if not p._should_exclude_function_profile(func)
+                }
+
             filtered_profiles = []
             for profile in self.profiles:
-                # Set the exclude patterns on the profile so the matching logic works
-                profile.set_exclude_patterns(
-                    self.exclude_patterns,
-                    self.exclude_function_patterns,
-                )
-
-                # Drop the entire profile if the fuzzer itself is a system path
+                # Drop the entire profile if the fuzzer itself matches an exclude pattern.
                 if profile._matches_exclude_pattern(
                         profile.fuzzer_source_file):
                     logger.info(
@@ -343,17 +419,10 @@ class IntrospectionProject:
                     )
                     continue
 
-                # Filter functions within the profile
-                profile.all_class_functions = {
-                    name: func
-                    for name, func in profile.all_class_functions.items()
-                    if not profile._should_exclude_function_profile(func)
-                }
-                profile.all_class_constructors = {
-                    name: func
-                    for name, func in profile.all_class_constructors.items()
-                    if not profile._should_exclude_function_profile(func)
-                }
+                profile.all_class_functions = _filter_func_dict(
+                    profile, profile.all_class_functions)
+                profile.all_class_constructors = _filter_func_dict(
+                    profile, profile.all_class_constructors)
                 filtered_profiles.append(profile)
 
             self.profiles = filtered_profiles
@@ -402,6 +471,7 @@ class IntrospectionProject:
         warn_after_seconds = _parse_stage_warn_seconds()
 
         load_started = time.perf_counter()
+        warn_rss_mb = _parse_stage_warn_rss_mb()
         self.debug_report = debug_info.load_debug_report(self.debug_files)
         _log_debug_load_stage(
             "debug_report",
@@ -410,6 +480,7 @@ class IntrospectionProject:
             include_stage_rss,
             perf_warn_enabled,
             warn_after_seconds,
+            warn_rss_mb,
         )
 
         # Load the yaml  content of debug files holding type information and
@@ -427,6 +498,7 @@ class IntrospectionProject:
             include_stage_rss,
             perf_warn_enabled,
             warn_after_seconds,
+            warn_rss_mb,
         )
 
         function_load_started = time.perf_counter()
@@ -442,6 +514,7 @@ class IntrospectionProject:
             include_stage_rss,
             perf_warn_enabled,
             warn_after_seconds,
+            warn_rss_mb,
         )
 
         # Index the functions based on file locations. This is useful for
@@ -477,6 +550,7 @@ class IntrospectionProject:
             include_stage_rss,
             perf_warn_enabled,
             warn_after_seconds,
+            warn_rss_mb,
         )
 
         # Extract the raw function signature. This propagates types into all of
@@ -498,6 +572,7 @@ class IntrospectionProject:
             include_stage_rss,
             perf_warn_enabled,
             warn_after_seconds,
+            warn_rss_mb,
         )
 
     def dump_debug_report(self, out_dir):
@@ -721,23 +796,7 @@ def get_node_coverage_hitcount(
                 True)
             if ih:
                 node_hitcount = 200
-        elif profile.target_lang == "jvm":
-            coverage_data = profile.coverage.get_hit_details(
-                callstack_get_parent(node, callstack))
-            for n_line_number, hit_count_cov in coverage_data:
-                logger.debug("  - iterating %d : %d", n_line_number,
-                             hit_count_cov)
-                if n_line_number == node.src_linenumber and hit_count_cov > 0:
-                    node_hitcount = hit_count_cov
-        elif profile.target_lang == "rust":
-            coverage_data = profile.coverage.get_hit_details(
-                callstack_get_parent(node, callstack))
-            for n_line_number, hit_count_cov in coverage_data:
-                logger.debug("  - iterating %d : %d", n_line_number,
-                             hit_count_cov)
-                if n_line_number == node.src_linenumber and hit_count_cov > 0:
-                    node_hitcount = hit_count_cov
-        elif profile.target_lang == "go":
+        elif profile.target_lang in ("jvm", "rust", "go"):
             coverage_data = profile.coverage.get_hit_details(
                 callstack_get_parent(node, callstack))
             for n_line_number, hit_count_cov in coverage_data:
@@ -834,7 +893,635 @@ def get_parent_callsite_link(node, callstack, profile, target_coverage_url):
     return "#"
 
 
+def _serialize_branch_blockers(
+    blockers: List[FuzzBranchBlocker], ) -> List[Dict[str, Any]]:
+    serialized: List[Dict[str, Any]] = []
+    for blocker in blockers:
+        serialized.append({
+            "blocked_side": repr(blocker.blocked_side),
+            "blocked_unique_not_covered_complexity":
+            blocker.blocked_unique_not_covered_complexity,
+            "blocked_unique_reachable_complexity":
+            blocker.blocked_unique_reachable_complexity,
+            "blocked_unique_functions": blocker.blocked_unique_funcs,
+            "blocked_not_covered_complexity":
+            blocker.blocked_not_covered_complexity,
+            "blocked_reachable_complexity":
+            blocker.blocked_reachable_complexity,
+            "sides_hitcount_diff": blocker.sides_hitcount_diff,
+            "source_file": blocker.source_file,
+            "branch_line_number": blocker.branch_line_number,
+            "blocked_side_line_numder": blocker.blocked_side_line_numder,
+            "function_name": blocker.function_name,
+        })
+    return serialized
+
+
+def _build_overlay_native_payload(
+    profile: fuzzer_profile.FuzzerProfile,
+    proj_profile: project_profile.MergedProjectProfile,
+    coverage_url: str,
+    output_dir: str,
+) -> Dict[str, Any]:
+    callsites = []
+    target_coverage_url = utils.get_target_coverage_url(
+        coverage_url,
+        profile.identifier,
+        profile.target_lang,
+    )
+    if profile.fuzzer_callsite_calltree is not None:
+        all_callsites = cfg_load.extract_all_callsites(
+            profile.fuzzer_callsite_calltree)
+        callstack: Dict[int, str] = {}
+        for ct_idx, node in enumerate(all_callsites):
+            if profile.target_lang == "jvm":
+                demangled_name = utils.demangle_jvm_func(
+                    node.dst_function_source_file, node.dst_function_name)
+            elif profile.target_lang == "rust":
+                demangled_name = utils.demangle_rust_func(
+                    node.dst_function_name)
+            else:
+                demangled_name = utils.demangle_cpp_func(
+                    node.dst_function_name)
+            callstack_set_curr_node(node, demangled_name, callstack)
+            callsites.append({
+                "cov_ct_idx":
+                ct_idx,
+                "depth":
+                int(node.depth),
+                "dst_function_name":
+                node.dst_function_name,
+                "dst_function_source_file":
+                node.dst_function_source_file,
+                "src_linenumber":
+                node.src_linenumber,
+                "cov_link":
+                get_url_to_cov_report(profile, node, target_coverage_url),
+                "cov_callsite_link":
+                get_parent_callsite_link(
+                    node,
+                    callstack,
+                    profile,
+                    target_coverage_url,
+                ),
+            })
+
+    coverage_payload: Dict[str, Any] = {
+        "type": "",
+        "covmap": {},
+        "file_map": {},
+        "branch_cov_map": {},
+    }
+    if profile.coverage is not None:
+        coverage_payload = {
+            "type":
+            profile.coverage.get_type(),
+            "covmap": {
+                func_name: [[line_no, hit_count]
+                            for line_no, hit_count in hits]
+                for func_name, hits in sorted(profile.coverage.covmap.items())
+            },
+            "file_map": {
+                file_name: [[line_no, hit_count]
+                            for line_no, hit_count in hits]
+                for file_name, hits in sorted(
+                    profile.coverage.file_map.items())
+            },
+            "branch_cov_map":
+            dict(sorted(profile.coverage.branch_cov_map.items())),
+        }
+
+    function_complexities: Dict[str, Any] = {}
+    for function_name in sorted(proj_profile.all_functions):
+        function_data = proj_profile.all_functions[function_name]
+        branch_profiles = {}
+        for branch_name in sorted(function_data.branch_profiles):
+            branch = function_data.branch_profiles[branch_name]
+            branch_profiles[branch_name] = {
+                "sides": [{
+                    "pos": side.pos,
+                    "funcs": list(side.funcs)
+                } for side in branch.sides]
+            }
+        function_complexities[function_name] = {
+            "function_source_file": function_data.function_source_file,
+            "total_cyclomatic_complexity":
+            function_data.total_cyclomatic_complexity,
+            "branch_profiles": branch_profiles,
+        }
+
+    return {
+        "profile_id": profile.identifier,
+        "output_dir": output_dir,
+        "target_lang": profile.target_lang,
+        "target_coverage_url": target_coverage_url,
+        "callsites": callsites,
+        "coverage": coverage_payload,
+        "functions": function_complexities,
+    }
+
+
+def _resolve_overlay_artifact_path(artifacts: Dict[str, Any], key: str,
+                                   out_dir: str) -> Path:
+    artifact_path = artifacts.get(key)
+    if not isinstance(artifact_path, str) or not artifact_path.strip():
+        raise ValueError(f"Missing overlay artifact path for {key}")
+
+    out_dir_path = Path(out_dir).resolve(strict=False)
+    candidate_path = Path(artifact_path.strip())
+    if not candidate_path.is_absolute():
+        candidate_path = out_dir_path / candidate_path
+    resolved_path = candidate_path.resolve(strict=False)
+
+    try:
+        resolved_path.relative_to(out_dir_path)
+    except ValueError as err:
+        raise ValueError(
+            f"Unsafe overlay artifact path for {key}: {artifact_path}"
+        ) from err
+
+    return resolved_path
+
+
+def _load_overlay_artifact_json(artifacts: Dict[str, Any], key: str,
+                                out_dir: str) -> Any:
+    artifact_path = _resolve_overlay_artifact_path(artifacts, key, out_dir)
+    with open(artifact_path, "r", encoding="utf-8") as artifact_fd:
+        return json.load(artifact_fd)
+
+
+def _normalize_overlay_nodes(
+        nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized = []
+    for node in nodes:
+        normalized.append({
+            "cov_ct_idx":
+            int(node.get("cov_ct_idx", -1)),
+            "cov_hitcount":
+            int(node.get("cov_hitcount", -1)),
+            "cov_color":
+            str(node.get("cov_color", "")),
+            "cov_link":
+            str(node.get("cov_link", "")),
+            "cov_callsite_link":
+            str(node.get("cov_callsite_link", "")),
+            "cov_forward_reds":
+            int(node.get("cov_forward_reds", -1)),
+            "cov_largest_blocked_func":
+            str(node.get("cov_largest_blocked_func", "")),
+        })
+    return sorted(normalized, key=lambda node: node["cov_ct_idx"])
+
+
+def _normalize_branch_complexities(
+    branch_complexities: List[Dict[str, Any]], ) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for entry in branch_complexities:
+        normalized.append({
+            "function_name":
+            str(entry.get("function_name", "")),
+            "branch":
+            str(entry.get("branch", "")),
+            "side_idx":
+            int(entry.get("side_idx", -1)),
+            "reachable_complexity":
+            int(entry.get("reachable_complexity", 0)),
+            "not_covered_complexity":
+            int(entry.get("not_covered_complexity", 0)),
+            "unique_reachable_complexity":
+            int(entry.get("unique_reachable_complexity", 0)),
+            "unique_not_covered_complexity":
+            int(entry.get("unique_not_covered_complexity", 0)),
+        })
+    return sorted(
+        normalized,
+        key=lambda entry:
+        (entry["function_name"], entry["branch"], entry["side_idx"]),
+    )
+
+
+def _normalize_branch_blockers(
+    blockers: List[Dict[str, Any]], ) -> List[Dict[str, Any]]:
+    normalized = []
+    for blocker in blockers:
+        normalized.append({
+            "blocked_side":
+            str(blocker.get("blocked_side", "")),
+            "blocked_unique_not_covered_complexity":
+            int(blocker.get("blocked_unique_not_covered_complexity", 0)),
+            "blocked_unique_reachable_complexity":
+            int(blocker.get("blocked_unique_reachable_complexity", 0)),
+            "blocked_unique_functions":
+            sorted([
+                str(func_name)
+                for func_name in blocker.get("blocked_unique_functions", [])
+            ]),
+            "blocked_not_covered_complexity":
+            int(blocker.get("blocked_not_covered_complexity", 0)),
+            "blocked_reachable_complexity":
+            int(blocker.get("blocked_reachable_complexity", 0)),
+            "sides_hitcount_diff":
+            int(blocker.get("sides_hitcount_diff", 0)),
+            "source_file":
+            str(blocker.get("source_file", "")),
+            "branch_line_number":
+            str(blocker.get("branch_line_number", "")),
+            "blocked_side_line_numder":
+            str(blocker.get("blocked_side_line_numder", "")),
+            "function_name":
+            str(blocker.get("function_name", "")),
+        })
+    return sorted(
+        normalized,
+        key=lambda entry: (
+            entry["function_name"],
+            entry["source_file"],
+            entry["branch_line_number"],
+            entry["blocked_side_line_numder"],
+            entry["blocked_side"],
+        ),
+    )
+
+
+def _capture_python_overlay_outputs(
+    profile: fuzzer_profile.FuzzerProfile,
+    proj_profile: project_profile.MergedProjectProfile,
+) -> Dict[str, Any]:
+    all_callsites = []
+    if profile.fuzzer_callsite_calltree is not None:
+        all_callsites = cfg_load.extract_all_callsites(
+            profile.fuzzer_callsite_calltree)
+
+    overlay_nodes = []
+    for node in all_callsites:
+        overlay_nodes.append({
+            "cov_ct_idx":
+            node.cov_ct_idx,
+            "cov_hitcount":
+            node.cov_hitcount,
+            "cov_color":
+            node.cov_color,
+            "cov_link":
+            node.cov_link,
+            "cov_callsite_link":
+            node.cov_callsite_link,
+            "cov_forward_reds":
+            node.cov_forward_reds,
+            "cov_largest_blocked_func":
+            node.cov_largest_blocked_func,
+        })
+
+    branch_complexities = []
+    for function_name in sorted(proj_profile.all_functions):
+        function_data = proj_profile.all_functions[function_name]
+        for branch_name in sorted(function_data.branch_profiles):
+            branch = function_data.branch_profiles[branch_name]
+            for side_idx, side in enumerate(branch.sides):
+                branch_complexities.append({
+                    "function_name":
+                    function_name,
+                    "branch":
+                    branch_name,
+                    "side_idx":
+                    side_idx,
+                    "reachable_complexity":
+                    side.reachable_complexity,
+                    "not_covered_complexity":
+                    side.not_covered_complexity,
+                    "unique_reachable_complexity":
+                    side.unique_reachable_complexity,
+                    "unique_not_covered_complexity":
+                    side.unique_not_covered_complexity,
+                })
+
+    return {
+        "overlay_nodes":
+        _normalize_overlay_nodes(overlay_nodes),
+        "branch_complexities":
+        _normalize_branch_complexities(branch_complexities),
+        "branch_blockers":
+        _normalize_branch_blockers(
+            _serialize_branch_blockers(profile.branch_blockers)),
+    }
+
+
+def _compare_overlay_outputs(
+    native_outputs: Dict[str, Any],
+    python_outputs: Dict[str, Any],
+) -> Dict[str, int]:
+    mismatch_counts = {
+        "overlay_nodes_count": 0,
+        "overlay_nodes_values": 0,
+        "branch_complexities_count": 0,
+        "branch_complexities_values": 0,
+        "branch_blockers_count": 0,
+        "branch_blockers_values": 0,
+    }
+
+    for key in (
+            "overlay_nodes",
+            "branch_complexities",
+            "branch_blockers",
+    ):
+        native_items = native_outputs.get(key, [])
+        python_items = python_outputs.get(key, [])
+        if len(native_items) != len(python_items):
+            mismatch_counts[f"{key}_count"] += abs(
+                len(native_items) - len(python_items))
+            continue
+        for native_item, python_item in zip(native_items, python_items):
+            if native_item != python_item:
+                mismatch_counts[f"{key}_values"] += 1
+
+    return mismatch_counts
+
+
+def _apply_native_branch_complexities(
+    all_functions: Dict[str, function_profile.FunctionProfile],
+    branch_complexities: List[Dict[str, Any]],
+) -> None:
+    for entry in branch_complexities:
+        function_name = entry.get("function_name", "")
+        branch_name = entry.get("branch", "")
+        side_idx = entry.get("side_idx", -1)
+        if (function_name not in all_functions or branch_name
+                not in all_functions[function_name].branch_profiles
+                or not isinstance(side_idx, int)):
+            continue
+
+        branch = all_functions[function_name].branch_profiles[branch_name]
+        if side_idx < 0 or side_idx >= len(branch.sides):
+            continue
+
+        side = branch.sides[side_idx]
+        side.reachable_complexity = int(entry.get("reachable_complexity", 0))
+        side.not_covered_complexity = int(
+            entry.get("not_covered_complexity", 0))
+        side.unique_reachable_complexity = int(
+            entry.get("unique_reachable_complexity", 0))
+        side.unique_not_covered_complexity = int(
+            entry.get("unique_not_covered_complexity", 0))
+
+
+def _apply_native_overlay_outputs(
+    profile: fuzzer_profile.FuzzerProfile,
+    proj_profile: project_profile.MergedProjectProfile,
+    native_outputs: Dict[str, Any],
+    out_dir: str,
+    target_coverage_url: str,
+) -> None:
+    all_callsites = []
+    if profile.fuzzer_callsite_calltree is not None:
+        all_callsites = cfg_load.extract_all_callsites(
+            profile.fuzzer_callsite_calltree)
+    for ct_idx, node in enumerate(all_callsites):
+        node.cov_ct_idx = ct_idx
+
+    updates_by_idx: Dict[int, Dict[str, Any]] = {}
+    for update in native_outputs.get("overlay_nodes", []):
+        ct_idx = int(update.get("cov_ct_idx", -1))
+        updates_by_idx[ct_idx] = update
+
+    for node in all_callsites:
+        node_update = updates_by_idx.get(node.cov_ct_idx)
+        if node_update is None:
+            continue
+        node.cov_hitcount = int(
+            node_update.get("cov_hitcount", node.cov_hitcount))
+        node.cov_color = str(node_update.get("cov_color", node.cov_color))
+        node.cov_link = str(node_update.get("cov_link", node.cov_link))
+        node.cov_callsite_link = str(
+            node_update.get("cov_callsite_link", node.cov_callsite_link))
+        node.cov_forward_reds = int(
+            node_update.get("cov_forward_reds", node.cov_forward_reds))
+        node.cov_largest_blocked_func = str(
+            node_update.get("cov_largest_blocked_func",
+                            node.cov_largest_blocked_func))
+
+    _apply_native_branch_complexities(
+        proj_profile.all_functions,
+        native_outputs.get("branch_complexities", []),
+    )
+
+    branch_blockers: List[FuzzBranchBlocker] = []
+    for blocker in native_outputs.get("branch_blockers", []):
+        try:
+            blocked_side = int(
+                str(blocker.get("blocked_side", "0")).strip("'\""))
+        except ValueError:
+            blocked_side = blocker.get("blocked_side", 0)
+
+        blocked_unique_functions = [
+            str(function_name)
+            for function_name in blocker.get("blocked_unique_functions", [])
+        ]
+        source_file = str(blocker.get("source_file", ""))
+        branch_line_number = str(blocker.get("branch_line_number", "0"))
+        function_name = str(blocker.get("function_name", ""))
+        try:
+            coverage_link = profile.resolve_coverage_link(
+                target_coverage_url,
+                source_file,
+                int(branch_line_number),
+                function_name,
+            )
+        except ValueError:
+            coverage_link = "#"
+
+        branch_blockers.append(
+            FuzzBranchBlocker(
+                blocked_side,
+                int(blocker.get("blocked_unique_not_covered_complexity", 0)),
+                int(blocker.get("blocked_unique_reachable_complexity", 0)),
+                blocked_unique_functions,
+                int(blocker.get("blocked_not_covered_complexity", 0)),
+                int(blocker.get("blocked_reachable_complexity", 0)),
+                int(blocker.get("sides_hitcount_diff", 0)),
+                source_file,
+                branch_line_number,
+                str(blocker.get("blocked_side_line_numder", "0")),
+                function_name,
+                coverage_link,
+            ))
+
+    profile.branch_blockers = branch_blockers
+    json_report.add_branch_blocker_key_value_to_report(
+        profile.identifier,
+        "branch_blockers",
+        _serialize_branch_blockers(profile.branch_blockers),
+        out_dir,
+    )
+
+
 def overlay_calltree_with_coverage(
+    profile: fuzzer_profile.FuzzerProfile,
+    proj_profile: project_profile.MergedProjectProfile,
+    coverage_url: str,
+    basefolder: str,
+    out_dir,
+) -> None:
+    selected_backend = backend_loaders.parse_overlay_backend_env()
+    strict_mode = backend_loaders.parse_overlay_strict_mode()
+    shadow_mode = backend_loaders.parse_overlay_shadow_mode()
+    if selected_backend == backend_loaders.BACKEND_GO and not shadow_mode:
+        logger.warning(
+            "FI_OVERLAY_BACKEND=go currently runs in probe/shadow-only mode; "
+            "forcing Python authoritative output")
+        shadow_mode = True
+
+    language_supports_authoritative = (profile.target_lang
+                                       in _OVERLAY_AUTHORITATIVE_LANGS)
+    if (selected_backend != backend_loaders.BACKEND_PYTHON
+            and not language_supports_authoritative):
+        if not shadow_mode:
+            logger.warning(
+                "Native overlay authoritative mode is disabled for language %s; "
+                "using Python overlay path",
+                profile.target_lang,
+            )
+            _overlay_calltree_with_coverage_python(profile, proj_profile,
+                                                   coverage_url, basefolder,
+                                                   out_dir)
+            return
+        logger.warning(
+            "Native overlay diagnostics running in shadow mode for unsupported "
+            "language %s; Python remains authoritative",
+            profile.target_lang,
+        )
+
+    if selected_backend != backend_loaders.BACKEND_PYTHON:
+        command, missing_command_details = (
+            backend_loaders.resolve_overlay_backend_command_with_details(
+                selected_backend,
+                command_env_prefix="FI_OVERLAY",
+            ))
+        if not command:
+            if strict_mode:
+                logger.warning(
+                    "%s: Native overlay binary not found; falling back to Python "
+                    "(strict mode does not apply to binary absence) | details=%s",
+                    backend_loaders.FI_OVERLAY_COMMAND_MISSING,
+                    json.dumps(missing_command_details,
+                               sort_keys=True,
+                               default=str),
+                )
+            else:
+                logger.warning(
+                    "%s: No overlay command configured; falling back to Python | details=%s",
+                    backend_loaders.FI_OVERLAY_COMMAND_MISSING,
+                    json.dumps(missing_command_details,
+                               sort_keys=True,
+                               default=str),
+                )
+            _overlay_calltree_with_coverage_python(profile, proj_profile,
+                                                   coverage_url, basefolder,
+                                                   out_dir)
+            return
+
+        logger.info("[overlay] using %s backend (%s)", selected_backend,
+                    command[0])
+        request_payload = _build_overlay_native_payload(
+            profile, proj_profile, coverage_url, str(out_dir))
+        backend_result = backend_loaders.run_overlay_backend(
+            payload=request_payload,
+            selected_backend=selected_backend,
+            strict_mode=strict_mode,
+        )
+        if backend_result.response is not None:
+            target_coverage_url = request_payload["target_coverage_url"]
+            artifacts = backend_result.response.get("artifacts", {})
+            try:
+                native_outputs = {
+                    "overlay_nodes":
+                    _normalize_overlay_nodes(
+                        _load_overlay_artifact_json(
+                            artifacts,
+                            "overlay_nodes",
+                            str(out_dir),
+                        ) or []),
+                    "branch_complexities":
+                    _normalize_branch_complexities(
+                        _load_overlay_artifact_json(
+                            artifacts,
+                            "branch_complexities",
+                            str(out_dir),
+                        ) or []),
+                    "branch_blockers":
+                    _normalize_branch_blockers(
+                        _load_overlay_artifact_json(
+                            artifacts,
+                            "branch_blockers",
+                            str(out_dir),
+                        ) or []),
+                }
+            except (OSError, ValueError, json.JSONDecodeError) as err:
+                reason_details = {
+                    "error": str(err),
+                    "error_type": type(err).__name__,
+                    "backend": selected_backend,
+                    "phase": "artifact_load",
+                }
+                if strict_mode:
+                    raise backend_loaders.OverlayBackendError(
+                        backend_loaders.FI_OVERLAY_SCHEMA_ERROR,
+                        "Failed to load overlay backend artifacts",
+                        reason_details,
+                    ) from err
+                logger.warning(
+                    "%s: Failed loading native overlay artifacts; using python path | details=%s",
+                    backend_loaders.FI_OVERLAY_SCHEMA_ERROR,
+                    json.dumps(reason_details),
+                )
+                _overlay_calltree_with_coverage_python(profile, proj_profile,
+                                                       coverage_url,
+                                                       basefolder, out_dir)
+                return
+
+            if shadow_mode:
+                _overlay_calltree_with_coverage_python(profile, proj_profile,
+                                                       coverage_url,
+                                                       basefolder, out_dir)
+                python_outputs = _capture_python_overlay_outputs(
+                    profile, proj_profile)
+                mismatch_counts = _compare_overlay_outputs(
+                    native_outputs, python_outputs)
+                mismatch_total = sum(mismatch_counts.values())
+                logger.info(
+                    "Overlay shadow parity diagnostics: %s",
+                    json.dumps(mismatch_counts, sort_keys=True),
+                )
+                if mismatch_total > 0:
+                    if strict_mode:
+                        raise backend_loaders.OverlayBackendError(
+                            backend_loaders.FI_OVERLAY_PARITY_MISMATCH,
+                            "Overlay native output mismatches Python output",
+                            mismatch_counts,
+                        )
+                    logger.warning(
+                        "%s: Overlay native output mismatches Python output | details=%s",
+                        backend_loaders.FI_OVERLAY_PARITY_MISMATCH,
+                        json.dumps(mismatch_counts, sort_keys=True),
+                    )
+                return
+
+            _apply_native_overlay_outputs(
+                profile,
+                proj_profile,
+                native_outputs,
+                out_dir,
+                target_coverage_url,
+            )
+            logger.info(
+                "[+] found %d branch blockers.",
+                len(profile.branch_blockers),
+            )
+            return
+
+    _overlay_calltree_with_coverage_python(profile, proj_profile, coverage_url,
+                                           basefolder, out_dir)
+
+
+def _overlay_calltree_with_coverage_python(
     profile: fuzzer_profile.FuzzerProfile,
     proj_profile: project_profile.MergedProjectProfile,
     coverage_url: str,
@@ -859,8 +1546,9 @@ def overlay_calltree_with_coverage(
     target_coverage_url = utils.get_target_coverage_url(
         coverage_url, target_name, profile.target_lang)
     logger.info("Using coverage url: %s", target_coverage_url)
-    for node in cfg_load.extract_all_callsites(
-            profile.fuzzer_callsite_calltree):
+    all_callsites = cfg_load.extract_all_callsites(
+        profile.fuzzer_callsite_calltree)
+    for node in all_callsites:
         node.cov_ct_idx = ct_idx
         ct_idx += 1
 
@@ -891,11 +1579,9 @@ def overlay_calltree_with_coverage(
     # For python, do a hack where we check if any node is covered, and, if so,
     # ensure the entrypoint is covered.
     logger.info("Overlaying 2")
-    all_nodes = cfg_load.extract_all_callsites(
-        profile.fuzzer_callsite_calltree)
+    all_nodes = all_callsites
     if len(all_nodes) > 0:
-        for node in cfg_load.extract_all_callsites(
-                profile.fuzzer_callsite_calltree)[1:]:
+        for node in all_nodes[1:]:
             if node.cov_hitcount > 0:
                 all_nodes[0].cov_hitcount = 200
                 all_nodes[0].cov_color = get_hit_count_color(200)
@@ -903,8 +1589,6 @@ def overlay_calltree_with_coverage(
 
     # Extract data about which nodes unlocks data
     logger.info("Overlaying 3")
-    all_callsites = cfg_load.extract_all_callsites(
-        profile.fuzzer_callsite_calltree)
     prev_end = -1
     for idx1, n1 in enumerate(all_callsites):
         n1 = all_callsites[idx1]
@@ -945,7 +1629,6 @@ def overlay_calltree_with_coverage(
             forward_red += 1
             idx2 += 1
         prev_end = idx2 - 1
-        # logger.info("Assigning forward red: %d for index %d"%(forward_red, idx1))
         n1.cov_forward_reds = forward_red
         n1.cov_largest_blocked_func = largest_blocked_name
 
@@ -954,37 +1637,12 @@ def overlay_calltree_with_coverage(
     profile.branch_blockers = detect_branch_level_blockers(
         proj_profile.all_functions, profile, target_coverage_url)
     logger.info("[+] found %d branch blockers.", len(profile.branch_blockers))
-    branch_blockers_list = []
-    for blk in profile.branch_blockers:
-        branch_blockers_list.append({
-            "blocked_side":
-            repr(blk.blocked_side),
-            "blocked_unique_not_covered_complexity":
-            blk.blocked_unique_not_covered_complexity,
-            "blocked_unique_reachable_complexity":
-            blk.blocked_unique_reachable_complexity,
-            "blocked_unique_functions":
-            blk.blocked_unique_funcs,
-            "blocked_not_covered_complexity":
-            blk.blocked_not_covered_complexity,
-            "blocked_reachable_complexity":
-            blk.blocked_reachable_complexity,
-            "sides_hitcount_diff":
-            blk.sides_hitcount_diff,
-            "source_file":
-            blk.source_file,
-            "branch_line_number":
-            blk.branch_line_number,
-            "blocked_side_line_numder":
-            blk.blocked_side_line_numder,
-            "function_name":
-            blk.function_name,
-        })
-
-    json_report.add_branch_blocker_key_value_to_report(profile.identifier,
-                                                       "branch_blockers",
-                                                       branch_blockers_list,
-                                                       out_dir)
+    json_report.add_branch_blocker_key_value_to_report(
+        profile.identifier,
+        "branch_blockers",
+        _serialize_branch_blockers(profile.branch_blockers),
+        out_dir,
+    )
 
 
 def update_branch_complexities(
@@ -1185,15 +1843,12 @@ def detect_branch_level_blockers(
 
 
 def extract_namespace(mangled_function_name, return_type=None):
-    # logger.info("Demangling: %s" % (mangled_function_name))
     demangled_func_name = utils.demangle_rust_func(
         utils.demangle_cpp_func(mangled_function_name))
-    # logger.info("Demangled name: %s" % (demangled_func_name))
     if return_type is not None and demangled_func_name.startswith(
             f"{return_type} "):
         return_type_offset = len(return_type) + 1
         demangled_func_name = demangled_func_name[return_type_offset:]
-        # logger.info("Removed function type: %s" % (demangled_func_name))
     if "::" not in demangled_func_name:
         return []
 
@@ -1323,10 +1978,13 @@ def _safe_int(value, default=None):
         return default
 
 
-def _build_debug_function_indexes(debug_all_functions, header_index_by_name):
+def _build_debug_function_indexes(debug_all_functions,
+                                  header_index_by_name=None):
     debug_dict_by_name = {}
     debug_dict_by_filename = {}
     debug_lines_by_filename = {}
+    if header_index_by_name is None:
+        header_index_by_name = {}
 
     for debug_function in debug_all_functions:
         source_dict = debug_function.get("source", {})
@@ -1377,7 +2035,6 @@ def correlate_introspector_func_to_debug_information(
             return func_signature, debug_function
 
     # We could not find the right one, let's search more broadly for it.
-    del all_debug_functions
     source_file = os.path.normpath(if_func.get("Functions filename", ""))
     source_line_begin = _safe_int(if_func.get("source_line_begin"),
                                   default=None)
@@ -1450,7 +2107,6 @@ def correlate_introspection_functions_to_debug_info(all_functions_json_report,
     if not report_dict:
         report_dict = {}
 
-    # Find header files
     normalized_paths = set()
     for header_file in report_dict.get("all_files_in_project", []):
         normalized_paths.add(os.path.normpath(header_file["source_file"]))
@@ -1517,6 +2173,17 @@ def extract_all_sources(
     exclude_patterns: list[str] | None = None,
 ) -> set[str]:
     """List all source files in /src with project language filters."""
+    scan_root = os.path.abspath("/src")
+    cache_key = (
+        language,
+        tuple(sorted(exclude_patterns or [])),
+        os.path.abspath(os.getcwd()),
+        scan_root,
+    )
+    cached_paths = _SOURCES_SCAN_CACHE.get(cache_key)
+    if cached_paths is not None:
+        return set(cached_paths)
+
     # Compile regex patterns once and ignore invalid entries consistently.
     compiled_exclude_patterns = []
     for pattern in exclude_patterns or []:
@@ -1525,12 +2192,19 @@ def extract_all_sources(
         except re.error as err:
             logger.warning("Invalid exclude pattern %s: %s", pattern, err)
 
-    return _scan_source_tree(language, compiled_exclude_patterns)
+    scanned_source_files = _scan_source_tree(
+        language,
+        compiled_exclude_patterns,
+        scan_root=scan_root,
+    )
+    _SOURCES_SCAN_CACHE[cache_key] = frozenset(scanned_source_files)
+    return set(scanned_source_files)
 
 
 def _scan_source_tree(
     language: str,
     compiled_exclude_patterns: list[re.Pattern[str]],
+    scan_root: str = "/src/",
 ) -> set[str]:
     interesting_source_files: set[str] = set()
 
@@ -1564,19 +2238,12 @@ def _scan_source_tree(
         "/src/source-code/",
     ]
 
-    def is_excluded_by_pattern(path):
-        normalized_path = os.path.normpath(path)
-        for pattern in compiled_exclude_patterns:
-            if pattern.search(normalized_path):
-                return True
-        return False
-
     def is_interesting_source_file(path):
         if not any(path.endswith(ext) for ext in source_extensions):
             return False
-        if is_excluded_by_pattern(path):
+        if _matches_any_pattern(path, compiled_exclude_patterns):
             return False
-        if any([avoid in path for avoid in to_avoid]):
+        if any(avoid in path for avoid in to_avoid):
             return False
         if path.startswith("/src/source-code"):
             return False
@@ -1584,11 +2251,11 @@ def _scan_source_tree(
             return False
         return True
 
-    for root, dirs, files in os.walk("/src/"):
+    for root, dirs, files in os.walk(scan_root):
         dirs[:] = [
-            d for d in dirs
-            if not is_excluded_by_pattern(os.path.join(root, d)) and not any(
-                avoid in os.path.join(root, d) for avoid in to_avoid)
+            d for d in dirs if not _matches_any_pattern(
+                os.path.join(root, d), compiled_exclude_patterns) and not any(
+                    avoid in os.path.join(root, d) for avoid in to_avoid)
         ]
         for f in files:
             path = os.path.join(root, f)
@@ -1600,11 +2267,13 @@ def _scan_source_tree(
     return interesting_source_files
 
 
-def extract_test_information(report_dict=None,
-                             language="c-cpp",
-                             out_dir="/",
-                             exclude_patterns=None,
-                             source_files: set[str] | None = None):
+def extract_test_information(
+    report_dict=None,
+    language="c-cpp",
+    out_dir="/",
+    exclude_patterns=None,
+    source_files: set[str] | None = None,
+):
     """Extract test information for different project language."""
     if not report_dict:
         report_dict = {}
@@ -1724,17 +2393,10 @@ def extract_tests_from_directories(
         "/src/inspector",
     ]
 
-    def is_excluded_by_pattern(path):
-        normalized_path = os.path.normpath(path)
-        for pattern in compiled_exclude_patterns:
-            if pattern.search(normalized_path):
-                return True
-        return False
-
     def is_candidate_source(absolute_path):
-        if is_excluded_by_pattern(absolute_path):
+        if _matches_any_pattern(absolute_path, compiled_exclude_patterns):
             return False
-        if any([avoid in absolute_path for avoid in to_avoid]):
+        if any(avoid in absolute_path for avoid in to_avoid):
             return False
         if absolute_path.startswith("/out/"):
             return False
@@ -1815,7 +2477,8 @@ def extract_tests_from_directories(
                 if file_count % 5000 == 0:
                     logger.info(
                         "extract_tests_from_directories: scanned %d files...",
-                        file_count)
+                        file_count,
+                    )
 
                 is_inspiration_root = any(ins in root for ins in inspirations)
                 for f in files:
@@ -1886,8 +2549,7 @@ def _extract_test_information_jvm():
         for root, _, files in os.walk(test_path):
             for file in files:
                 if file.endswith(source_code_extensions):
-                    path = os.path.join(root,
-                                        file).replace(f"{test_path}/", "")
+                    path = os.path.relpath(os.path.join(root, file), test_path)
                     all_test_files.add(path)
 
     # Walk through all the packages under source paths and locate example sources
@@ -1896,8 +2558,8 @@ def _extract_test_information_jvm():
             for file in files:
                 if file.endswith(source_code_extensions) and any(
                         inspiration in file for inspiration in inspirations):
-                    path = os.path.join(root,
-                                        file).replace(f"{source_path}/", "")
+                    path = os.path.relpath(os.path.join(root, file),
+                                           source_path)
                     all_test_files.add(path)
 
     # Walk through all the files under possible sample path and locate example sources
@@ -1905,8 +2567,8 @@ def _extract_test_information_jvm():
         for root, _, files in os.walk(sample_path):
             for file in files:
                 if file.endswith(source_code_extensions):
-                    path = os.path.join(root,
-                                        file).replace(f"{sample_path}/", "")
+                    path = os.path.relpath(os.path.join(root, file),
+                                           sample_path)
                     all_test_files.add(path)
 
     return all_test_files
@@ -1929,7 +2591,7 @@ def light_correlate_source_to_executable(language, exclude_patterns=None):
         if cov_report.endswith(".covreport"):
             cov_reports.append(os.path.join(textcov_dir, cov_report))
     for cov_report in cov_reports:
-        print("- cov report: %s" % (cov_report))
+        logger.info("- cov report: %s", cov_report)
 
     all_source_files = extract_all_sources(language, exclude_patterns)
     pairs = []

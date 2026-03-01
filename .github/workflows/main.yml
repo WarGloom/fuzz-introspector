@@ -16,13 +16,13 @@ jobs:
       - name: flake8 Lint post process
         uses: py-actions/flake8@84ec6726560b6d5bd68f2a5bed83d62b52bb50ba # v2
         with:
-          ignore: "E125,W503,W504,W605"
+          ignore: "E125,E126,E203,E251,W503,W504,W605"
           max-line-length: "100"
           path: "src/"
       - name: flake8 Lint python frontend
         uses: py-actions/flake8@84ec6726560b6d5bd68f2a5bed83d62b52bb50ba # v2
         with:
-          ignore: "E125,W503,W504,W605"
+          ignore: "E125,E126,E203,E251,W503,W504,W605"
           max-line-length: "100"
           path: "frontends/python/"
       - name: Install yapf

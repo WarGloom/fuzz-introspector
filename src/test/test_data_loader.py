@@ -173,3 +173,83 @@ def test_load_all_profiles_fallback_to_serial_on_parallel_failure(monkeypatch):
 
     assert [profile.name for profile in profiles] == ["x.data", "y.data"]
     assert loaded == ["x.data", "y.data"]
+
+
+def test_read_fuzzer_data_file_to_profile_uses_external_yaml_backend(
+    monkeypatch,
+    tmp_path,
+):
+    cfg_file = tmp_path / "fuzzerLogFile-sample.data"
+    cfg_file.write_text("Call tree\n", encoding="utf-8")
+
+    monkeypatch.setenv("FI_PROFILE_YAML_LOADER", "go")
+    monkeypatch.setattr(
+        data_loader.backend_loaders,
+        "load_json_with_backend",
+        lambda **_: ("go", {
+            "Fuzzer filename": "fuzzer.cc",
+            "All functions": {
+                "Elements": []
+            },
+        }),
+    )
+
+    captured_yaml = {}
+
+    class _FuzzerProfileStub:
+
+        def __init__(self, cfg_path, yaml_dict, language, cfg_content):
+            del cfg_path, language, cfg_content
+            captured_yaml.update(yaml_dict)
+
+        def has_entry_point(self):
+            return True
+
+    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile",
+                        _FuzzerProfileStub)
+
+    profile = data_loader.read_fuzzer_data_file_to_profile(
+        str(cfg_file), "c-cpp")
+    assert profile is not None
+    assert captured_yaml["Fuzzer filename"] == "fuzzer.cc"
+
+
+def test_read_fuzzer_data_file_to_profile_uses_rust_default_backend(
+    monkeypatch,
+    tmp_path,
+):
+    cfg_file = tmp_path / "fuzzerLogFile-sample.data"
+    cfg_file.write_text("Call tree\n", encoding="utf-8")
+    yaml_file = tmp_path / "fuzzerLogFile-sample.data.yaml"
+    yaml_file.write_text(
+        "Fuzzer filename: fuzzer.cc\nAll functions:\n  Elements: []\n",
+        encoding="utf-8",
+    )
+
+    captured_backend = {}
+
+    def _fake_loader(**kwargs):
+        captured_backend["default_backend"] = kwargs.get("default_backend")
+        return "python", None
+
+    captured_yaml = {}
+
+    class _FuzzerProfileStub:
+
+        def __init__(self, cfg_path, yaml_dict, language, cfg_content):
+            del cfg_path, language, cfg_content
+            captured_yaml.update(yaml_dict)
+
+        def has_entry_point(self):
+            return True
+
+    monkeypatch.setattr(data_loader.backend_loaders, "load_json_with_backend",
+                        _fake_loader)
+    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile",
+                        _FuzzerProfileStub)
+
+    profile = data_loader.read_fuzzer_data_file_to_profile(
+        str(cfg_file), "c-cpp")
+    assert profile is not None
+    assert captured_backend["default_backend"] == data_loader.backend_loaders.BACKEND_RUST
+    assert captured_yaml["Fuzzer filename"] == "fuzzer.cc"

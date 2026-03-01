@@ -1,0 +1,1 @@
+[{"name": "BAD_MACRO", "type_or_value": "\"bad byte: \"", "item_type": "preproc_def", "pos": {"source_file": "src/test/data/source-code/cpp/unicode-error/simple.cpp", "line_start": 0, "line_end": 1}}]

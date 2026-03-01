@@ -788,3 +788,70 @@ def test_load_yaml_collections_rss_soft_limit_recovers_inflight_after_relief():
                for call in info_mock.call_args_list)
     assert any(call.args and "Memory pressure recovery" in call.args[0]
                for call in info_mock.call_args_list)
+
+
+def test_load_yaml_collections_process_backend_fallback_has_output_parity():
+    """Process backend failure should fall back to serial and keep deterministic output."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        paths = []
+        for idx in range(6):
+            path = os.path.join(tmpdir, f"shard-{idx}.yaml")
+            with open(path, "w") as f:
+                f.write(json.dumps([{"id": f"item-{idx}"}]))
+            paths.append(path)
+
+        def _load_yaml_shard(shard):
+            idx = int(os.path.basename(shard[0]).split("-")[1].split(".")[0])
+            return [{"id": f"item-{idx}"}]
+
+        def _run_with_process_fallback() -> list[str]:
+            class _FailingProcessPool:
+
+                def __init__(self, *args, **kwargs):
+                    del args
+                    del kwargs
+                    raise RuntimeError("process backend disabled")
+
+            env = {
+                "FI_DEBUG_PARALLEL": "1",
+                "FI_DEBUG_PARALLEL_BACKEND": "process",
+                "FI_DEBUG_USE_PROCESS_POOL": "1",
+                "FI_DEBUG_MAX_WORKERS": "4",
+                "FI_DEBUG_SHARD_FILES": "1",
+                "FI_DEBUG_MAX_INFLIGHT_SHARDS": "4",
+            }
+            with mock.patch.dict(os.environ, env, clear=False):
+                with mock.patch.object(debug_info,
+                                       "_load_yaml_shard",
+                                       side_effect=_load_yaml_shard):
+                    with mock.patch.object(debug_info, "ProcessPoolExecutor",
+                                           _FailingProcessPool):
+                        with mock.patch.object(debug_info.logger, "info",
+                                               wraps=debug_info.logger.info) as info_mock:
+                            result = debug_info._load_yaml_collections(
+                                paths, "debug-info")
+            assert any("Falling back to thread pool for" in call.args[0]
+                       for call in info_mock.call_args_list)
+            return [item["id"] for item in result]
+
+        def _run_with_thread_backend() -> list[str]:
+            env = {
+                "FI_DEBUG_PARALLEL": "1",
+                "FI_DEBUG_PARALLEL_BACKEND": "thread",
+                "FI_DEBUG_USE_PROCESS_POOL": "0",
+                "FI_DEBUG_MAX_WORKERS": "4",
+                "FI_DEBUG_SHARD_FILES": "1",
+                "FI_DEBUG_MAX_INFLIGHT_SHARDS": "4",
+            }
+            with mock.patch.dict(os.environ, env, clear=False):
+                with mock.patch.object(debug_info,
+                                       "_load_yaml_shard",
+                                       side_effect=_load_yaml_shard):
+                    result = debug_info._load_yaml_collections(paths, "debug-info")
+            return [item["id"] for item in result]
+
+    thread_result = _run_with_thread_backend()
+    fallback_result = _run_with_process_fallback()
+
+    assert thread_result == [f"item-{idx}" for idx in range(6)]
+    assert fallback_result == thread_result

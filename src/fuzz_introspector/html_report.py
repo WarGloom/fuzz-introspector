@@ -59,7 +59,7 @@ PR6_PARALLEL_ANALYSIS_WORKERS_ENV = "FI_PR6_ANALYSIS_WORKERS"
 PR6_PARALLEL_ANALYSIS_BACKEND_ENV = "FI_PR6_PARALLEL_BACKEND"
 PR6_PARALLEL_ANALYSIS_DEFAULT_BACKEND = "thread"
 CALLTREE_BITMAP_MAX_NODES_ENV = "FI_CALLTREE_BITMAP_MAX_NODES"
-CALLTREE_BITMAP_MAX_NODES_DEFAULT = 20000
+CALLTREE_BITMAP_MAX_NODES_DEFAULT = 999999
 STAGE_WARN_SECONDS_ENV = "FI_STAGE_WARN_SECONDS"
 STAGE_WARN_SECONDS_DEFAULT = 0
 TABLE_ID_STRIDE = 100000
@@ -73,15 +73,21 @@ def _parse_parallel_worker_count() -> int:
         else:
             worker_count = os.cpu_count() or 1
     except ValueError:
-        logger.warning("Invalid %s=%r; defaulting to cpu count",
-                       PR6_PARALLEL_ANALYSIS_WORKERS_ENV, raw_count)
+        logger.warning(
+            "Invalid %s=%r; defaulting to cpu count",
+            PR6_PARALLEL_ANALYSIS_WORKERS_ENV,
+            raw_count,
+        )
         return os.cpu_count() or 1
 
     flag_value = os.environ.get(PR6_PARALLEL_ANALYSIS_FLAG_ENV,
                                 "").strip().lower()
     if worker_count < 1:
-        logger.warning("Invalid %s=%r; defaulting to 1",
-                       PR6_PARALLEL_ANALYSIS_WORKERS_ENV, raw_count)
+        logger.warning(
+            "Invalid %s=%r; defaulting to 1",
+            PR6_PARALLEL_ANALYSIS_WORKERS_ENV,
+            raw_count,
+        )
         return 1
 
     if flag_value and flag_value in ("0", "false", "no", "off"):
@@ -1183,7 +1189,12 @@ def write_content_to_html_files(html_full_doc, all_functions_json_html,
         )
     max_prettify_bytes = max_prettify_mb * 1024 * 1024
     disable_prettify = os.environ.get("FI_DISABLE_HTML_PRETTIFY",
-                                      "").lower() in ("1", "true", "yes", "on")
+                                      "").lower() in (
+                                          "1",
+                                          "true",
+                                          "yes",
+                                          "on",
+                                      )
 
     if disable_prettify:
         logger.info(
@@ -1433,6 +1444,10 @@ def _create_section_optional_analyses_impl(
             parallel_worker_count,
             parallel_backend,
         )
+        logger.info(
+            " - Parallel analyses: %s",
+            [analysis_cls.get_name() for analysis_cls in parallel_interfaces],
+        )
         parallel_results = _run_parallel_analyses(
             parallel_interfaces,
             analyses_to_run,
@@ -1458,6 +1473,7 @@ def _create_section_optional_analyses_impl(
 
     for analysis_interface in serial_interfaces:
         analysis_name = analysis_interface.get_name()
+        logger.info(" - Running serial analysis: %s", analysis_name)
         if use_parallel_merge:
             envelope = _run_serial_analysis_with_envelope(
                 analysis_interface,
@@ -1616,8 +1632,11 @@ def create_html_report(
         stage_started = time.monotonic()
         (html_overview, html_report_top,
          html_report_core) = (create_section_project_overview(
-             table_of_contents, introspection_proj.proj_profile, conclusions,
-             report_name))
+             table_of_contents,
+             introspection_proj.proj_profile,
+             conclusions,
+             report_name,
+         ))
         _log_stage_telemetry("project_overview", stage_started,
                              stage_warn_seconds)
 
@@ -1775,8 +1794,8 @@ def create_html_report(
                 json_copy["Reached by Fuzzers"] = fd.reached_by_fuzzers
                 json_copy[
                     "Runtime reached by Fuzzers"] = fd.reached_by_fuzzers_runtime
-                json_copy[
-                    "Combined reached by Fuzzers"] = fd.reached_by_fuzzers_combined
+                json_copy["Combined reached by Fuzzers"] = (
+                    fd.reached_by_fuzzers_combined)
                 json_copy["collapsible_id"] = fd.function_name
                 json_copy["return_type"] = fd.return_type
                 json_copy["raw-function-name"] = fd.raw_function_name

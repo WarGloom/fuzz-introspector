@@ -140,3 +140,51 @@ def test_extract_tests_from_directories_deduplicates_seed_directories(
 
     assert walk_starts == [project_root]
     assert f"{project_root}/test_file.cpp" in extracted
+
+
+def test_correlate_introspection_functions_populates_possible_header_files(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        analysis,
+        "convert_debug_info_to_signature_v2",
+        lambda debug_function, _: f"sig::{debug_function['name']}",
+    )
+
+    header_path = tmp_path / "target.hpp"
+    header_path.write_text("int target(int x);\n", encoding="utf-8")
+
+    llvm_functions = [{
+        "Func name": "target",
+        "Functions filename": "/src/project/target.cc",
+        "source_line_begin": "20",
+    }]
+    debug_functions = [
+        _make_debug_function("target", "/src/project/target.cc", "20"),
+    ]
+
+    analysis.correlate_introspection_functions_to_debug_info(
+        llvm_functions,
+        debug_functions,
+        "c-cpp",
+        report_dict={
+            "all_files_in_project": [{
+                "source_file": str(header_path)
+            }],
+        },
+    )
+
+    possible_headers = llvm_functions[0]["debug_function_info"].get(
+        "possible-header-files", [])
+    assert str(header_path) in possible_headers
+
+    # Ensure report_dict remains JSON-serializable after correlation.
+    import json  # local import to keep test scope tight
+
+    json.dumps({
+        "all_files_in_project": [{
+            "source_file": str(header_path)
+        }],
+        "dummy": "ok",
+    })

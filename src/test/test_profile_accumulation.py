@@ -268,9 +268,21 @@ def test_log_debug_load_stage_includes_rss_field(monkeypatch, caplog):
             include_rss=True,
             perf_warn_enabled=False,
             warn_after_seconds=0,
+            warn_rss_mb=0,
         )
 
     assert any("rss_mb=42.25" in record.message for record in caplog.records)
+
+
+def test_parse_stage_warn_rss_mb_invalid_uses_default(monkeypatch, caplog):
+    monkeypatch.setenv(analysis.FI_DEBUG_STAGE_WARN_RSS_MB_ENV, "-1")
+
+    with caplog.at_level("WARNING"):
+        warn_rss_mb = analysis._parse_stage_warn_rss_mb()
+
+    assert warn_rss_mb == analysis.FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT
+    assert any("FI_DEBUG_STAGE_WARN_RSS_MB" in record.message
+               for record in caplog.records)
 
 
 def test_log_debug_load_stage_emits_perf_warning(caplog):
@@ -282,8 +294,29 @@ def test_log_debug_load_stage_emits_perf_warning(caplog):
             include_rss=False,
             perf_warn_enabled=True,
             warn_after_seconds=3,
+            warn_rss_mb=0,
         )
 
     warning_messages = [record.message for record in caplog.records]
     assert any("exceeded threshold=3s" in message for message in warning_messages)
     assert any("FI_DEBUG_MAX_WORKERS" in message for message in warning_messages)
+
+
+def test_log_debug_load_stage_emits_rss_warning(caplog, monkeypatch):
+    monkeypatch.setattr(analysis, "_get_stage_rss_mb", lambda: 4096.0)
+
+    with caplog.at_level("WARNING"):
+        analysis._log_debug_load_stage(
+            "type_correlation",
+            1.5,
+            {"types": 5},
+            include_rss=False,
+            perf_warn_enabled=True,
+            warn_after_seconds=0,
+            warn_rss_mb=2048,
+        )
+
+    warning_messages = [record.message for record in caplog.records]
+    assert any("rss threshold=2048MB" in message for message in warning_messages)
+    assert any("FI_DEBUG_CORRELATE_PARALLEL" in message
+               for message in warning_messages)
