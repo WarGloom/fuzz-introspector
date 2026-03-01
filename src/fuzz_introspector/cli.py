@@ -36,13 +36,13 @@ def get_cmdline_parser() -> argparse.ArgumentParser:
         "light",
         help="Perform light analysis of project. This involves no compilaiton.",
     )
-    light_parser.add_argument("--language",
-                              type=str,
-                              default="c-cpp",
-                              help="Language of project")
+    light_parser.add_argument(
+        "--language", type=str, default="c-cpp", help="Language of project"
+    )
 
     full_parser = subparsers.add_parser(
-        "full", help="Analyse folder and generate HTML report and analyses.")
+        "full", help="Analyse folder and generate HTML report and analyses."
+    )
     full_parser.add_argument(
         "--target-dir",
         type=str,
@@ -55,14 +55,12 @@ def get_cmdline_parser() -> argparse.ArgumentParser:
         help="Programming of the source code to analyse.",
         choices=constants.LANGUAGES_SUPPORTED,
     )
-    full_parser.add_argument("--out-dir",
-                             default="",
-                             type=str,
-                             help="Folder to store analysis results.")
-    full_parser.add_argument("--name",
-                             default="no-name",
-                             type=str,
-                             help="Name of the report.")
+    full_parser.add_argument(
+        "--out-dir", default="", type=str, help="Folder to store analysis results."
+    )
+    full_parser.add_argument(
+        "--name", default="no-name", type=str, help="Name of the report."
+    )
     full_parser.add_argument(
         "--coverage-url",
         default="/covreport/linux",
@@ -119,18 +117,13 @@ def get_cmdline_parser() -> argparse.ArgumentParser:
         default=False,
         help="Enables all analyses",
     )
-    report_parser.add_argument("--correlation-file",
-                               type=str,
-                               default="",
-                               help="File with correlation data")
-    report_parser.add_argument("--name",
-                               type=str,
-                               default="",
-                               help="Name of project")
-    report_parser.add_argument("--language",
-                               type=str,
-                               default="c-cpp",
-                               help="Language of project")
+    report_parser.add_argument(
+        "--correlation-file", type=str, default="", help="File with correlation data"
+    )
+    report_parser.add_argument("--name", type=str, default="", help="Name of project")
+    report_parser.add_argument(
+        "--language", type=str, default="c-cpp", help="Language of project"
+    )
     report_parser.add_argument(
         "--output-json",
         nargs="+",
@@ -146,8 +139,8 @@ def get_cmdline_parser() -> argparse.ArgumentParser:
 
     # Command for correlating binary files to fuzzerLog files
     correlate_parser = subparsers.add_parser(
-        "correlate",
-        help="correlate executable files to fuzzer introspector logs")
+        "correlate", help="correlate executable files to fuzzer introspector logs"
+    )
     correlate_parser.add_argument(
         "--binaries-dir",
         type=str,
@@ -157,20 +150,19 @@ def get_cmdline_parser() -> argparse.ArgumentParser:
 
     # Command for diffing two Fuzz Introspector reports
     diff_parser = subparsers.add_parser(
-        "diff", help="Diff two reports to identify improvements/regressions")
-    diff_parser.add_argument("--report1",
-                             type=str,
-                             required=True,
-                             help="Path to the first report")
-    diff_parser.add_argument("--report2",
-                             type=str,
-                             required=True,
-                             help="Path to the second report")
+        "diff", help="Diff two reports to identify improvements/regressions"
+    )
+    diff_parser.add_argument(
+        "--report1", type=str, required=True, help="Path to the first report"
+    )
+    diff_parser.add_argument(
+        "--report2", type=str, required=True, help="Path to the second report"
+    )
 
     # Standalone analyser
     analyse_parser = subparsers.add_parser(
-        "analyse",
-        help="Standlone analyser commands to run on the target project.")
+        "analyse", help="Standlone analyser commands to run on the target project."
+    )
 
     analyser_parser = analyse_parser.add_subparsers(
         dest="analyser",
@@ -183,8 +175,10 @@ def get_cmdline_parser() -> argparse.ArgumentParser:
 
     source_code_line_analyser_parser = analyser_parser.add_parser(
         "SourceCodeLineAnalyser",
-        help=("Provide information in out-dir/function.json for the function"
-              " found in the given target file and line number"),
+        help=(
+            "Provide information in out-dir/function.json for the function"
+            " found in the given target file and line number"
+        ),
     )
     source_code_line_analyser_parser.add_argument(
         "--source-file",
@@ -211,15 +205,15 @@ def get_cmdline_parser() -> argparse.ArgumentParser:
         choices=constants.LANGUAGES_SUPPORTED,
     )
     source_code_line_analyser_parser.add_argument(
-        "--out-dir",
-        default="",
-        type=str,
-        help="Folder to store analysis results.")
+        "--out-dir", default="", type=str, help="Folder to store analysis results."
+    )
 
     far_reach_low_coverage_analyser_parser = analyser_parser.add_parser(
         "FarReachLowCoverageAnalyser",
-        help=("Provide interesting functions in the project that "
-              "are good targets for fuzzing with low runtime coverage."),
+        help=(
+            "Provide interesting functions in the project that "
+            "are good targets for fuzzing with low runtime coverage."
+        ),
     )
 
     far_reach_low_coverage_analyser_parser.add_argument(
@@ -235,22 +229,24 @@ def get_cmdline_parser() -> argparse.ArgumentParser:
     far_reach_low_coverage_analyser_parser.add_argument(
         "--only-header-functions",
         action="store_true",
-        help=
-        ("Excluding functions without header declaration in the analysing result."
-         ),
+        help=(
+            "Excluding functions without header declaration in the analysing result."
+        ),
     )
     far_reach_low_coverage_analyser_parser.add_argument(
         "--only-interesting-functions",
         action="store_true",
-        help=("Excluding functions without interesting fuzz keywords, like"
-              "parse or deserialise"),
+        help=(
+            "Excluding functions without interesting fuzz keywords, like"
+            "parse or deserialise"
+        ),
     )
     far_reach_low_coverage_analyser_parser.add_argument(
         "--only-easy-fuzz-params",
         action="store_true",
-        help=
-        ("Only include functions with easy fuzz parameters, like char*int, or string"
-         ),
+        help=(
+            "Only include functions with easy fuzz parameters, like char*int, or string"
+        ),
     )
     far_reach_low_coverage_analyser_parser.add_argument(
         "--max-functions",
@@ -277,15 +273,15 @@ def get_cmdline_parser() -> argparse.ArgumentParser:
         choices=constants.LANGUAGES_SUPPORTED,
     )
     far_reach_low_coverage_analyser_parser.add_argument(
-        "--out-dir",
-        default="",
-        type=str,
-        help="Folder to store analysis results.")
+        "--out-dir", default="", type=str, help="Folder to store analysis results."
+    )
 
     public_candidate_analyser_parser = analyser_parser.add_parser(
         "PublicCandidateAnalyser",
-        help=("Provide publicly accessible non-standard library functions "
-              "for the project that are good targets for fuzzing."),
+        help=(
+            "Provide publicly accessible non-standard library functions "
+            "for the project that are good targets for fuzzing."
+        ),
     )
 
     public_candidate_analyser_parser.add_argument(
@@ -301,15 +297,15 @@ def get_cmdline_parser() -> argparse.ArgumentParser:
         choices=constants.LANGUAGES_SUPPORTED,
     )
     public_candidate_analyser_parser.add_argument(
-        "--out-dir",
-        default="",
-        type=str,
-        help="Folder to store analysis results.")
+        "--out-dir", default="", type=str, help="Folder to store analysis results."
+    )
 
     frontend_analyser_parser = analyser_parser.add_parser(
         "FrontendAnalyser",
-        help=("Do a second run of the frontend and provide analysis "
-              "of public test files found in the project."),
+        help=(
+            "Do a second run of the frontend and provide analysis "
+            "of public test files found in the project."
+        ),
     )
 
     frontend_analyser_parser.add_argument(
@@ -325,10 +321,8 @@ def get_cmdline_parser() -> argparse.ArgumentParser:
         choices=constants.LANGUAGES_SUPPORTED,
     )
     frontend_analyser_parser.add_argument(
-        "--out-dir",
-        default="",
-        type=str,
-        help="Folder to store analysis results.")
+        "--out-dir", default="", type=str, help="Folder to store analysis results."
+    )
 
     return parser
 
