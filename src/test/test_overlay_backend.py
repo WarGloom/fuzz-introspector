@@ -61,6 +61,9 @@ class _ProfileStub(SimpleNamespace):
     def resolve_coverage_link(self, _url, source_file, line, function_name):
         return f"{source_file}:{line}:{function_name}"
 
+    def func_is_entrypoint(self, demangled_func_name: str) -> bool:
+        return demangled_func_name == "entry"
+
 
 def _dummy_profile() -> _ProfileStub:
     root = cfg_load.CalltreeCallsite("entry", "a.c", 0, 1, None)
@@ -187,6 +190,11 @@ def test_overlay_native_strict_failure_raises(
             {"missing_keys": ["status"]},
         )
 
+    monkeypatch.setattr(
+        backend_loaders,
+        "resolve_overlay_backend_command_with_details",
+        lambda *_args, **_kwargs: (["mock-overlay-cmd"], {}),
+    )
     monkeypatch.setattr(backend_loaders, "run_overlay_backend", _raise_strict_failure)
     monkeypatch.setattr(
         analysis,
@@ -411,6 +419,11 @@ def test_overlay_go_backend_forces_python_authoritative_shadow(
     monkeypatch.setenv("FI_OVERLAY_STRICT", "0")
     monkeypatch.delenv("FI_OVERLAY_SHADOW", raising=False)
     monkeypatch.setattr(
+        backend_loaders,
+        "resolve_overlay_backend_command_with_details",
+        lambda *_args, **_kwargs: ([cmd], {}),
+    )
+    monkeypatch.setattr(
         analysis, "_overlay_calltree_with_coverage_python", _python_overlay
     )
     original_run_overlay_backend = backend_loaders.run_overlay_backend
@@ -503,6 +516,11 @@ def test_overlay_native_authoritative_applies_artifacts(
     monkeypatch.setattr(backend_loaders, "parse_overlay_backend_env", lambda: "native")
     monkeypatch.setattr(backend_loaders, "parse_overlay_strict_mode", lambda: False)
     monkeypatch.setattr(backend_loaders, "parse_overlay_shadow_mode", lambda: False)
+    monkeypatch.setattr(
+        backend_loaders,
+        "resolve_overlay_backend_command_with_details",
+        lambda *_args, **_kwargs: (["mock-overlay-cmd"], {}),
+    )
     monkeypatch.setattr(
         backend_loaders,
         "run_overlay_backend",
@@ -628,6 +646,11 @@ def test_overlay_strict_unsafe_artifact_path_raises(
     monkeypatch.setattr(backend_loaders, "parse_overlay_shadow_mode", lambda: False)
     monkeypatch.setattr(
         backend_loaders,
+        "resolve_overlay_backend_command_with_details",
+        lambda *_args, **_kwargs: (["mock-overlay-cmd"], {}),
+    )
+    monkeypatch.setattr(
+        backend_loaders,
         "run_overlay_backend",
         lambda **_kwargs: backend_loaders.OverlayBackendResult(
             selected_backend="native",
@@ -705,6 +728,11 @@ def test_overlay_shadow_mode_keeps_python_authoritative(
     monkeypatch.setattr(backend_loaders, "parse_overlay_shadow_mode", lambda: True)
     monkeypatch.setattr(
         backend_loaders,
+        "resolve_overlay_backend_command_with_details",
+        lambda *_args, **_kwargs: (["mock-overlay-cmd"], {}),
+    )
+    monkeypatch.setattr(
+        backend_loaders,
         "run_overlay_backend",
         lambda **_kwargs: backend_loaders.OverlayBackendResult(
             selected_backend="native",
@@ -776,6 +804,11 @@ def test_overlay_shadow_mode_strict_raises_on_mismatch(
     monkeypatch.setattr(backend_loaders, "parse_overlay_backend_env", lambda: "native")
     monkeypatch.setattr(backend_loaders, "parse_overlay_strict_mode", lambda: True)
     monkeypatch.setattr(backend_loaders, "parse_overlay_shadow_mode", lambda: True)
+    monkeypatch.setattr(
+        backend_loaders,
+        "resolve_overlay_backend_command_with_details",
+        lambda *_args, **_kwargs: (["mock-overlay-cmd"], {}),
+    )
     monkeypatch.setattr(
         backend_loaders,
         "run_overlay_backend",

@@ -15,30 +15,37 @@
 #
 ################################################################################
 
-if [ -d "oss-fuzz" ]
-then
-  echo "OSS-Fuzz directory exists. Reusing existing one"
+if [ -d "oss-fuzz" ]; then
+	echo "OSS-Fuzz directory exists. Reusing existing one"
 else
-  echo "Cloning oss-fuzz"
-  git clone https://github.com/google/oss-fuzz
-  echo "Applying diffs"
-  cd oss-fuzz
-  git apply  --ignore-space-change --ignore-whitespace ../oss-fuzz-patches.diff
-  echo "Done"
-  cd ../
+	echo "Cloning oss-fuzz"
+	git clone https://github.com/google/oss-fuzz
+	echo "Applying diffs"
+	cd oss-fuzz
+	git apply --ignore-space-change --ignore-whitespace ../oss-fuzz-patches.diff
+	echo "Done"
+	cd ../
 
-  echo "Pulling latest base-clang OSS-Fuzz image."
-  docker pull gcr.io/oss-fuzz-base/base-clang:latest
+	echo "Pulling latest base-clang OSS-Fuzz image."
+	docker pull gcr.io/oss-fuzz-base/base-clang:latest
 fi
 
 echo "Building base-build, base-builder-python and base-runner for fuzz introspector"
 # This script should be run from the fuzz-introspector/oss_fuzz_integration folder
-# Copy over new post-processing
+# Copy over new post-processing and native loader sources.
 rm -rf ./oss-fuzz/infra/base-images/base-builder/src
 cp -rf ../src ./oss-fuzz/infra/base-images/base-builder/src
 
 rm -rf ./oss-fuzz/infra/base-images/base-builder/frontends
-cp -rf ../frontends/ ./oss-fuzz/infra/base-images/base-builder/frontends
+cp -rf ../frontends ./oss-fuzz/infra/base-images/base-builder/frontends
+
+# Newer OSS-Fuzz Dockerfiles in this repo expect fuzz-introspector as a single
+# subtree at the base-builder context root.
+rm -rf ./oss-fuzz/infra/base-images/base-builder/fuzz-introspector
+mkdir -p ./oss-fuzz/infra/base-images/base-builder/fuzz-introspector
+cp -rf ../src ./oss-fuzz/infra/base-images/base-builder/fuzz-introspector/src
+cp -rf ../frontends ./oss-fuzz/infra/base-images/base-builder/fuzz-introspector/frontends
+cp -rf ../tools ./oss-fuzz/infra/base-images/base-builder/fuzz-introspector/tools
 
 cd oss-fuzz
 docker build -t gcr.io/oss-fuzz-base/base-builder infra/base-images/base-builder

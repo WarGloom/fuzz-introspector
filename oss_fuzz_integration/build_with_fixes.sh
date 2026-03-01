@@ -61,12 +61,16 @@ cp -rf "$SCRIPT_DIR/tools/native_llvm_cov_loader_go" "$OSS_FUZZ_DIR/infra/base-i
 cp -rf "$SCRIPT_DIR/tools/native_llvm_cov_loader_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
 cp -rf "$SCRIPT_DIR/tools/native_debug_correlator_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
 cp -rf "$SCRIPT_DIR/tools/native_debug_correlator_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
+cp -rf "$SCRIPT_DIR/tools/native_overlay_backend_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
+cp -rf "$SCRIPT_DIR/tools/native_overlay_backend_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
 rm -rf "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_yaml_loader_rust/target"
 rm -rf "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_llvm_cov_loader_rust/target"
 rm -rf "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_debug_correlator_rust/target"
+rm -rf "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_overlay_backend_rust/target"
 rm -f "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_yaml_loader_go/native_yaml_loader_go"
 rm -f "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_llvm_cov_loader_go/native_llvm_cov_loader_go"
 rm -f "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_debug_correlator_go/native_debug_correlator_go"
+rm -f "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_overlay_backend_go/native_overlay_backend_go"
 cp "$SCRIPT_DIR/requirements.txt" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/"
 
 # Step 4: Update requirements.txt to use tree-sitter >= 0.25.0
@@ -126,7 +130,7 @@ awk '
 skip == 0 {
   print
 }
-' "$DOCKERFILE" > "$tmp_dockerfile"
+' "$DOCKERFILE" >"$tmp_dockerfile"
 mv "$tmp_dockerfile" "$DOCKERFILE"
 
 tmp_dockerfile="${DOCKERFILE}.tmp"
@@ -151,7 +155,10 @@ awk '
 	print "    cp target/release/native_debug_correlator_rust /opt/fuzz-introspector/bin/native_debug_correlator_rust && \\"
 	print "    cd /fuzz-introspector/tools/native_yaml_loader_go && /usr/local/go/bin/go build -o /opt/fuzz-introspector/bin/native_yaml_loader_go . && \\"
 	print "    cd /fuzz-introspector/tools/native_llvm_cov_loader_go && /usr/local/go/bin/go build -o /opt/fuzz-introspector/bin/native_llvm_cov_loader_go . && \\"
-	print "    cd /fuzz-introspector/tools/native_debug_correlator_go && /usr/local/go/bin/go build -o /opt/fuzz-introspector/bin/native_debug_correlator_go ."
+	print "    cd /fuzz-introspector/tools/native_debug_correlator_go && /usr/local/go/bin/go build -o /opt/fuzz-introspector/bin/native_debug_correlator_go . && \\"
+	print "    cd /fuzz-introspector/tools/native_overlay_backend_go && /usr/local/go/bin/go build -o /opt/fuzz-introspector/bin/native_overlay_backend_go . && \\"
+	print "    cd /fuzz-introspector/tools/native_overlay_backend_rust && /root/.cargo/bin/cargo build --release && \\"
+	print "    cp target/release/native_overlay_backend_rust /opt/fuzz-introspector/bin/native_overlay_backend_rust"
 	print ""
 	print "ENV FI_DEBUG_YAML_LOADER=rust \\"
 	print "    FI_PROFILE_YAML_LOADER=rust \\"
@@ -164,12 +171,15 @@ awk '
 	print "    FI_DEBUG_CORRELATOR_BIN=/opt/fuzz-introspector/bin/native_debug_correlator_rust \\"
 	print "    FI_DEBUG_YAML_LOADER_GO_BIN=/opt/fuzz-introspector/bin/native_yaml_loader_go \\"
 	print "    FI_PROFILE_YAML_LOADER_GO_BIN=/opt/fuzz-introspector/bin/native_yaml_loader_go \\"
-	print "    FI_LLVM_COV_LOADER_GO_BIN=/opt/fuzz-introspector/bin/native_llvm_cov_loader_go"
+	print "    FI_LLVM_COV_LOADER_GO_BIN=/opt/fuzz-introspector/bin/native_llvm_cov_loader_go \\"
+	print "    FI_OVERLAY_NATIVE_BIN=/opt/fuzz-introspector/bin/native_overlay_backend_rust \\"
+	print "    FI_OVERLAY_RUST_BIN=/opt/fuzz-introspector/bin/native_overlay_backend_rust \\"
+	print "    FI_OVERLAY_GO_BIN=/opt/fuzz-introspector/bin/native_overlay_backend_go"
 	print ""
 	inserted = 1
 }
 { print }
-' "$DOCKERFILE" > "$tmp_dockerfile"
+' "$DOCKERFILE" >"$tmp_dockerfile"
 mv "$tmp_dockerfile" "$DOCKERFILE"
 
 # Step 6: Update compile script to install tree-sitter 0.25+ and use --no-deps

@@ -1862,17 +1862,25 @@ def correlate_debugged_function_to_debug_types(
     correlator_backend = backend_loaders.parse_correlator_backend_env()
     correlator_strict_mode = backend_loaders.parse_correlator_strict_mode()
     correlator_shadow_mode = _parse_bool_env("FI_DEBUG_CORRELATOR_SHADOW", False)
+    shadow_sample_size = _parse_int_env(
+        "FI_DEBUG_CORRELATOR_SHADOW_SAMPLE_SIZE",
+        CORRELATOR_SHADOW_SAMPLE_SIZE_DEFAULT,
+        0,
+    )
+    logger.info(
+        "[type_correlation] requested backend=%s shadow_mode=%s strict=%s"
+        " sample_size=%d",
+        correlator_backend,
+        correlator_shadow_mode,
+        correlator_strict_mode,
+        shadow_sample_size,
+    )
     if correlator_backend == backend_loaders.BACKEND_GO and not correlator_shadow_mode:
         logger.warning(
             "FI_DEBUG_CORRELATOR_BACKEND=go currently runs in shadow-only mode; "
             "forcing Python authoritative output"
         )
         correlator_shadow_mode = True
-    shadow_sample_size = _parse_int_env(
-        "FI_DEBUG_CORRELATOR_SHADOW_SAMPLE_SIZE",
-        CORRELATOR_SHADOW_SAMPLE_SIZE_DEFAULT,
-        0,
-    )
     shadow_sample_indexes = _build_correlator_shadow_sample_indexes(
         len(all_debug_functions), shadow_sample_size
     )
@@ -1959,6 +1967,14 @@ def correlate_debugged_function_to_debug_types(
             strict_mode=correlator_strict_mode,
         )
         if native_result.response is not None:
+            native_counters = native_result.response.get("counters", {})
+            logger.info(
+                "[type_correlation] native backend selected=%s counters=%s",
+                native_result.selected_backend,
+                json.dumps(native_counters, sort_keys=True)
+                if isinstance(native_counters, dict)
+                else native_counters,
+            )
             try:
                 native_validated_updates = _collect_correlator_shard_updates(
                     all_debug_functions,

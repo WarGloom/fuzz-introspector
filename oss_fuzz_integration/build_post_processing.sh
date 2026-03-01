@@ -39,6 +39,14 @@ cp -rf ../src ./oss-fuzz/infra/base-images/base-builder/src
 rm -rf ./oss-fuzz/infra/base-images/base-builder/frontends
 cp -rf ../frontends/ ./oss-fuzz/infra/base-images/base-builder/frontends
 
+# Newer OSS-Fuzz Dockerfiles in this repo expect fuzz-introspector as a single
+# subtree at the base-builder context root.
+rm -rf ./oss-fuzz/infra/base-images/base-builder/fuzz-introspector
+mkdir -p ./oss-fuzz/infra/base-images/base-builder/fuzz-introspector
+cp -rf ../src ./oss-fuzz/infra/base-images/base-builder/fuzz-introspector/src
+cp -rf ../frontends ./oss-fuzz/infra/base-images/base-builder/fuzz-introspector/frontends
+cp -rf ../tools ./oss-fuzz/infra/base-images/base-builder/fuzz-introspector/tools
+
 cd oss-fuzz
 docker build --no-cache -t gcr.io/oss-fuzz-base/base-builder infra/base-images/base-builder
 docker build --no-cache -t gcr.io/oss-fuzz-base/base-builder-python infra/base-images/base-builder-python
