@@ -807,8 +807,8 @@ class FuzzerProfile:
         )
         covered_files = self._covered_files_cache.get(cache_key)
         if (covered_files is None
-                or self._covered_files_cache_metadata.get(cache_key)
-                != cache_metadata):
+                or self._covered_files_cache_metadata.get(cache_key) !=
+                cache_metadata):
             covered_files = self._build_covered_files_index(basefolder)
             self._covered_files_cache[cache_key] = covered_files
             self._covered_files_cache_metadata[cache_key] = cache_metadata
