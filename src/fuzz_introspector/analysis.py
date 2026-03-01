@@ -414,6 +414,7 @@ class IntrospectionProject:
             )
 
         if self.exclude_patterns or self.exclude_function_patterns:
+
             def _filter_func_dict(p, d):
                 return {
                     name: func
@@ -919,8 +920,7 @@ def _serialize_branch_blockers(
         serialized.append(
             {
                 "blocked_side": repr(blocker.blocked_side),
-                "blocked_unique_not_covered_complexity":
-                blocker.blocked_unique_not_covered_complexity,
+                "blocked_unique_not_covered_complexity": blocker.blocked_unique_not_covered_complexity,
                 "blocked_unique_reachable_complexity": blocker.blocked_unique_reachable_complexity,
                 "blocked_unique_functions": blocker.blocked_unique_funcs,
                 "blocked_not_covered_complexity": blocker.blocked_not_covered_complexity,
@@ -1465,7 +1465,7 @@ def overlay_calltree_with_coverage(
                     "phase": "artifact_load",
                 }
                 if strict_mode:
-                    raise backend_loaders.CorrelatorBackendError(
+                    raise backend_loaders.OverlayBackendError(
                         backend_loaders.FI_OVERLAY_SCHEMA_ERROR,
                         "Failed to load overlay backend artifacts",
                         reason_details,
@@ -1495,7 +1495,7 @@ def overlay_calltree_with_coverage(
                 )
                 if mismatch_total > 0:
                     if strict_mode:
-                        raise backend_loaders.CorrelatorBackendError(
+                        raise backend_loaders.OverlayBackendError(
                             backend_loaders.FI_OVERLAY_PARITY_MISMATCH,
                             "Overlay native output mismatches Python output",
                             mismatch_counts,
@@ -2265,7 +2265,9 @@ def _scan_source_tree(
         dirs[:] = [
             d
             for d in dirs
-            if not _matches_any_pattern(os.path.join(root, d), compiled_exclude_patterns)
+            if not _matches_any_pattern(
+                os.path.join(root, d), compiled_exclude_patterns
+            )
             and not any(avoid in os.path.join(root, d) for avoid in to_avoid)
         ]
         for f in files:

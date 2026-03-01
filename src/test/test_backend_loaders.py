@@ -675,7 +675,7 @@ def test_overlay_strict_invalid_contract_raises(
         ),
     )
 
-    with pytest.raises(backend_loaders.CorrelatorBackendError) as exc_info:
+    with pytest.raises(backend_loaders.OverlayBackendError) as exc_info:
         backend_loaders.run_overlay_backend(
             payload={"fuzzer": "fuzz_target"},
             selected_backend=backend_loaders.BACKEND_NATIVE,
@@ -731,7 +731,7 @@ def test_overlay_strict_oversized_stdout_raises(
         ),
     )
 
-    with pytest.raises(backend_loaders.CorrelatorBackendError) as exc_info:
+    with pytest.raises(backend_loaders.OverlayBackendError) as exc_info:
         backend_loaders.run_overlay_backend(
             payload={"fuzzer": "fuzz_target"},
             selected_backend=backend_loaders.BACKEND_NATIVE,
@@ -1084,7 +1084,7 @@ def test_overlay_missing_artifact_key_strict_raises(
         ),
     )
 
-    with pytest.raises(backend_loaders.CorrelatorBackendError) as exc_info:
+    with pytest.raises(backend_loaders.OverlayBackendError) as exc_info:
         backend_loaders.run_overlay_backend(
             payload={"fuzzer": "fuzz_target"},
             selected_backend=backend_loaders.BACKEND_NATIVE,

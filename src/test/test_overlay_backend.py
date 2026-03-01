@@ -184,7 +184,7 @@ def test_overlay_native_strict_failure_raises(
     python_overlay_calls = []
 
     def _raise_strict_failure(**_kwargs):
-        raise backend_loaders.CorrelatorBackendError(
+        raise backend_loaders.OverlayBackendError(
             backend_loaders.FI_OVERLAY_SCHEMA_ERROR,
             "Overlay response missing required metadata keys",
             {"missing_keys": ["status"]},
@@ -202,7 +202,7 @@ def test_overlay_native_strict_failure_raises(
         lambda *_args, **_kwargs: python_overlay_calls.append(1),
     )
 
-    with pytest.raises(backend_loaders.CorrelatorBackendError):
+    with pytest.raises(backend_loaders.OverlayBackendError):
         analysis.overlay_calltree_with_coverage(
             _dummy_profile(),
             _dummy_project(),
@@ -669,7 +669,7 @@ def test_overlay_strict_unsafe_artifact_path_raises(
         ),
     )
 
-    with pytest.raises(backend_loaders.CorrelatorBackendError) as exc_info:
+    with pytest.raises(backend_loaders.OverlayBackendError) as exc_info:
         analysis.overlay_calltree_with_coverage(profile, project, "", "", str(out_dir))
 
     assert exc_info.value.reason_code == backend_loaders.FI_OVERLAY_SCHEMA_ERROR
@@ -832,7 +832,7 @@ def test_overlay_shadow_mode_strict_raises_on_mismatch(
         analysis, "_overlay_calltree_with_coverage_python", _python_overlay
     )
 
-    with pytest.raises(backend_loaders.CorrelatorBackendError) as exc_info:
+    with pytest.raises(backend_loaders.OverlayBackendError) as exc_info:
         analysis.overlay_calltree_with_coverage(profile, project, "", "", str(tmp_path))
 
     assert exc_info.value.reason_code == backend_loaders.FI_OVERLAY_PARITY_MISMATCH

@@ -44,8 +44,10 @@ CORRELATOR_REQUIRED_RESPONSE_KEYS = (
     "timings",
 )
 CORRELATOR_TIMEOUT_GRACE_SECONDS = 10
+# 1 MB is sufficient for metadata-only responses while bounding runaway output.
 CORRELATOR_MAX_STDOUT_BYTES = 1024 * 1024
-CORRELATOR_MAX_STDERR_BYTES = 16 * 1024
+# 64 KB balances diagnostic visibility with DoS prevention.
+CORRELATOR_MAX_STDERR_BYTES = 64 * 1024
 
 FI_CORR_BACKEND_UNSUPPORTED = "FI_CORR_BACKEND_UNSUPPORTED"
 FI_CORR_COMMAND_MISSING = "FI_CORR_COMMAND_MISSING"
@@ -76,8 +78,10 @@ OVERLAY_REQUIRED_ARTIFACT_KEYS = (
     "branch_complexities",
     "branch_blockers",
 )
+# 1 MB is sufficient for metadata-only responses while bounding runaway output.
 OVERLAY_MAX_STDOUT_BYTES = 1024 * 1024
-OVERLAY_MAX_STDERR_BYTES = 16 * 1024
+# 64 KB balances diagnostic visibility with DoS prevention.
+OVERLAY_MAX_STDERR_BYTES = 64 * 1024
 
 FI_OVERLAY_BACKEND_UNSUPPORTED = "FI_OVERLAY_BACKEND_UNSUPPORTED"
 FI_OVERLAY_COMMAND_MISSING = "FI_OVERLAY_COMMAND_MISSING"
@@ -96,6 +100,17 @@ FI_OVERLAY_PARITY_MISMATCH = "FI_OVERLAY_PARITY_MISMATCH"
 
 class CorrelatorBackendError(RuntimeError):
     """Error raised when strict correlator backend mode is enabled."""
+
+    def __init__(
+        self, reason_code: str, message: str, details: dict[str, Any] | None = None
+    ):
+        self.reason_code = reason_code
+        self.details = details or {}
+        super().__init__(f"{reason_code}: {message}")
+
+
+class OverlayBackendError(RuntimeError):
+    """Error raised when strict overlay backend mode is enabled."""
 
     def __init__(
         self, reason_code: str, message: str, details: dict[str, Any] | None = None
@@ -157,13 +172,7 @@ def resolve_backend_command(command_env_prefix: str, backend: str) -> list[str] 
         candidates.append(f"{command_env_prefix}_{BACKEND_NATIVE.upper()}_BIN")
     candidates.append(f"{command_env_prefix}_BIN")
 
-    deduplicated_candidates: list[str] = []
-    seen_candidates: set[str] = set()
-    for env_name in candidates:
-        if env_name in seen_candidates:
-            continue
-        seen_candidates.add(env_name)
-        deduplicated_candidates.append(env_name)
+    deduplicated_candidates = list(dict.fromkeys(candidates))
     for env_name in deduplicated_candidates:
         raw_cmd = os.environ.get(env_name, "").strip()
         if not raw_cmd:
@@ -182,7 +191,16 @@ def _resolve_overlay_native_command_with_fallback(
     command_env_prefix: str,
     backend: str,
 ) -> tuple[list[str] | None, list[dict[str, Any]]]:
-    """Resolve overlay native backend command from env, then discovery fallbacks."""
+    """Resolve overlay native backend command from env, then discovery fallbacks.
+
+    Discovery order (only applied when command_env_prefix == "FI_OVERLAY" and
+    backend == BACKEND_NATIVE; all other combinations check only the env var):
+      1. Environment variable  (e.g. FI_OVERLAY_NATIVE_BIN or FI_OVERLAY_BIN)
+      2. Repo-relative path:   tools/native_overlay_backend_rust/target/release/…
+      3. PATH lookup:          native_overlay_backend_rust
+      4. Repo-relative path:   tools/native_overlay_backend_go/…
+      5. PATH lookup:          native_overlay_backend_go
+    """
     command = resolve_backend_command(command_env_prefix, backend)
     if command is not None:
         return command, []
@@ -275,7 +293,7 @@ def resolve_overlay_backend_command_with_details(
     command_env_prefix: str = "FI_OVERLAY",
 ) -> tuple[list[str] | None, dict[str, Any]]:
     """Resolve overlay command and deterministic command-missing details."""
-    execution_backend = _canonicalize_overlay_backend(selected_backend)
+    execution_backend = _map_overlay_backend_to_execution_backend(selected_backend)
     command, checked_candidates = _resolve_overlay_native_command_with_fallback(
         command_env_prefix, execution_backend
     )
@@ -390,7 +408,7 @@ def parse_correlator_backend_env(
     return BACKEND_PYTHON
 
 
-def _canonicalize_overlay_backend(backend: str) -> str:
+def _map_overlay_backend_to_execution_backend(backend: str) -> str:
     if backend in (BACKEND_RUST, BACKEND_GO):
         return BACKEND_NATIVE
     return backend
@@ -621,7 +639,7 @@ def _handle_overlay_failure(
         logger.warning("%s: %s", reason_code, message)
 
     if strict_mode:
-        raise CorrelatorBackendError(reason_code, message, details)
+        raise OverlayBackendError(reason_code, message, details)
 
     return OverlayBackendResult(
         selected_backend=BACKEND_PYTHON,
@@ -741,6 +759,13 @@ class _BoundedStreamReader(threading.Thread):
                     allowed = self._max_bytes - (self.total_bytes - chunk_size)
                     if allowed > 0:
                         self._chunks.append(data[:allowed])
+                    if not self.overflowed:
+                        logger.warning(
+                            "Stream reader %r exceeded limit: %d bytes read, %d max",
+                            self.name,
+                            self.total_bytes,
+                            self._max_bytes,
+                        )
                     self.overflowed = True
                     if self._stop_on_overflow:
                         return
@@ -754,8 +779,13 @@ def _cleanup_process_io_threads(
     proc: subprocess.Popen[str],
     stdout_reader: _BoundedStreamReader,
     stderr_reader: _BoundedStreamReader,
-    join_timeout_sec: float = 0.2,
+    join_timeout_sec: float = 0.5,
 ) -> None:
+    # Join first so threads can finish reading before streams are closed.
+    for reader in (stdout_reader, stderr_reader):
+        if reader.is_alive():
+            reader.join(timeout=0.1)
+
     for stream in (proc.stdin, proc.stdout, proc.stderr):
         if stream is None:
             continue
@@ -764,9 +794,10 @@ def _cleanup_process_io_threads(
         except (OSError, ValueError):
             continue
 
+    # Final join in case a reader was still active when we closed the stream.
     for reader in (stdout_reader, stderr_reader):
         if reader.is_alive():
-            reader.join(timeout=join_timeout_sec)
+            reader.join(timeout=join_timeout_sec - 0.1)
 
 
 def run_overlay_backend(
@@ -792,7 +823,9 @@ def run_overlay_backend(
     if selection is None:
         selection = OverlayBackendSelection(
             requested_backend=selected_backend,
-            execution_backend=_canonicalize_overlay_backend(selected_backend),
+            execution_backend=_map_overlay_backend_to_execution_backend(
+                selected_backend
+            ),
         )
     command, missing_command_details = resolve_overlay_backend_command_with_details(
         selected_backend,
@@ -887,8 +920,30 @@ def run_overlay_backend(
                 },
             )
 
+        _loop_iteration = 0
+        _max_loop_iterations = 10000  # 100 s at 0.01 s/iteration; defensive ceiling
         try:
             while True:
+                _loop_iteration += 1
+                if _loop_iteration > _max_loop_iterations:
+                    logger.error(
+                        "[overlay] process monitor loop exceeded %d iterations; "
+                        "forcing termination",
+                        _max_loop_iterations,
+                    )
+                    cleanup_status = _terminate_process_group(
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
+                    return _handle_overlay_failure(
+                        FI_OVERLAY_EXECUTION_FAILED,
+                        "Process monitoring loop exceeded iteration limit",
+                        strict_mode,
+                        details={
+                            "backend": selected_backend,
+                            "iterations": _loop_iteration,
+                            "cleanup_status": cleanup_status,
+                        },
+                    )
                 elapsed = time.perf_counter() - start
                 if timeout is not None and elapsed > timeout:
                     elapsed_ms = int(elapsed * 1000)
@@ -1197,8 +1252,31 @@ def run_correlator_backend(
                 },
             )
 
+        _loop_iteration = 0
+        _max_loop_iterations = 10000  # 100 s at 0.01 s/iteration; defensive ceiling
         try:
             while True:
+                _loop_iteration += 1
+                if _loop_iteration > _max_loop_iterations:
+                    logger.error(
+                        "[correlator] process monitor loop exceeded %d iterations; "
+                        "forcing termination",
+                        _max_loop_iterations,
+                    )
+                    cleanup_status = _terminate_process_group(
+                        proc, CORRELATOR_TIMEOUT_GRACE_SECONDS
+                    )
+                    return _handle_correlator_failure(
+                        FI_CORR_EXECUTION_FAILED,
+                        "Process monitoring loop exceeded iteration limit",
+                        strict_mode,
+                        cleanup_hook,
+                        details={
+                            "backend": selected_backend,
+                            "iterations": _loop_iteration,
+                            "cleanup_status": cleanup_status,
+                        },
+                    )
                 elapsed = time.perf_counter() - start
                 if timeout is not None and elapsed > timeout:
                     elapsed_ms = int(elapsed * 1000)
