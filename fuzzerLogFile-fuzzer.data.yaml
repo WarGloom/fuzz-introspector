@@ -1,0 +1,326 @@
+All functions:
+  Elements:
+  - BBCount: 1
+    BranchProfiles: []
+    Callsites: []
+    CyclomaticComplexity: 0
+    EdgeCount: 0
+    ICount: 2
+    argCount: 1
+    argNames:
+    - data
+    argTypes:
+    - uint8_t*
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 8
+      start: 6
+    functionDepth: 0
+    functionLinenumber: 6
+    functionLinenumberEnd: 8
+    functionName: unreached_target2
+    functionSourceFile: src/test/data/source-code/c/simple-sample-1/fuzzer.c
+    functionUses: 1
+    functionsReached: []
+    linkageType: ''
+    returnType: int
+    signature: int unreached_target2(const uint8_t *data)
+  - BBCount: 5
+    BranchProfiles: []
+    Callsites:
+    - Dst: strcmp
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:15,1
+    - Dst: printf
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:16,1
+    - Dst: strcmp
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:18,1
+    - Dst: printf
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:19,1
+    - Dst: printf
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:22,1
+    - Dst: strcmp
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:24,1
+    - Dst: printf
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:25,1
+    - Dst: printf
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:27,1
+    CyclomaticComplexity: 4
+    EdgeCount: 4
+    ICount: 14
+    argCount: 1
+    argNames:
+    - val
+    argTypes:
+    - char*
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 28
+      start: 14
+    functionDepth: 0
+    functionLinenumber: 14
+    functionLinenumberEnd: 28
+    functionName: unreached_target10
+    functionSourceFile: src/test/data/source-code/c/simple-sample-1/fuzzer.c
+    functionUses: 1
+    functionsReached:
+    - strcmp
+    - printf
+    linkageType: ''
+    returnType: void
+    signature: void unreached_target10(char *val)
+  - BBCount: 3
+    BranchProfiles: []
+    Callsites:
+    - Dst: unreached_target2
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:32,1
+    - Dst: malloc
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:34,1
+    - Dst: unreached_target10
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:36,1
+    CyclomaticComplexity: 2
+    EdgeCount: 2
+    ICount: 9
+    argCount: 1
+    argNames:
+    - data
+    argTypes:
+    - uint8_t*
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 40
+      start: 30
+    functionDepth: 1
+    functionLinenumber: 30
+    functionLinenumberEnd: 40
+    functionName: unreached_target1
+    functionSourceFile: src/test/data/source-code/c/simple-sample-1/fuzzer.c
+    functionUses: 2
+    functionsReached:
+    - malloc
+    - unreached_target10
+    - unreached_target2
+    linkageType: ''
+    returnType: int
+    signature: int unreached_target1(const uint8_t *data)
+  - BBCount: 1
+    BranchProfiles: []
+    Callsites: []
+    CyclomaticComplexity: 0
+    EdgeCount: 0
+    ICount: 2
+    argCount: 5
+    argNames:
+    - n1
+    - n2
+    - n3
+    - n5
+    - s1
+    argTypes:
+    - char*
+    - char*
+    - char*
+    - char*
+    - size_t
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 44
+      start: 42
+    functionDepth: 0
+    functionLinenumber: 42
+    functionLinenumberEnd: 44
+    functionName: un
+    functionSourceFile: src/test/data/source-code/c/simple-sample-1/fuzzer.c
+    functionUses: 0
+    functionsReached: []
+    linkageType: ''
+    returnType: int
+    signature: int un(char *n1, char *n2, char *n3, char *n5, size_t s1)
+  - BBCount: 2
+    BranchProfiles: []
+    Callsites:
+    - Dst: unreached_target1
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:48,1
+    CyclomaticComplexity: 1
+    EdgeCount: 1
+    ICount: 5
+    argCount: 2
+    argNames:
+    - data
+    - theval
+    argTypes:
+    - uint8_t*
+    - size_t*
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 52
+      start: 46
+    functionDepth: 2
+    functionLinenumber: 46
+    functionLinenumberEnd: 52
+    functionName: unreached_target3
+    functionSourceFile: src/test/data/source-code/c/simple-sample-1/fuzzer.c
+    functionUses: 0
+    functionsReached:
+    - unreached_target1
+    linkageType: ''
+    returnType: int
+    signature: int unreached_target3(const uint8_t *data, size_t *theval)
+  - BBCount: 2
+    BranchProfiles: []
+    Callsites:
+    - Dst: unreached_target1
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:57,1
+    CyclomaticComplexity: 1
+    EdgeCount: 1
+    ICount: 5
+    argCount: 1
+    argNames:
+    - data
+    argTypes:
+    - uint8_t*
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 59
+      start: 55
+    functionDepth: 2
+    functionLinenumber: 55
+    functionLinenumberEnd: 59
+    functionName: target2
+    functionSourceFile: src/test/data/source-code/c/simple-sample-1/fuzzer.c
+    functionUses: 2
+    functionsReached:
+    - unreached_target1
+    linkageType: ''
+    returnType: int
+    signature: int target2(const uint8_t *data)
+  - BBCount: 2
+    BranchProfiles: []
+    Callsites: []
+    CyclomaticComplexity: 1
+    EdgeCount: 1
+    ICount: 4
+    argCount: 1
+    argNames:
+    - data
+    argTypes:
+    - uint8_t*
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 64
+      start: 61
+    functionDepth: 0
+    functionLinenumber: 61
+    functionLinenumberEnd: 64
+    functionName: target3
+    functionSourceFile: src/test/data/source-code/c/simple-sample-1/fuzzer.c
+    functionUses: 1
+    functionsReached: []
+    linkageType: ''
+    returnType: int
+    signature: int target3(const uint8_t *data)
+  - BBCount: 3
+    BranchProfiles: []
+    Callsites:
+    - Dst: target2
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:69,1
+    - Dst: target3
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:72,1
+    CyclomaticComplexity: 2
+    EdgeCount: 2
+    ICount: 10
+    argCount: 2
+    argNames:
+    - data
+    - size
+    argTypes:
+    - uint8_t*
+    - size_t
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 78
+      start: 66
+    functionDepth: 3
+    functionLinenumber: 66
+    functionLinenumberEnd: 78
+    functionName: fuzz_entry
+    functionSourceFile: src/test/data/source-code/c/simple-sample-1/fuzzer.c
+    functionUses: 1
+    functionsReached:
+    - target3
+    - target2
+    linkageType: ''
+    returnType: int
+    signature: int fuzz_entry(const uint8_t *data, size_t size)
+  - BBCount: 2
+    BranchProfiles: []
+    Callsites:
+    - Dst: malloc
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:84,1
+    - Dst: malloc
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:85,1
+    - Dst: memcpy
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:86,1
+    - Dst: fuzz_entry
+      Src: src/test/data/source-code/c/simple-sample-1/fuzzer.c:88,1
+    CyclomaticComplexity: 1
+    EdgeCount: 1
+    ICount: 8
+    argCount: 2
+    argNames:
+    - data
+    - size
+    argTypes:
+    - uint8_t*
+    - size_t
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 90
+      start: 80
+    functionDepth: 4
+    functionLinenumber: 80
+    functionLinenumberEnd: 90
+    functionName: LLVMFuzzerTestOneInput
+    functionSourceFile: src/test/data/source-code/c/simple-sample-1/fuzzer.c
+    functionUses: 0
+    functionsReached:
+    - malloc
+    - memcpy
+    - fuzz_entry
+    linkageType: ''
+    returnType: int
+    signature: int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
+Fuzzer filename: src/test/data/source-code/c/simple-sample-1/fuzzer.c
+Fuzzing method: LLVMFuzzerTestOneInput
+included-header-files:
+- stdio.h
+- stdint.h
+- stdlib.h
+- string.h
+report: name
+sources:
+- function_names:
+  - unreached_target2
+  - unreached_target10
+  - unreached_target1
+  - un
+  - unreached_target3
+  - target2
+  - target3
+  - fuzz_entry
+  - LLVMFuzzerTestOneInput
+  source_file: src/test/data/source-code/c/simple-sample-1/fuzzer.c
+  types:
+    enum: []
+    preproc_defs: []
+    structs: []
+    typedefs: []
+    union: []

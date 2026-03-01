@@ -1,0 +1,47 @@
+All functions:
+  Elements:
+  - BBCount: 1
+    BranchProfiles: []
+    Callsites: []
+    CyclomaticComplexity: 0
+    EdgeCount: 0
+    ICount: 2
+    argCount: 0
+    argNames: []
+    argTypes: []
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 2
+      start: 2
+    functionDepth: 0
+    functionLinenumber: 2
+    functionLinenumberEnd: 2
+    functionName: LLVMFuzzerTestOneInput
+    functionSourceFile: src/test/data/source-code/cpp/unicode-error/simple.cpp
+    functionUses: 0
+    functionsReached: []
+    linkageType: ''
+    returnType: int
+    signature: int LLVMFuzzerTestOneInput()
+Fuzzer filename: src/test/data/source-code/cpp/unicode-error/simple.cpp
+Fuzzing method: LLVMFuzzerTestOneInput
+included-header-files: []
+report: name
+sources:
+- function_names:
+  - LLVMFuzzerTestOneInput
+  source_file: src/test/data/source-code/cpp/unicode-error/simple.cpp
+  types:
+    enum: []
+    preproc_defs:
+    - item_type: preproc_def
+      name: BAD_MACRO
+      pos:
+        line_end: 1
+        line_start: 0
+        source_file: src/test/data/source-code/cpp/unicode-error/simple.cpp
+      type_or_value: '"bad byte: "'
+    structs: []
+    typedefs: []
+    union: []
