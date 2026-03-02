@@ -16,7 +16,9 @@
 import json
 import io
 import logging
+import os
 import subprocess
+import tempfile
 from typing import Any
 
 import pytest
@@ -698,3 +700,340 @@ def test_correlator_shard_path_within_expected_output_dir_accepted(tmp_path) -> 
     )
 
     assert [row_idx for row_idx, _sig, _source in updates] == [0]
+
+
+# ---------------------------------------------------------------------------
+# FI_DEBUG_CORRELATE_NATIVE alias tests
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_correlator_backend_native_alias_rust(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FI_DEBUG_CORRELATE_NATIVE=rust → rust backend selected, logged."""
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_NATIVE", "rust")
+    monkeypatch.delenv("FI_DEBUG_CORRELATOR_BACKEND", raising=False)
+
+    with caplog.at_level(logging.INFO):
+        backend = debug_info._resolve_correlator_backend()
+
+    assert backend == backend_loaders.BACKEND_RUST
+    assert any(
+        "FI_DEBUG_CORRELATE_NATIVE" in r.message and "rust" in r.message
+        for r in caplog.records
+    )
+
+
+def test_resolve_correlator_backend_native_alias_go(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FI_DEBUG_CORRELATE_NATIVE=go → go backend selected."""
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_NATIVE", "go")
+    monkeypatch.delenv("FI_DEBUG_CORRELATOR_BACKEND", raising=False)
+
+    backend = debug_info._resolve_correlator_backend()
+
+    assert backend == backend_loaders.BACKEND_GO
+
+
+def test_resolve_correlator_backend_native_alias_overrides_canonical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FI_DEBUG_CORRELATE_NATIVE=rust wins over FI_DEBUG_CORRELATOR_BACKEND=python."""
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_NATIVE", "rust")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "python")
+
+    backend = debug_info._resolve_correlator_backend()
+
+    assert backend == backend_loaders.BACKEND_RUST
+
+
+def test_resolve_correlator_backend_native_alias_invalid_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FI_DEBUG_CORRELATE_NATIVE=bogus → warning + fall through to canonical var."""
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_NATIVE", "bogus")
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+
+    with caplog.at_level(logging.WARNING):
+        backend = debug_info._resolve_correlator_backend()
+
+    assert backend == backend_loaders.BACKEND_RUST
+    assert any("FI_DEBUG_CORRELATE_NATIVE" in r.message for r in caplog.records)
+
+
+def test_resolve_correlator_backend_native_alias_unset_delegates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FI_DEBUG_CORRELATE_NATIVE unset → canonical FI_DEBUG_CORRELATOR_BACKEND used."""
+    monkeypatch.delenv("FI_DEBUG_CORRELATE_NATIVE", raising=False)
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+
+    backend = debug_info._resolve_correlator_backend()
+
+    assert backend == backend_loaders.BACKEND_RUST
+
+
+def test_resolve_correlator_backend_both_unset_defaults_python(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both env vars unset → python (safe default)."""
+    monkeypatch.delenv("FI_DEBUG_CORRELATE_NATIVE", raising=False)
+    monkeypatch.delenv("FI_DEBUG_CORRELATOR_BACKEND", raising=False)
+
+    backend = debug_info._resolve_correlator_backend()
+
+    assert backend == backend_loaders.BACKEND_PYTHON
+
+
+# ---------------------------------------------------------------------------
+# Parity tests: Python vs mocked-Rust produce equivalent function mutations
+# ---------------------------------------------------------------------------
+
+
+def _make_success_response(
+    output_dir: str,
+    funcs: list[dict[str, Any]],
+    signature_override: dict[str, Any] | None = None,
+    source_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Write a shard file and return a well-formed native success response."""
+    os.makedirs(output_dir, exist_ok=True)
+    shard_path = os.path.join(output_dir, "correlated-debug-00000.ndjson")
+    default_sig = {"return_type": ["void"], "params": []}
+    default_src = {"source_file": "/src/a.c", "source_line": "1"}
+    with open(shard_path, "w", encoding="utf-8") as fh:
+        for idx in range(len(funcs)):
+            fh.write(
+                json.dumps(
+                    {
+                        "row_idx": idx,
+                        "func_signature_elems": signature_override or default_sig,
+                        "source": source_override or default_src,
+                    }
+                )
+                + "\n"
+            )
+    return {
+        "schema_version": 1,
+        "status": "success",
+        "counters": {"updated_functions": len(funcs)},
+        "artifacts": {"correlated_shards": [shard_path]},
+        "timings": {},
+    }
+
+
+@pytest.mark.parametrize("backend", ["python", "rust"])
+def test_parity_backend_applies_func_signature_mutation(
+    backend: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both Python and mocked-Rust backends set func_signature_elems on functions."""
+    types = [{"addr": 100, "tag": "DW_TAG_base_type", "name": "int"}]
+    funcs = [{"type_arguments": [100], "file_location": "/src/a.c:1"}]
+
+    if backend == "rust":
+        monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+        monkeypatch.delenv("FI_DEBUG_CORRELATE_NATIVE", raising=False)
+        monkeypatch.setattr(
+            debug_info.backend_loaders,
+            "resolve_backend_command",
+            lambda *_args, **_kwargs: ["fake-correlator"],
+        )
+
+        def _fake_run(payload, **_kwargs):
+            return backend_loaders.CorrelatorBackendResult(
+                selected_backend="rust",
+                strict_mode=False,
+                response=_make_success_response(
+                    payload["output_dir"],
+                    funcs,
+                    signature_override={"return_type": ["int"], "params": []},
+                    source_override={"source_file": "/src/a.c", "source_line": "1"},
+                ),
+            )
+
+        monkeypatch.setattr(
+            debug_info.backend_loaders, "run_correlator_backend", _fake_run
+        )
+    else:
+        monkeypatch.delenv("FI_DEBUG_CORRELATOR_BACKEND", raising=False)
+        monkeypatch.delenv("FI_DEBUG_CORRELATE_NATIVE", raising=False)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        debug_info.correlate_debugged_function_to_debug_types(
+            types, funcs, tmpdir, dump_files=False
+        )
+
+    # Both backends must write func_signature_elems into the function dict
+    assert "func_signature_elems" in funcs[0], (
+        f"backend={backend}: func_signature_elems missing after correlation"
+    )
+
+
+@pytest.mark.parametrize("backend", ["python", "rust"])
+def test_parity_backend_applies_source_mutation(
+    backend: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both Python and mocked-Rust backends write a 'source' key into functions."""
+    types = [{"addr": 200, "tag": "DW_TAG_base_type", "name": "char"}]
+    funcs = [{"type_arguments": [200], "file_location": "/src/b.c:42"}]
+
+    if backend == "rust":
+        monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+        monkeypatch.delenv("FI_DEBUG_CORRELATE_NATIVE", raising=False)
+        monkeypatch.setattr(
+            debug_info.backend_loaders,
+            "resolve_backend_command",
+            lambda *_args, **_kwargs: ["fake-correlator"],
+        )
+
+        def _fake_run(payload, **_kwargs):
+            return backend_loaders.CorrelatorBackendResult(
+                selected_backend="rust",
+                strict_mode=False,
+                response=_make_success_response(
+                    payload["output_dir"],
+                    funcs,
+                    source_override={"source_file": "/src/b.c", "source_line": "42"},
+                ),
+            )
+
+        monkeypatch.setattr(
+            debug_info.backend_loaders, "run_correlator_backend", _fake_run
+        )
+    else:
+        monkeypatch.delenv("FI_DEBUG_CORRELATOR_BACKEND", raising=False)
+        monkeypatch.delenv("FI_DEBUG_CORRELATE_NATIVE", raising=False)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        debug_info.correlate_debugged_function_to_debug_types(
+            types, funcs, tmpdir, dump_files=False
+        )
+
+    assert "source" in funcs[0], (
+        f"backend={backend}: source key missing after correlation"
+    )
+
+
+@pytest.mark.parametrize("backend", ["python", "rust"])
+def test_parity_backend_empty_functions_list(
+    backend: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both backends handle an empty function list without error."""
+    types: list[Any] = []
+    funcs: list[Any] = []
+
+    if backend == "rust":
+        monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+        monkeypatch.delenv("FI_DEBUG_CORRELATE_NATIVE", raising=False)
+        monkeypatch.setattr(
+            debug_info.backend_loaders,
+            "resolve_backend_command",
+            lambda *_args, **_kwargs: ["fake-correlator"],
+        )
+
+        def _fake_run(payload, **_kwargs):
+            os.makedirs(payload["output_dir"], exist_ok=True)
+            return backend_loaders.CorrelatorBackendResult(
+                selected_backend="rust",
+                strict_mode=False,
+                response={
+                    "schema_version": 1,
+                    "status": "success",
+                    "counters": {"updated_functions": 0},
+                    "artifacts": {"correlated_shards": []},
+                    "timings": {},
+                },
+            )
+
+        monkeypatch.setattr(
+            debug_info.backend_loaders, "run_correlator_backend", _fake_run
+        )
+    else:
+        monkeypatch.delenv("FI_DEBUG_CORRELATOR_BACKEND", raising=False)
+        monkeypatch.delenv("FI_DEBUG_CORRELATE_NATIVE", raising=False)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        debug_info.correlate_debugged_function_to_debug_types(
+            types, funcs, tmpdir, dump_files=False
+        )
+
+    assert funcs == []
+
+
+def test_parity_fi_debug_correlate_native_rust_via_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FI_DEBUG_CORRELATE_NATIVE=rust triggers the native path (end-to-end alias)."""
+    types = [{"addr": 300, "tag": "DW_TAG_base_type", "name": "long"}]
+    funcs = [{"type_arguments": [300], "file_location": "/src/c.c:10"}]
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_NATIVE", "rust")
+    monkeypatch.delenv("FI_DEBUG_CORRELATOR_BACKEND", raising=False)
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "resolve_backend_command",
+        lambda *_args, **_kwargs: ["fake-correlator"],
+    )
+
+    backend_invocations: list[str] = []
+
+    def _fake_run(payload, *, selected_backend: str = "python", **_kwargs):
+        backend_invocations.append(selected_backend)
+        return backend_loaders.CorrelatorBackendResult(
+            selected_backend=selected_backend,
+            strict_mode=False,
+            response=_make_success_response(
+                payload["output_dir"],
+                funcs,
+                signature_override={"return_type": ["long"], "params": []},
+                source_override={"source_file": "/src/c.c", "source_line": "10"},
+            ),
+        )
+
+    monkeypatch.setattr(debug_info.backend_loaders, "run_correlator_backend", _fake_run)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        debug_info.correlate_debugged_function_to_debug_types(
+            types, funcs, tmpdir, dump_files=False
+        )
+
+    assert backend_invocations == ["rust"], (
+        "FI_DEBUG_CORRELATE_NATIVE=rust must invoke the rust backend"
+    )
+    assert funcs[0].get("func_signature_elems", {}).get("return_type") == ["long"]
+
+
+def test_parity_fi_debug_correlate_native_rust_fallback_on_binary_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FI_DEBUG_CORRELATE_NATIVE=rust falls back to Python when binary is absent."""
+    types = [{"addr": 400, "tag": "DW_TAG_base_type", "name": "short"}]
+    funcs = [{"type_arguments": [400], "file_location": "/src/d.c:5"}]
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_NATIVE", "rust")
+    monkeypatch.delenv("FI_DEBUG_CORRELATOR_BACKEND", raising=False)
+    # resolve_backend_command returns None → binary absent → Python fallback
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "resolve_backend_command",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            debug_info.correlate_debugged_function_to_debug_types(
+                types, funcs, tmpdir, dump_files=False
+            )
+
+    # Python path must still run and write func_signature_elems
+    assert "func_signature_elems" in funcs[0]
+    assert any(
+        backend_loaders.FI_CORR_COMMAND_MISSING in r.message for r in caplog.records
+    )
