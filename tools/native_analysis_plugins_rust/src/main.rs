@@ -50,6 +50,11 @@ struct FunctionEntry {
     bb_count: u64,
     #[serde(default)]
     functions_reached: Vec<String>,
+    /// Explicit count supplied by new Python payload (avoids sending the full
+    /// list).  Zero means "not supplied" — callers must use
+    /// `effective_reached_count()` instead of reading this field directly.
+    #[serde(default)]
+    functions_reached_count: usize,
     #[serde(default)]
     reached_by_fuzzers: Vec<String>,
     #[serde(default)]
@@ -122,6 +127,25 @@ struct Response {
 // Each `run_*` function receives a reference to the project_data JSON value
 // and returns a PluginResult.
 
+/// Returns the effective number of functions reached by `f`.
+///
+/// New Python payloads send `functions_reached_count` (an integer) instead of
+/// the full `functions_reached` list to save memory.  Old payloads still send
+/// the list.  This helper bridges both formats:
+///
+/// * If `functions_reached_count > 0`, or `functions_reached` is empty while
+///   `functions_reached_count == 0`, the explicit count is canonical.
+/// * Otherwise (old payload: list is non-empty, count field absent/zero),
+///   fall back to `functions_reached.len()`.
+#[inline]
+fn effective_reached_count(f: &FunctionEntry) -> usize {
+    if f.functions_reached_count > 0 || f.functions_reached.is_empty() {
+        f.functions_reached_count
+    } else {
+        f.functions_reached.len()
+    }
+}
+
 /// Returns true when a function qualifies as an optimal fuzz target candidate.
 ///
 /// Ports `qualifies_as_optimal_target()` from
@@ -130,7 +154,7 @@ fn qualifies_as_optimal_target(f: &FunctionEntry) -> bool {
     if f.hitcount != 0 {
         return false;
     }
-    if f.functions_reached.len() < 1 {
+    if effective_reached_count(f) < 1 {
         return false;
     }
     if f.arg_count == 0 {
@@ -181,7 +205,7 @@ fn run_optimal_targets(project_data: &JsonValue) -> PluginResult {
                 "cyclomatic_complexity": f.cyclomatic_complexity,
                 "total_cyclomatic_complexity": f.total_cyclomatic_complexity,
                 "new_unreached_complexity": f.new_unreached_complexity,
-                "functions_reached_count": f.functions_reached.len(),
+                "functions_reached_count": effective_reached_count(f),
                 "arg_count": f.arg_count,
                 "bb_count": f.bb_count,
                 "source_file": f.source_file,
@@ -812,5 +836,89 @@ mod tests {
         assert_eq!(funcs[0].name, "minimal");
         assert_eq!(funcs[0].hitcount, 0);
         assert_eq!(funcs[0].arg_count, 0);
+    }
+
+    // ── effective_reached_count / functions_reached_count tests ──────────────
+
+    /// New payload: integer count only, no list.  effective_reached_count
+    /// should return the integer directly.
+    #[test]
+    fn effective_reached_count_uses_count_field_when_list_absent() {
+        let data = json!({"functions": [{
+            "name": "f",
+            "hitcount": 0, "arg_count": 2, "cyclomatic_complexity": 30,
+            "total_cyclomatic_complexity": 80, "new_unreached_complexity": 50,
+            "bb_count": 4, "functions_reached_count": 7,
+            "reached_by_fuzzers": [],
+            "runtime_coverage_percent": 0.0, "source_file": "f.cpp"
+        }]});
+        let funcs = parse_functions(&data);
+        assert_eq!(effective_reached_count(&funcs[0]), 7);
+    }
+
+    /// Old payload: list only, no count field.  effective_reached_count should
+    /// fall back to list length.
+    #[test]
+    fn effective_reached_count_falls_back_to_list_len() {
+        let data = json!({"functions": [{
+            "name": "f",
+            "hitcount": 0, "arg_count": 2, "cyclomatic_complexity": 30,
+            "total_cyclomatic_complexity": 80, "new_unreached_complexity": 50,
+            "bb_count": 4, "functions_reached": ["a", "b", "c"],
+            "reached_by_fuzzers": [],
+            "runtime_coverage_percent": 0.0, "source_file": "f.cpp"
+        }]});
+        let funcs = parse_functions(&data);
+        assert_eq!(effective_reached_count(&funcs[0]), 3);
+    }
+
+    /// Both absent → zero (genuinely empty).
+    #[test]
+    fn effective_reached_count_zero_when_both_absent() {
+        let data = json!({"functions": [{"name": "f"}]});
+        let funcs = parse_functions(&data);
+        assert_eq!(effective_reached_count(&funcs[0]), 0);
+    }
+
+    /// New payload: optimal_targets uses functions_reached_count to qualify.
+    #[test]
+    fn optimal_targets_qualifies_via_count_field() {
+        let data = json!({
+            "functions": [{
+                "name": "counted",
+                "hitcount": 0, "arg_count": 2, "cyclomatic_complexity": 30,
+                "total_cyclomatic_complexity": 80, "new_unreached_complexity": 50,
+                "bb_count": 4,
+                "functions_reached_count": 5,
+                "reached_by_fuzzers": [],
+                "runtime_coverage_percent": 0.0, "source_file": "c.cpp"
+            }]
+        });
+        let result = run_optimal_targets(&data);
+        let rows = &result.tables["optimal_targets"];
+        assert_eq!(rows.len(), 1, "function with count>0 should qualify");
+        assert_eq!(rows[0]["function_name"], "counted");
+        assert_eq!(rows[0]["functions_reached_count"], 5);
+    }
+
+    /// New payload: optimal_targets excludes a function whose count is 0.
+    #[test]
+    fn optimal_targets_excludes_zero_count_field() {
+        let data = json!({
+            "functions": [{
+                "name": "empty_f",
+                "hitcount": 0, "arg_count": 2, "cyclomatic_complexity": 30,
+                "total_cyclomatic_complexity": 80, "new_unreached_complexity": 50,
+                "bb_count": 4,
+                "functions_reached_count": 0,
+                "reached_by_fuzzers": [],
+                "runtime_coverage_percent": 0.0, "source_file": "e.cpp"
+            }]
+        });
+        let result = run_optimal_targets(&data);
+        assert!(
+            result.tables["optimal_targets"].is_empty(),
+            "functions_reached_count=0 must be excluded"
+        );
     }
 }

@@ -111,7 +111,7 @@ def _serialize_project_for_native(
                 "total_cyclomatic_complexity": fp.total_cyclomatic_complexity,
                 "new_unreached_complexity": fp.new_unreached_complexity,
                 "bb_count": fp.bb_count,
-                "functions_reached": list(fp.functions_reached),
+                "functions_reached_count": len(fp.functions_reached),
                 "reached_by_fuzzers": list(fp.reached_by_fuzzers),
                 "runtime_coverage_percent": (
                     getattr(fp, "cov_init_graph_percentage", 0.0) or 0.0
