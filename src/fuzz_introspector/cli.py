@@ -232,12 +232,13 @@ def get_cmdline_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Excluding non-referenced functions in the analysing result.",
     )
+    only_header_functions_help = (
+        "Excluding functions without header declaration in the analysing result."
+    )
     far_reach_low_coverage_analyser_parser.add_argument(
         "--only-header-functions",
         action="store_true",
-        help=
-        ("Excluding functions without header declaration in the analysing result."
-         ),
+        help=only_header_functions_help,
     )
     far_reach_low_coverage_analyser_parser.add_argument(
         "--only-interesting-functions",
@@ -245,12 +246,13 @@ def get_cmdline_parser() -> argparse.ArgumentParser:
         help=("Excluding functions without interesting fuzz keywords, like"
               "parse or deserialise"),
     )
+    only_easy_fuzz_params_help = (
+        "Only include functions with easy fuzz parameters, like char*int, or string"
+    )
     far_reach_low_coverage_analyser_parser.add_argument(
         "--only-easy-fuzz-params",
         action="store_true",
-        help=
-        ("Only include functions with easy fuzz parameters, like char*int, or string"
-         ),
+        help=only_easy_fuzz_params_help,
     )
     far_reach_low_coverage_analyser_parser.add_argument(
         "--max-functions",

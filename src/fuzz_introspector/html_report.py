@@ -370,7 +370,7 @@ def _run_parallel_analyses(
     total_workers = min(worker_count, len(analysis_interfaces))
 
     for idx in range(0, len(analysis_interfaces), total_workers):
-        batch = analysis_interfaces[idx:idx + total_workers]
+        batch = analysis_interfaces[slice(idx, idx + total_workers)]
         result_dir = tempfile.mkdtemp(prefix="fi-pr6-worker-results-")
         processes: List[Tuple[Any, str]] = []
         thread_futures: Dict[str, Any] = {}
@@ -1188,13 +1188,9 @@ def write_content_to_html_files(html_full_doc, all_functions_json_html,
             max_prettify_mb,
         )
     max_prettify_bytes = max_prettify_mb * 1024 * 1024
-    disable_prettify = os.environ.get("FI_DISABLE_HTML_PRETTIFY",
-                                      "").lower() in (
-                                          "1",
-                                          "true",
-                                          "yes",
-                                          "on",
-                                      )
+    disable_prettify_values = {"1", "true", "yes", "on"}
+    disable_prettify = (os.environ.get("FI_DISABLE_HTML_PRETTIFY", "").lower()
+                        in disable_prettify_values)
 
     if disable_prettify:
         logger.info(
