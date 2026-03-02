@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -39,6 +40,7 @@ type functionData struct {
 type coverageData struct {
 	CovMap       map[string][][]int `json:"covmap"`
 	BranchCovMap map[string][]int   `json:"branch_cov_map"`
+	FileMap      map[string][][]int `json:"file_map"`
 }
 
 type request struct {
@@ -105,6 +107,65 @@ func colorForHitcount(hit int) string {
 		return "greenyellow"
 	}
 	return "lawngreen"
+}
+
+// splitBranchKey splits on the last colon, then splits the remainder on the
+// first comma — equivalent to Rust's rsplit_once(':') + split_once(',').
+func splitBranchKey(key string) (fnName, line, col string, ok bool) {
+	idx := strings.LastIndex(key, ":")
+	if idx < 0 {
+		return
+	}
+	rest := key[idx+1:]
+	commaIdx := strings.Index(rest, ",")
+	if commaIdx < 0 {
+		return
+	}
+	fnName = key[:idx]
+	line = rest[:commaIdx]
+	col = rest[commaIdx+1:]
+	ok = true
+	return
+}
+
+// parseSideLine extracts the line number from a branch-side position string
+// of the form "file:line,col".
+func parseSideLine(pos string) (int, bool) {
+	idx := strings.Index(pos, ":")
+	if idx < 0 {
+		return 0, false
+	}
+	rest := pos[idx+1:]
+	commaIdx := strings.Index(rest, ",")
+	if commaIdx < 0 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(rest[:commaIdx])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// isSideHit returns true if the given line number has a positive hit count in
+// either the file-level coverage map or the function-level coverage map.
+func isSideHit(cov coverageData, sourceFile, functionName string, sideLine int) bool {
+	if rows, ok := cov.FileMap[sourceFile]; ok {
+		for _, row := range rows {
+			if len(row) == 2 && row[0] == sideLine && row[1] > 0 {
+				return true
+			}
+		}
+		return false
+	}
+	if rows, ok := cov.CovMap[functionName]; ok {
+		for _, row := range rows {
+			if len(row) == 2 && row[0] == sideLine && row[1] > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func writeError(reason string) {
@@ -218,6 +279,7 @@ func run() error {
 		nodes[idx].CovLargestBlockedFunc = largestBlockedName
 	}
 
+	// ── Branch complexity ────────────────────────────────────────────────────
 	complexities := []branchComplexity{}
 	fnNames := make([]string, 0, len(req.Functions))
 	for name := range req.Functions {
@@ -234,26 +296,101 @@ func run() error {
 		for _, branchName := range branches {
 			br := fn.BranchProfiles[branchName]
 			for sideIdx, side := range br.Sides {
+				otherSideFuncs := map[string]struct{}{}
+				for iterIdx, iterSide := range br.Sides {
+					if iterIdx == sideIdx {
+						continue
+					}
+					for _, f := range iterSide.Funcs {
+						otherSideFuncs[f] = struct{}{}
+					}
+				}
+				uniqueFuncs := map[string]struct{}{}
+				for _, f := range side.Funcs {
+					if _, inOther := otherSideFuncs[f]; !inOther {
+						uniqueFuncs[f] = struct{}{}
+					}
+				}
+
+				var reachable, uniqueReachable, notCovered, uniqueNotCovered int
+				for _, f := range side.Funcs {
+					complexity := 0
+					if fd, ok := req.Functions[f]; ok {
+						complexity = fd.TotalCyclomaticComplexity
+					}
+					reachable += complexity
+					if _, isUniq := uniqueFuncs[f]; isUniq {
+						uniqueReachable += complexity
+					}
+					isHit := false
+					if rows, ok := req.Coverage.CovMap[f]; ok {
+						for _, row := range rows {
+							if len(row) == 2 && row[1] > 0 {
+								isHit = true
+								break
+							}
+						}
+					}
+					if !isHit {
+						notCovered += complexity
+						if _, isUniq := uniqueFuncs[f]; isUniq {
+							uniqueNotCovered += complexity
+						}
+					}
+				}
 				complexities = append(complexities, branchComplexity{
 					FunctionName:               fnName,
 					Branch:                     branchName,
 					SideIdx:                    sideIdx,
-					UniqueNotCoveredComplexity: 0,
-					UniqueReachableComplexity:  0,
-					ReachableComplexity:        len(side.Funcs),
-					NotCoveredComplexity:       0,
+					UniqueNotCoveredComplexity: uniqueNotCovered,
+					UniqueReachableComplexity:  uniqueReachable,
+					ReachableComplexity:        reachable,
+					NotCoveredComplexity:       notCovered,
 				})
 			}
 		}
 	}
-
-	blockers := []branchBlocker{}
-	for branchKey := range req.Coverage.BranchCovMap {
-		fnName, lineCol, ok := strings.Cut(branchKey, ":")
-		if !ok {
-			continue
+	sort.Slice(complexities, func(i, j int) bool {
+		a, b := complexities[i], complexities[j]
+		if a.FunctionName != b.FunctionName {
+			return a.FunctionName < b.FunctionName
 		}
-		line, _, ok := strings.Cut(lineCol, ",")
+		if a.Branch != b.Branch {
+			return a.Branch < b.Branch
+		}
+		return a.SideIdx < b.SideIdx
+	})
+
+	// ── Complexity lookup map ────────────────────────────────────────────────
+	type complexityKey struct {
+		fnName  string
+		branch  string
+		sideIdx int
+	}
+	complexityLookup := map[complexityKey]*branchComplexity{}
+	for i := range complexities {
+		c := &complexities[i]
+		complexityLookup[complexityKey{c.FunctionName, c.Branch, c.SideIdx}] = c
+	}
+
+	// ── Branch blockers ──────────────────────────────────────────────────────
+	blockers := []branchBlocker{}
+	for branchKey, sideHitsRaw := range req.Coverage.BranchCovMap {
+		sideHits := make([]int, len(sideHitsRaw))
+		copy(sideHits, sideHitsRaw)
+		branchHitcount := -1
+		if len(sideHits) > 2 {
+			// first two entries are the switch preamble; strip them
+			max0, max1 := sideHits[0], sideHits[1]
+			if max1 > max0 {
+				branchHitcount = max1
+			} else {
+				branchHitcount = max0
+			}
+			sideHits = sideHits[2:]
+		}
+
+		fnName, lineStr, colStr, ok := splitBranchKey(branchKey)
 		if !ok {
 			continue
 		}
@@ -261,20 +398,102 @@ func run() error {
 		if !ok {
 			continue
 		}
-		blockers = append(blockers, branchBlocker{
-			BlockedSide:                       "0",
-			BlockedUniqueNotCoveredComplexity: 0,
-			BlockedUniqueReachableComplexity:  0,
-			BlockedUniqueFunctions:            []string{},
-			BlockedNotCoveredComplexity:       0,
-			BlockedReachableComplexity:        0,
-			SidesHitcountDiff:                 0,
-			SourceFile:                        fn.FunctionSourceFile,
-			BranchLineNumber:                  line,
-			BlockedSideLineNumder:             line,
-			FunctionName:                      fnName,
-		})
+		llvmBranch := filepath.Base(fn.FunctionSourceFile) + ":" + lineStr + "," + colStr
+		br, ok := fn.BranchProfiles[llvmBranch]
+		if !ok {
+			continue
+		}
+		if len(sideHits) != len(br.Sides) {
+			continue
+		}
+
+		taken := false
+		var notTakenIndices []int
+		for idx, hit := range sideHits {
+			if hit == 0 {
+				notTakenIndices = append(notTakenIndices, idx)
+			} else {
+				taken = true
+			}
+		}
+		if !taken || len(notTakenIndices) == 0 {
+			continue
+		}
+
+		for _, blockedIdx := range notTakenIndices {
+			side := br.Sides[blockedIdx]
+			blockedLine, ok := parseSideLine(side.Pos)
+			if !ok {
+				continue
+			}
+			branchLine, _ := strconv.Atoi(lineStr)
+			if branchLine > blockedLine {
+				continue
+			}
+			if isSideHit(req.Coverage, fn.FunctionSourceFile, fnName, blockedLine) {
+				continue
+			}
+
+			key := complexityKey{fnName, llvmBranch, blockedIdx}
+			comp, ok := complexityLookup[key]
+			if !ok {
+				continue
+			}
+
+			otherSideFuncs := map[string]struct{}{}
+			for iterIdx, iterSide := range br.Sides {
+				if iterIdx == blockedIdx {
+					continue
+				}
+				for _, f := range iterSide.Funcs {
+					otherSideFuncs[f] = struct{}{}
+				}
+			}
+			var uniqueFuncsList []string
+			for _, f := range side.Funcs {
+				if _, inOther := otherSideFuncs[f]; !inOther {
+					uniqueFuncsList = append(uniqueFuncsList, f)
+				}
+			}
+			if uniqueFuncsList == nil {
+				uniqueFuncsList = []string{}
+			}
+
+			maxHit := branchHitcount
+			for _, h := range sideHits {
+				if h > maxHit {
+					maxHit = h
+				}
+			}
+
+			blockers = append(blockers, branchBlocker{
+				BlockedSide:                       strconv.Itoa(blockedIdx),
+				BlockedUniqueNotCoveredComplexity: comp.UniqueNotCoveredComplexity,
+				BlockedUniqueReachableComplexity:  comp.UniqueReachableComplexity,
+				BlockedUniqueFunctions:            uniqueFuncsList,
+				BlockedNotCoveredComplexity:       comp.NotCoveredComplexity,
+				BlockedReachableComplexity:        comp.ReachableComplexity,
+				SidesHitcountDiff:                 maxHit,
+				SourceFile:                        fn.FunctionSourceFile,
+				BranchLineNumber:                  lineStr,
+				BlockedSideLineNumder:             strconv.Itoa(blockedLine),
+				FunctionName:                      fnName,
+			})
+		}
 	}
+	sort.Slice(blockers, func(i, j int) bool {
+		a, b := blockers[i], blockers[j]
+		if a.BlockedUniqueNotCoveredComplexity != b.BlockedUniqueNotCoveredComplexity {
+			return a.BlockedUniqueNotCoveredComplexity > b.BlockedUniqueNotCoveredComplexity
+		}
+		if a.BlockedUniqueReachableComplexity != b.BlockedUniqueReachableComplexity {
+			return a.BlockedUniqueReachableComplexity > b.BlockedUniqueReachableComplexity
+		}
+		if a.BlockedNotCoveredComplexity != b.BlockedNotCoveredComplexity {
+			return a.BlockedNotCoveredComplexity > b.BlockedNotCoveredComplexity
+		}
+		return a.BlockedReachableComplexity > b.BlockedReachableComplexity
+	})
 
 	overlayPath := filepath.Join(req.OutputDir, "overlay_nodes.json")
 	branchComplexityPath := filepath.Join(req.OutputDir, "branch_complexities.json")
