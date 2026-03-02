@@ -55,6 +55,8 @@ Based on profiling and container monitoring:
    - **LLVM coverage loader**: Rust/Go implementations functional
    - **YAML loader**: Rust/Go implementations functional
 
+> ⚠️ **Note**: Go overlay runs in **shadow/probe-only mode** and is not authoritative. `analysis.py:1368` explicitly logs this. Treat as partial completion `[~]`, not full `[x]`.
+
 ### Bottleneck Analysis
 
 From `.work/benchmarks/` evidence and profiling:
@@ -123,6 +125,10 @@ From `.work/benchmarks/` evidence and profiling:
 - Document baseline performance metrics
 - Set up build toolchain for Rust native components
 
+**Assigned Subagent**: `devops-engineer`
+**Rationale**: Sprint 0 is infrastructure-only: benchmark scripts, CI build job for Rust toolchain, directory setup. No application code changes. The `devops-engineer` agent owns CI/CD pipelines, build toolchain setup, and automation scripts.
+**Delegation Prompt Hint**: "Set up `.work/scripts/`, build `tools/native_*/` in CI (GitHub Actions), capture simdjson baseline metrics."
+
 **Deliverables**:
 1. **Testing Infrastructure**:
    - `.work/benchmarks/simdjson/` setup (small test project)
@@ -158,6 +164,10 @@ From `.work/benchmarks/` evidence and profiling:
 - Eliminate Python GIL bottleneck in `correlate_debugged_function_to_debug_types(...)`
 - Achieve measurable speedup on medium-to-large projects
 
+**Assigned Subagent**: `dev` (Rust implementation) + `test-engineer` (parity gates)
+**Rationale**: Sprint 1 requires writing new Rust code (`native_debug_correlator_rust`) and Python integration (`debug_info.py`). The `dev` agent handles TDD implementation. The `test-engineer` agent authors `test_debug_correlator_backend.py` parity tests.
+**Delegation Prompt Hint**: "Implement Rust debug correlator binary with Rayon parallelism; integrate into `debug_info.py` behind `FI_DEBUG_CORRELATE_NATIVE=rust`; write parity tests."
+
 **Scope**:
 - **Component**: `src/fuzz_introspector/debug_info.py` correlation logic
 - **Approach**: Rust binary invoked via subprocess, receives JSON input (type dictionary + functions), returns JSON output (correlated functions)
@@ -176,15 +186,20 @@ From `.work/benchmarks/` evidence and profiling:
        ]
      }
      ```
-   - **Output**: JSON stdout (correlated functions with `func_signature_elems`, `source`)
-   - **Parallelism**: Rayon parallel iterator over `functions` (CPU-bound)
-   - **Memory**: Shared read-only `Arc<DebugTypeDictionary>` per thread
+    - **Output**: JSON stdout (correlated functions with `func_signature_elems`, `source`)
+    - **Parallelism**: Rayon parallel iterator over `functions` (CPU-bound)
+    - **Memory**: Shared read-only `Arc<DebugTypeDictionary>` per thread
+
+> ⚠️ **Protocol Inconsistency**: `backend_loaders.py:1484` checks `status == "success"`, but this plan's spec says `"ok"` and the overlay (`backend_loaders.py:1162`) accepts both `"success"` and `"ok"`. If a new Rust binary emits only `"ok"`, the correlator will silently fall back to Python. **New native implementations must emit `"success"` (not `"ok"`) for the correlator path.**
 
 2. **Python Integration**: `src/fuzz_introspector/debug_info.py`
    - New function: `_correlate_via_native_rust(...)`
    - Feature flag: `FI_DEBUG_CORRELATE_NATIVE=rust` (default `false`)
    - Fallback: On native binary missing or non-zero exit, fall back to Python (thread or serial)
    - Subprocess invocation: `subprocess.run([native_bin], input=json_input, capture_output=True)`
+   - Debug preservation: `FI_DEBUG_CORRELATOR_PRESERVE_DEBUG` — when set, native attempt artifacts (stdin/stdout dumps) are retained for post-mortem analysis
+
+> ⚠️ **Implementation Gap**: `debug_info.py`'s `_cleanup_native_attempt` does **not** check `FI_DEBUG_CORRELATOR_PRESERVE_DEBUG` — it always cleans up unconditionally. The contract described here is aspirational; fix `_cleanup_native_attempt` before relying on this flag.
 
 3. **Parity Gate**: `src/test/test_debug_correlator_backend.py`
    - Parametrized test: `@pytest.mark.parametrize("backend", ["python", "rust"])`
@@ -216,6 +231,10 @@ From `.work/benchmarks/` evidence and profiling:
 - Migrate YAML and LLVM coverage loading to Rust
 - Enable parallel file I/O and parsing (eliminate sequential bottleneck)
 - Reduce memory pressure through streaming and efficient data structures
+
+**Assigned Subagent**: `dev` (Rust implementation) + `test-engineer` (parity gates)
+**Rationale**: Same as Sprint 1 — new Rust binaries (`native_yaml_loader_rust`, `native_llvm_cov_loader_rust`) and Python integration. `test-engineer` extends `test_backend_loaders.py`.
+**Delegation Prompt Hint**: "Implement parallel YAML loader and LLVM coverage loader in Rust; integrate into `debug_info.py` and `llvm_cov_load.py`; write parity + regression tests."
 
 **Scope**:
 - **YAML Loader**: `src/fuzz_introspector/debug_info.py` → `load_debug_all_yaml_files(...)`
@@ -276,6 +295,10 @@ From `.work/benchmarks/` evidence and profiling:
 - Enable plugin-level parallelism (run multiple plugins concurrently)
 - Maintain plugin API compatibility (Python plugins still work)
 
+**Assigned Subagent**: `dev` (Rust plugin framework) + `test-engineer` (plugin parity matrix)
+**Rationale**: Sprint 3 introduces the Rust plugin framework and migrates 3 analysis plugins. This is the most complex sprint — `dev` owns the `NativePluginProxy` class and Rust trait design; `test-engineer` builds `test_analysis_plugin_matrix.py`.
+**Delegation Prompt Hint**: "Design Rust `AnalysisPlugin` trait; implement `OptimalTargets`, `RuntimeCoverageAnalysis`, `FuzzCalltreeAnalysis` in Rust; write parametrized parity tests across Python/Rust backends."
+
 **Scope**:
 - **High-Priority Plugins** (CPU-bound, high impact):
   - `OptimalTargets` (call tree traversal, complexity scoring)
@@ -332,6 +355,10 @@ From `.work/benchmarks/` evidence and profiling:
 - Enable memory-adaptive runtime with graceful degradation
 - Benchmark full pipeline on cgserver (real-world validation)
 - Make graduation decision: enable native backends by default or keep opt-in
+
+**Assigned Subagent**: `dev` (memory manager + unified flag) + `devops-engineer` (OSS-Fuzz Dockerfile) + `code-review` (graduation review)
+**Rationale**: Sprint 4 is multi-domain: new `memory_manager.py` module (dev), Dockerfile integration for OSS-Fuzz (devops-engineer), and a final graduation review before enabling by default (code-review). The `code-review` agent checks for security, correctness, and fallback safety.
+**Delegation Prompt Hint**: "Implement `memory_manager.py` with adaptive worker scaling; add `FI_NATIVE_BACKENDS` unified flag; update OSS-Fuzz Dockerfile; run graduation benchmark on cgserver; request code review before merging."
 
 **Scope**:
 - **Unified Pipeline**: All native components enabled via single flag
@@ -392,6 +419,8 @@ From `.work/benchmarks/` evidence and profiling:
 | **Memory Reduction (cgserver)** | ≥35% | Peak RSS (MB) | Baseline peak RSS |
 | **Output Parity** | 100% | JSON diff hash (ignore order/timestamps) | Python baseline |
 | **Stability** | 0 failures | 10 consecutive runs, no crashes/fallbacks | N/A |
+
+> ⚠️ G1 (≥35% RSS reduction) and G2 (≥30% correlation speedup) are **not yet met** — native backends are currently equal to or slightly slower/larger than Python (serialization overhead dominates). G3 (parity) passes. Default switch is deferred until G1/G2 are met.
 
 ### Secondary Metrics (Observability)
 
@@ -825,6 +854,11 @@ petgraph = "0.6"  # Graph algorithms (call tree)
 | `FI_MAX_RSS_GB` | auto-detect | Max RSS limit (GB), triggers degradation | Sprint 4 |
 | `FI_MAX_WORKERS` | `cpu_count` | Override worker count | Sprint 4 |
 | `FI_MEMORY_MONITOR_INTERVAL` | `5` | RSS sampling interval (seconds) | Sprint 4 |
+| `FI_DEBUG_CORRELATOR_BACKEND=cpp` | N/A | ⚠️ Undocumented — silent Python fallback (see `backend_loaders.py:36-37`) | — |
+
+> **`FI_DEBUG_CORRELATOR_BACKEND=cpp`** — **Undocumented backend**. `backend_loaders.py` lines 36-37 include `BACKEND_CPP` in `SUPPORTED_BACKENDS`, but `parse_correlator_backend_env()` does not handle it, causing silent Python fallback. Do not use until handled explicitly.
+
+> ⚠️ `FI_CORR_FALLBACK_OK` was described in an earlier draft as a "deprecated alias" but was **never defined** in the codebase. Remove from any derived docs or scripts.
 
 ---
 
