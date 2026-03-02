@@ -1569,14 +1569,15 @@ def test_correlator_shadow_mode_strict_mismatch_raises(monkeypatch):
     )
 
 
-def test_correlator_go_backend_forces_shadow_mode_when_disabled(monkeypatch, caplog):
+def test_correlator_go_backend_runs_as_primary_not_forced_shadow(monkeypatch, caplog):
+    """Go backend no longer forces shadow mode; native results are authoritative."""
     types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
     funcs = [{"type_arguments": [0], "file_location": "/src/a.c:7"}]
 
     def _fake_run_correlator_backend(payload, **_kwargs):
         output_dir = payload["output_dir"]
         os.makedirs(output_dir, exist_ok=True)
-        shard_path = os.path.join(output_dir, "correlated-go-shadow-00000.ndjson")
+        shard_path = os.path.join(output_dir, "correlated-go-00000.ndjson")
         with open(shard_path, "w", encoding="utf-8") as shard_fp:
             json.dump(
                 {
@@ -1633,29 +1634,28 @@ def test_correlator_go_backend_forces_shadow_mode_when_disabled(monkeypatch, cap
                 types, funcs, tmpdir, dump_files=False
             )
 
-    assert funcs[0]["func_signature_elems"]["return_type"] == ["python"]
-    assert funcs[0]["source"]["source_file"] == "/python/a.c"
-    assert any(
+    # Native (Go) results are now authoritative, not overridden by Python.
+    assert funcs[0]["func_signature_elems"]["return_type"] == ["native"]
+    assert funcs[0]["source"]["source_file"] == "/native/a.c"
+    # The forced-shadow-mode warning must NOT appear.
+    assert not any(
         "FI_DEBUG_CORRELATOR_BACKEND=go currently runs in shadow-only mode"
         in record.message
         for record in caplog.records
     )
-    assert any(
-        debug_info.backend_loaders.FI_CORR_PARITY_MISMATCH in record.message
-        for record in caplog.records
-    )
 
 
-def test_correlator_go_backend_strict_forced_shadow_mismatch_raises(monkeypatch):
+def test_correlator_go_backend_strict_counter_mismatch_raises(monkeypatch):
+    """Go backend in strict mode raises on counter mismatch (no longer shadow-forced)."""
     types = [{"addr": 0, "tag": "DW_TAG_base_type", "name": "int"}]
+    # Single function so shard coverage is complete, but counter claims 2 → mismatch.
     funcs = [{"type_arguments": [0], "file_location": "/src/a.c:7"}]
 
     def _fake_run_correlator_backend(payload, **_kwargs):
         output_dir = payload["output_dir"]
         os.makedirs(output_dir, exist_ok=True)
-        shard_path = os.path.join(
-            output_dir, "correlated-go-shadow-strict-00000.ndjson"
-        )
+        shard_path = os.path.join(output_dir, "correlated-go-strict-00000.ndjson")
+        # One row for one func → coverage complete, but counter claims 2 → mismatch.
         with open(shard_path, "w", encoding="utf-8") as shard_fp:
             json.dump(
                 {
@@ -1675,22 +1675,12 @@ def test_correlator_go_backend_strict_forced_shadow_mismatch_raises(monkeypatch)
             response={
                 "schema_version": 1,
                 "status": "success",
-                "counters": {"updated_functions": 1},
+                # Counter claims 2 but only 1 row delivered → counter mismatch.
+                "counters": {"updated_functions": 2},
                 "artifacts": {"correlated_shards": [shard_path]},
                 "timings": {},
             },
         )
-
-    def _fake_python_correlate(func_slice, _debug_type_dictionary):
-        for debug_func in func_slice:
-            debug_func["func_signature_elems"] = {
-                "return_type": ["python"],
-                "params": [],
-            }
-            debug_func["source"] = {
-                "source_file": "/python/a.c",
-                "source_line": "7",
-            }
 
     monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "go")
     monkeypatch.delenv("FI_DEBUG_CORRELATOR_SHADOW", raising=False)
@@ -1701,7 +1691,6 @@ def test_correlator_go_backend_strict_forced_shadow_mismatch_raises(monkeypatch)
         "run_correlator_backend",
         _fake_run_correlator_backend,
     )
-    monkeypatch.setattr(debug_info, "_correlate_function_slice", _fake_python_correlate)
     monkeypatch.setattr(
         debug_info, "create_friendly_debug_types", lambda *_args, **_kwargs: None
     )
@@ -1818,3 +1807,74 @@ Subprogram: f2
         parallel_report = debug_info.load_debug_report(files)
 
     assert _canonicalize(serial_report) == _canonicalize(parallel_report)
+
+
+def test_correlator_all_debug_types_files_fast_path_skips_shard_write(monkeypatch):
+    """When all_debug_types_files is provided in the native path, type shards are
+    not written; the original file paths are passed directly to the backend."""
+    funcs = [{"type_arguments": [], "file_location": "/src/a.c:1"}]
+    type_yaml_paths = ["/fake/debug-types-0.yaml", "/fake/debug-types-1.yaml"]
+
+    shard_write_calls: list[str] = []
+    _orig_write = debug_info._write_native_correlator_input_shards
+
+    def _tracking_write_shards(records, out_dir, prefix, shard_size):
+        shard_write_calls.append(prefix)
+        return _orig_write(records, out_dir, prefix, shard_size)
+
+    def _fake_run_correlator_backend(payload, **_kwargs):
+        # Verify the fast path: type paths come from our list, not written shards.
+        assert payload["debug_types_paths"] == type_yaml_paths
+        output_dir = payload["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        shard_path = os.path.join(output_dir, "correlated-rust-00000.ndjson")
+        with open(shard_path, "w", encoding="utf-8") as shard_fp:
+            json.dump(
+                {
+                    "row_idx": 0,
+                    "func_signature_elems": {"return_type": ["int"], "params": []},
+                    "source": {"source_file": "/src/a.c", "source_line": "1"},
+                },
+                shard_fp,
+            )
+            shard_fp.write("\n")
+        return debug_info.backend_loaders.CorrelatorBackendResult(
+            selected_backend="rust",
+            strict_mode=False,
+            response={
+                "schema_version": 1,
+                "status": "success",
+                "counters": {"updated_functions": 1},
+                "artifacts": {"correlated_shards": [shard_path]},
+                "timings": {},
+            },
+        )
+
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_BACKEND", "rust")
+    monkeypatch.delenv("FI_DEBUG_CORRELATOR_SHADOW", raising=False)
+    monkeypatch.setenv("FI_DEBUG_CORRELATOR_STRICT", "0")
+    monkeypatch.setenv("FI_DEBUG_CORRELATE_PARALLEL", "0")
+    monkeypatch.setattr(
+        debug_info, "_write_native_correlator_input_shards", _tracking_write_shards
+    )
+    monkeypatch.setattr(
+        debug_info.backend_loaders,
+        "run_correlator_backend",
+        _fake_run_correlator_backend,
+    )
+    monkeypatch.setattr(
+        debug_info, "create_friendly_debug_types", lambda *_args, **_kwargs: None
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        debug_info.correlate_debugged_function_to_debug_types(
+            [],  # empty — fast path provides file paths instead
+            funcs,
+            tmpdir,
+            dump_files=False,
+            all_debug_types_files=type_yaml_paths,
+        )
+
+    # Type shard write must NOT have been called; only function shards are written.
+    assert "debug-types" not in shard_write_calls
+    assert "debug-functions" in shard_write_calls

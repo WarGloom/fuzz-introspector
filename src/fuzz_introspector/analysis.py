@@ -684,21 +684,39 @@ class IntrospectionProject:
 
         # Load the yaml  content of debug files holding type information and
         # function information.
+        _native_correlator_active = debug_info.is_correlator_native_enabled()
         type_load_started = time.perf_counter()
-        self.debug_all_types = debug_info.load_debug_all_yaml_files(
-            self.debug_type_files)
-        _log_debug_load_stage(
-            "debug_types_yaml",
-            time.perf_counter() - type_load_started,
-            {
-                "files": len(self.debug_type_files),
-                "types": len(self.debug_all_types),
-            },
-            include_stage_rss,
-            perf_warn_enabled,
-            warn_after_seconds,
-            warn_rss_mb,
-        )
+        if _native_correlator_active:
+            # Skip loading type records into Python memory; the native binary
+            # will read the original YAML files directly.
+            self.debug_all_types = []
+            _log_debug_load_stage(
+                "debug_types_yaml_skipped_native",
+                time.perf_counter() - type_load_started,
+                {
+                    "files": len(self.debug_type_files),
+                    "types": 0,
+                },
+                include_stage_rss,
+                perf_warn_enabled,
+                warn_after_seconds,
+                warn_rss_mb,
+            )
+        else:
+            self.debug_all_types = debug_info.load_debug_all_yaml_files(
+                self.debug_type_files)
+            _log_debug_load_stage(
+                "debug_types_yaml",
+                time.perf_counter() - type_load_started,
+                {
+                    "files": len(self.debug_type_files),
+                    "types": len(self.debug_all_types),
+                },
+                include_stage_rss,
+                perf_warn_enabled,
+                warn_after_seconds,
+                warn_rss_mb,
+            )
 
         function_load_started = time.perf_counter()
         self.debug_all_functions = debug_info.load_debug_all_yaml_files(
@@ -760,6 +778,8 @@ class IntrospectionProject:
             self.debug_all_functions,
             out_dir,
             dump_files=dump_files,
+            all_debug_types_files=(self.debug_type_files
+                                   if _native_correlator_active else None),
         )
         _log_debug_load_stage(
             "type_correlation",

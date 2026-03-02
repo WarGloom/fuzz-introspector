@@ -1865,13 +1865,42 @@ def _resolve_correlator_backend() -> str:
     return backend_loaders.parse_correlator_backend_env()
 
 
-def correlate_debugged_function_to_debug_types(all_debug_types,
-                                               all_debug_functions,
-                                               out_dir,
-                                               dump_files=True):
+def is_correlator_native_enabled() -> bool:
+    """Return True if the debug correlator will use a native backend.
+
+    Used by callers to skip eager type loading when native handles the files.
+    """
+    backend = _resolve_correlator_backend()
+    if backend == backend_loaders.BACKEND_PYTHON:
+        return False
+    command_env_prefix = "FI_DEBUG_CORRELATOR"
+    command = backend_loaders.resolve_backend_command(command_env_prefix,
+                                                      backend)
+    return bool(command)
+
+
+def correlate_debugged_function_to_debug_types(
+    all_debug_types,
+    all_debug_functions,
+    out_dir,
+    dump_files=True,
+    all_debug_types_files=None,
+):
     """Correlate debug information about all functions and all types. The
     result is a lot of atomic debug-information-extracted types are correlated
-    to the debug function."""
+    to the debug function.
+
+    Args:
+        all_debug_types: List of type records (may be empty when
+            all_debug_types_files is provided for the native fast path).
+        all_debug_functions: List of function records.
+        out_dir: Output directory for correlation artifacts.
+        dump_files: Whether to write friendly debug-type dumps.
+        all_debug_types_files: Optional list of original type YAML file paths.
+            When provided and a native backend is active, the files are passed
+            directly to the native binary instead of converting all_debug_types
+            to NDJSON shards first, avoiding Python ever loading the type data.
+    """
     correlator_backend = _resolve_correlator_backend()
     correlator_strict_mode = backend_loaders.parse_correlator_strict_mode()
     correlator_shadow_mode = _parse_bool_env("FI_DEBUG_CORRELATOR_SHADOW",
@@ -1889,11 +1918,6 @@ def correlate_debugged_function_to_debug_types(all_debug_types,
         correlator_strict_mode,
         shadow_sample_size,
     )
-    if correlator_backend == backend_loaders.BACKEND_GO and not correlator_shadow_mode:
-        logger.warning(
-            "FI_DEBUG_CORRELATOR_BACKEND=go currently runs in shadow-only mode; "
-            "forcing Python authoritative output")
-        correlator_shadow_mode = True
     shadow_sample_indexes = _build_correlator_shadow_sample_indexes(
         len(all_debug_functions), shadow_sample_size)
     native_shadow_snapshot: dict[int, tuple[str, str]] = {}
@@ -1951,8 +1975,19 @@ def correlate_debugged_function_to_debug_types(all_debug_types,
         native_output_dir = os.path.join(native_attempt_dir, "native-output")
         input_shard_size = _parse_int_env(
             "FI_DEBUG_CORRELATOR_INPUT_SHARD_SIZE", 250000, 1)
-        native_types_paths = _write_native_correlator_input_shards(
-            all_debug_types, native_input_dir, "debug-types", input_shard_size)
+        if all_debug_types_files:
+            # Fast path: caller already has the raw YAML paths; pass them
+            # directly to the native binary without writing shard files.
+            native_types_paths = list(all_debug_types_files)
+            logger.info(
+                "[type_correlation] native fast path: using %d pre-existing type "
+                "file(s) directly (skipped shard write)",
+                len(native_types_paths),
+            )
+        else:
+            native_types_paths = _write_native_correlator_input_shards(
+                all_debug_types, native_input_dir, "debug-types",
+                input_shard_size)
         native_functions_paths = _write_native_correlator_input_shards(
             all_debug_functions, native_input_dir, "debug-functions",
             input_shard_size)
