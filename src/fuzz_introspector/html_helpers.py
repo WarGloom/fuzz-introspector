@@ -45,8 +45,7 @@ class HTML_HEADING(Enum):
 class HTML_TOC_ENTRY:
     """Entry in the table of contents"""
 
-    def __init__(self, entry_title: str, href_link: str,
-                 heading_type: HTML_HEADING):
+    def __init__(self, entry_title: str, href_link: str, heading_type: HTML_HEADING):
         self.entry_title = entry_title
         self.href_link = href_link
         self.heading_type = heading_type
@@ -172,7 +171,8 @@ def create_pfc_button(introspection_proj, coverage_url: str) -> str:
     for profile in introspection_proj.profiles:
         target_name = profile.identifier
         target_coverage_url = utils.get_target_coverage_url(
-            coverage_url, target_name, profile.target_lang)
+            coverage_url, target_name, profile.target_lang
+        )
         # get_target_coverage_url gives base folder. We must specify
         # HTML file for it to work on gcloud as there is no automatic
         # redirection.
@@ -197,11 +197,11 @@ def create_pfc_button(introspection_proj, coverage_url: str) -> str:
     return html_string
 
 
-def html_get_table_of_contents(table_of_contents: HtmlTableOfContents,
-                               coverage_url: str, introspection_proj) -> str:
+def html_get_table_of_contents(
+    table_of_contents: HtmlTableOfContents, coverage_url: str, introspection_proj
+) -> str:
     """Getst HTML string for table of contents bar."""
-    per_fuzzer_coverage_button = create_pfc_button(introspection_proj,
-                                                   coverage_url)
+    per_fuzzer_coverage_button = create_pfc_button(introspection_proj, coverage_url)
 
     if introspection_proj.proj_profile.target_lang == "c-cpp":
         cov_index = "report.html"
@@ -311,8 +311,9 @@ def get_simple_box(title: str, value: str) -> str:
       </div>"""
 
 
-def create_collapsible_element(non_collapsed: str, collapsed: str,
-                               collapsible_id: str) -> str:
+def create_collapsible_element(
+    non_collapsed: str, collapsed: str, collapsible_id: str
+) -> str:
     """Creates a string followed by a <div> that is collapsible. We use this
     for displaying items in tables where the full substance of the item is
     too large to display by default for all items, but we still want the user
@@ -337,8 +338,7 @@ def create_collapsible_element(non_collapsed: str, collapsed: str,
     </div>"""
 
 
-def create_percentage_graph(title: str, numerator: int,
-                            denominator: int) -> str:
+def create_percentage_graph(title: str, numerator: int, denominator: int) -> str:
     """Creates a percentage tag within a <div> tag. This is used to show
     "how much X is of Y" for a {numerator, denominator} pair.
     """
@@ -415,16 +415,20 @@ def create_calltree_color_distribution_table(color_list: List[str]) -> str:
         color_dictionary[color] = color_dictionary.get(color, 0) + 1
 
     html_string += "<p>The distribution of callsites in terms of coloring is"
-    html_string += ("<table><tr>"
-                    '<th style="text-align: left;">Color</th>'
-                    '<th style="text-align: left;">Runtime hitcount</th>'
-                    '<th style="text-align: left;">Callsite count</th>'
-                    '<th style="text-align: left;">Percentage</th>'
-                    "</tr>")
+    html_string += (
+        "<table><tr>"
+        '<th style="text-align: left;">Color</th>'
+        '<th style="text-align: left;">Runtime hitcount</th>'
+        '<th style="text-align: left;">Callsite count</th>'
+        '<th style="text-align: left;">Percentage</th>'
+        "</tr>"
+    )
     for _min, _max, color, rgb_code in constants.COLOR_CONSTANTS:
-        html_string += (f'<tr><td style="color:{color}; '
-                        f"text-shadow: -1px 0 black, 0 1px black, "
-                        f'1px 0 black, 0 -1px black;"><b>{color}</b></td>')
+        html_string += (
+            f'<tr><td style="color:{color}; '
+            f"text-shadow: -1px 0 black, 0 1px black, "
+            f'1px 0 black, 0 -1px black;"><b>{color}</b></td>'
+        )
         if _max == 1:
             interval = "0"
         elif _max > 1000:
@@ -451,9 +455,9 @@ def create_calltree_color_distribution_table(color_list: List[str]) -> str:
     return html_string
 
 
-def create_horisontal_calltree_image(image_name: str,
-                                     profile: fuzzer_profile.FuzzerProfile,
-                                     dump_files: bool, out_dir) -> List[str]:
+def create_horisontal_calltree_image(
+    image_name: str, profile: fuzzer_profile.FuzzerProfile, dump_files: bool, out_dir
+) -> List[str]:
     """
     Creates a horisontal image of the calltree. The height is fixed and
     each element on the x-axis shows a node in the calltree in the form
@@ -496,29 +500,25 @@ def create_horisontal_calltree_image(image_name: str,
             if curr_color == color_list[i]:
                 curr_size += 1.0
             else:
-                ax.add_patch(
-                    Rectangle((curr_x, 0.0), curr_size, 1.0, color=curr_color))
+                ax.add_patch(Rectangle((curr_x, 0.0), curr_size, 1.0, color=curr_color))
 
                 # Start next color area
                 curr_x += curr_size
                 curr_color = color_list[i]
                 curr_size = 1.0
         # Plot the last case
-        ax.add_patch(Rectangle((curr_x, 0.0), curr_size, 1.0,
-                               color=curr_color))
+        ax.add_patch(Rectangle((curr_x, 0.0), curr_size, 1.0, color=curr_color))
         logger.info("- iterated over color list")
 
         # Save the image
         if dump_files:
             logger.info("- saving image")
-            ax.set_yticklabels([])
             ax.set_yticks([])
             xlabel = ax.set_xlabel("Callsite index")
 
             plt.title(image_name.replace(".png", "").replace("_colormap", ""))
             fig.tight_layout()
-            fig.savefig(os.path.join(out_dir, image_name),
-                        bbox_extra_artists=[xlabel])
+            fig.savefig(os.path.join(out_dir, image_name), bbox_extra_artists=[xlabel])
             logger.info("- image saved")
         return color_list
     finally:
