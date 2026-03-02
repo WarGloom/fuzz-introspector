@@ -82,7 +82,33 @@ def test_load_debug_all_yaml_files_external_backend(monkeypatch):
     assert items == [{"external": True}]
 
 
-def test_load_debug_all_yaml_files_uses_rust_default_backend(monkeypatch):
+def test_load_debug_all_yaml_files_uses_python_default_backend(monkeypatch):
+    """When no FI_* env vars are set, default backend must be python (no spurious warning)."""
+    captured = {}
+
+    def _fake_loader(**kwargs):
+        captured["default_backend"] = kwargs.get("default_backend")
+        return "python", None
+
+    # Ensure no FI_ env vars bleed in from the environment.
+    for key in list(__import__("os").environ):
+        if key.startswith("FI_"):
+            monkeypatch.delenv(key, raising=False)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yaml_path = _write_yaml(tmpdir, "a.yaml", [{"k": 1}])
+        monkeypatch.setenv("FI_DEBUG_PARALLEL", "0")
+        monkeypatch.setattr(
+            debug_info.backend_loaders, "load_json_with_backend", _fake_loader
+        )
+        items = debug_info.load_debug_all_yaml_files([yaml_path])
+
+    assert captured["default_backend"] == debug_info.backend_loaders.BACKEND_PYTHON
+    assert items == [{"k": 1}]
+
+
+def test_load_debug_all_yaml_files_uses_rust_backend_when_env_set(monkeypatch):
+    """When FI_NATIVE_BACKENDS=rust, default backend for the debug YAML loader is rust."""
     captured = {}
 
     def _fake_loader(**kwargs):
@@ -92,6 +118,7 @@ def test_load_debug_all_yaml_files_uses_rust_default_backend(monkeypatch):
     with tempfile.TemporaryDirectory() as tmpdir:
         yaml_path = _write_yaml(tmpdir, "a.yaml", [{"k": 1}])
         monkeypatch.setenv("FI_DEBUG_PARALLEL", "0")
+        monkeypatch.setenv("FI_NATIVE_BACKENDS", "rust")
         monkeypatch.setattr(
             debug_info.backend_loaders, "load_json_with_backend", _fake_loader
         )

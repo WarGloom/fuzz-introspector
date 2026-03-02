@@ -67,24 +67,29 @@ def _fake_profile_data_files(_root: str, pattern: str):
 
 
 def test_load_all_profiles_parallel_preserves_file_order(monkeypatch):
-    monkeypatch.setattr(data_loader.utils, "get_all_files_in_tree_with_regex",
-                        _fake_profile_data_files)
+    monkeypatch.setattr(
+        data_loader.utils, "get_all_files_in_tree_with_regex", _fake_profile_data_files
+    )
 
     monkeypatch.delenv(data_loader.FI_PROFILE_BACKEND_ENV, raising=False)
-    monkeypatch.setattr(data_loader.concurrent.futures, "ThreadPoolExecutor",
-                        _ExecutorStubOutOfOrder)
-    monkeypatch.setattr(data_loader.concurrent.futures, "as_completed",
-                        _as_completed_out_of_order)
+    monkeypatch.setattr(
+        data_loader.concurrent.futures, "ThreadPoolExecutor", _ExecutorStubOutOfOrder
+    )
+    monkeypatch.setattr(
+        data_loader.concurrent.futures, "as_completed", _as_completed_out_of_order
+    )
 
     profiles = data_loader.load_all_profiles("/tmp", "c-cpp", parallelise=True)
     assert [profile.name for profile in profiles] == ["c.data", "a.data", "b.data"]
 
 
 def test_load_all_profiles_uses_process_backend_when_configured(monkeypatch):
-    monkeypatch.setattr(data_loader.utils, "get_all_files_in_tree_with_regex",
-                        _fake_profile_data_files)
-    monkeypatch.setenv(data_loader.FI_PROFILE_BACKEND_ENV,
-                       data_loader.FI_PROFILE_BACKEND_PROCESS)
+    monkeypatch.setattr(
+        data_loader.utils, "get_all_files_in_tree_with_regex", _fake_profile_data_files
+    )
+    monkeypatch.setenv(
+        data_loader.FI_PROFILE_BACKEND_ENV, data_loader.FI_PROFILE_BACKEND_PROCESS
+    )
 
     selected_backends = []
 
@@ -97,12 +102,15 @@ def test_load_all_profiles_uses_process_backend_when_configured(monkeypatch):
         del _args, _kwargs
         raise AssertionError("ThreadPoolExecutor should not be selected")
 
-    monkeypatch.setattr(data_loader.concurrent.futures, "ProcessPoolExecutor",
-                        _ProcessExecutorStub)
-    monkeypatch.setattr(data_loader.concurrent.futures, "ThreadPoolExecutor",
-                        _thread_backend_guard)
-    monkeypatch.setattr(data_loader.concurrent.futures, "as_completed",
-                        _as_completed_out_of_order)
+    monkeypatch.setattr(
+        data_loader.concurrent.futures, "ProcessPoolExecutor", _ProcessExecutorStub
+    )
+    monkeypatch.setattr(
+        data_loader.concurrent.futures, "ThreadPoolExecutor", _thread_backend_guard
+    )
+    monkeypatch.setattr(
+        data_loader.concurrent.futures, "as_completed", _as_completed_out_of_order
+    )
 
     profiles = data_loader.load_all_profiles("/tmp", "c-cpp", parallelise=True)
 
@@ -111,8 +119,9 @@ def test_load_all_profiles_uses_process_backend_when_configured(monkeypatch):
 
 
 def test_load_all_profiles_invalid_backend_falls_back_to_thread(monkeypatch):
-    monkeypatch.setattr(data_loader.utils, "get_all_files_in_tree_with_regex",
-                        _fake_profile_data_files)
+    monkeypatch.setattr(
+        data_loader.utils, "get_all_files_in_tree_with_regex", _fake_profile_data_files
+    )
     monkeypatch.setenv(data_loader.FI_PROFILE_BACKEND_ENV, "invalid-backend")
 
     selected_backends = []
@@ -126,12 +135,15 @@ def test_load_all_profiles_invalid_backend_falls_back_to_thread(monkeypatch):
         del _args, _kwargs
         raise AssertionError("ProcessPoolExecutor should not be selected")
 
-    monkeypatch.setattr(data_loader.concurrent.futures, "ThreadPoolExecutor",
-                        _ThreadExecutorStub)
-    monkeypatch.setattr(data_loader.concurrent.futures, "ProcessPoolExecutor",
-                        _process_backend_guard)
-    monkeypatch.setattr(data_loader.concurrent.futures, "as_completed",
-                        _as_completed_out_of_order)
+    monkeypatch.setattr(
+        data_loader.concurrent.futures, "ThreadPoolExecutor", _ThreadExecutorStub
+    )
+    monkeypatch.setattr(
+        data_loader.concurrent.futures, "ProcessPoolExecutor", _process_backend_guard
+    )
+    monkeypatch.setattr(
+        data_loader.concurrent.futures, "as_completed", _as_completed_out_of_order
+    )
 
     profiles = data_loader.load_all_profiles("/tmp", "c-cpp", parallelise=True)
 
@@ -150,8 +162,9 @@ def test_load_all_profiles_fallback_to_serial_on_parallel_failure(monkeypatch):
             return []
         return []
 
-    monkeypatch.setattr(data_loader.utils, "get_all_files_in_tree_with_regex",
-                        fake_files)
+    monkeypatch.setattr(
+        data_loader.utils, "get_all_files_in_tree_with_regex", fake_files
+    )
 
     loaded = []
 
@@ -166,8 +179,9 @@ def test_load_all_profiles_fallback_to_serial_on_parallel_failure(monkeypatch):
         raise RuntimeError("parallel disabled")
 
     monkeypatch.delenv(data_loader.FI_PROFILE_BACKEND_ENV, raising=False)
-    monkeypatch.setattr(data_loader.concurrent.futures, "ThreadPoolExecutor",
-                        _boom_executor)
+    monkeypatch.setattr(
+        data_loader.concurrent.futures, "ThreadPoolExecutor", _boom_executor
+    )
 
     profiles = data_loader.load_all_profiles("/tmp", "c-cpp", parallelise=True)
 
@@ -186,18 +200,18 @@ def test_read_fuzzer_data_file_to_profile_uses_external_yaml_backend(
     monkeypatch.setattr(
         data_loader.backend_loaders,
         "load_json_with_backend",
-        lambda **_: ("go", {
-            "Fuzzer filename": "fuzzer.cc",
-            "All functions": {
-                "Elements": []
+        lambda **_: (
+            "go",
+            {
+                "Fuzzer filename": "fuzzer.cc",
+                "All functions": {"Elements": []},
             },
-        }),
+        ),
     )
 
     captured_yaml = {}
 
     class _FuzzerProfileStub:
-
         def __init__(self, cfg_path, yaml_dict, language, cfg_content):
             del cfg_path, language, cfg_content
             captured_yaml.update(yaml_dict)
@@ -205,19 +219,18 @@ def test_read_fuzzer_data_file_to_profile_uses_external_yaml_backend(
         def has_entry_point(self):
             return True
 
-    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile",
-                        _FuzzerProfileStub)
+    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile", _FuzzerProfileStub)
 
-    profile = data_loader.read_fuzzer_data_file_to_profile(
-        str(cfg_file), "c-cpp")
+    profile = data_loader.read_fuzzer_data_file_to_profile(str(cfg_file), "c-cpp")
     assert profile is not None
     assert captured_yaml["Fuzzer filename"] == "fuzzer.cc"
 
 
-def test_read_fuzzer_data_file_to_profile_uses_rust_default_backend(
+def test_read_fuzzer_data_file_to_profile_uses_python_default_backend(
     monkeypatch,
     tmp_path,
 ):
+    """When no FI_* env vars are set, the default backend must be python (no spurious warning)."""
     cfg_file = tmp_path / "fuzzerLogFile-sample.data"
     cfg_file.write_text("Call tree\n", encoding="utf-8")
     yaml_file = tmp_path / "fuzzerLogFile-sample.data.yaml"
@@ -235,7 +248,6 @@ def test_read_fuzzer_data_file_to_profile_uses_rust_default_backend(
     captured_yaml = {}
 
     class _FuzzerProfileStub:
-
         def __init__(self, cfg_path, yaml_dict, language, cfg_content):
             del cfg_path, language, cfg_content
             captured_yaml.update(yaml_dict)
@@ -243,13 +255,62 @@ def test_read_fuzzer_data_file_to_profile_uses_rust_default_backend(
         def has_entry_point(self):
             return True
 
-    monkeypatch.setattr(data_loader.backend_loaders, "load_json_with_backend",
-                        _fake_loader)
-    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile",
-                        _FuzzerProfileStub)
+    monkeypatch.setattr(
+        data_loader.backend_loaders, "load_json_with_backend", _fake_loader
+    )
+    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile", _FuzzerProfileStub)
+    # Ensure no FI_ env vars bleed in from the environment.
+    for key in list(__import__("os").environ):
+        if key.startswith("FI_"):
+            monkeypatch.delenv(key, raising=False)
 
-    profile = data_loader.read_fuzzer_data_file_to_profile(
-        str(cfg_file), "c-cpp")
+    profile = data_loader.read_fuzzer_data_file_to_profile(str(cfg_file), "c-cpp")
     assert profile is not None
-    assert captured_backend["default_backend"] == data_loader.backend_loaders.BACKEND_RUST
+    assert (
+        captured_backend["default_backend"]
+        == data_loader.backend_loaders.BACKEND_PYTHON
+    )
+    assert captured_yaml["Fuzzer filename"] == "fuzzer.cc"
+
+
+def test_read_fuzzer_data_file_to_profile_uses_rust_backend_when_env_set(
+    monkeypatch,
+    tmp_path,
+):
+    """When FI_NATIVE_BACKENDS=rust, the default backend for the YAML loader is rust."""
+    cfg_file = tmp_path / "fuzzerLogFile-sample.data"
+    cfg_file.write_text("Call tree\n", encoding="utf-8")
+    yaml_file = tmp_path / "fuzzerLogFile-sample.data.yaml"
+    yaml_file.write_text(
+        "Fuzzer filename: fuzzer.cc\nAll functions:\n  Elements: []\n",
+        encoding="utf-8",
+    )
+
+    captured_backend = {}
+
+    def _fake_loader(**kwargs):
+        captured_backend["default_backend"] = kwargs.get("default_backend")
+        return "python", None
+
+    captured_yaml = {}
+
+    class _FuzzerProfileStub:
+        def __init__(self, cfg_path, yaml_dict, language, cfg_content):
+            del cfg_path, language, cfg_content
+            captured_yaml.update(yaml_dict)
+
+        def has_entry_point(self):
+            return True
+
+    monkeypatch.setattr(
+        data_loader.backend_loaders, "load_json_with_backend", _fake_loader
+    )
+    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile", _FuzzerProfileStub)
+    monkeypatch.setenv("FI_NATIVE_BACKENDS", "rust")
+
+    profile = data_loader.read_fuzzer_data_file_to_profile(str(cfg_file), "c-cpp")
+    assert profile is not None
+    assert (
+        captured_backend["default_backend"] == data_loader.backend_loaders.BACKEND_RUST
+    )
     assert captured_yaml["Fuzzer filename"] == "fuzzer.cc"

@@ -866,7 +866,6 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
         payload={"paths": paths, "category": category},
         default_backend=backend_loaders.resolve_component_backend(
             "FI_DEBUG_YAML_LOADER",
-            default_backend=backend_loaders.BACKEND_RUST,
         ),
         timeout_env="FI_DEBUG_YAML_LOADER_TIMEOUT_SEC",
     )
