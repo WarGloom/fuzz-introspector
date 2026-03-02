@@ -22,6 +22,7 @@ from typing import (
 )
 
 import os
+import sys
 import bs4
 import logging
 from datetime import datetime
@@ -473,7 +474,36 @@ def create_horisontal_calltree_image(
         logger.info("Could not import matplotlib. No bitmaps are created")
         return []
 
-    logger.info(f"Creating image {image_name}")
+    # matplotlib's rendering pipeline (tight_layout, savefig) uses deepcopy
+    # internally and can exhaust Python's default recursion limit (1000) on
+    # large figures, especially with Python 3.14+.  Temporarily raise the
+    # limit while we do the render work, then restore it unconditionally.
+    _prev_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(max(_prev_limit, 50000))
+    try:
+        return _create_horisontal_calltree_image_impl(
+            plt, Rectangle, image_name, profile, dump_files, out_dir
+        )
+    except RecursionError:
+        logger.warning(
+            "matplotlib RecursionError while rendering %s even with "
+            "recursion limit=%d; bitmap will not be created",
+            image_name,
+            sys.getrecursionlimit(),
+        )
+        return [cs.cov_color for cs in profile.get_callsites()] or ["red"]
+    finally:
+        sys.setrecursionlimit(_prev_limit)
+
+
+def _create_horisontal_calltree_image_impl(
+    plt: Any,
+    Rectangle: Any,
+    image_name: str,
+    profile: fuzzer_profile.FuzzerProfile,
+    dump_files: bool,
+    out_dir: Any,
+) -> List[str]:
 
     # Get the callsites of the profile as a list of colors.
     color_list: List[str] = [cs.cov_color for cs in profile.get_callsites()]
@@ -515,11 +545,37 @@ def create_horisontal_calltree_image(
             logger.info("- saving image")
             ax.set_yticks([])
             xlabel = ax.set_xlabel("Callsite index")
-
             plt.title(image_name.replace(".png", "").replace("_colormap", ""))
-            fig.tight_layout()
-            fig.savefig(os.path.join(out_dir, image_name), bbox_extra_artists=[xlabel])
+            out_path = os.path.join(out_dir, image_name)
+            try:
+                # tight_layout and bbox_extra_artists both trigger deepcopy
+                # internally, which can hit Python's recursion limit on large
+                # figures with matplotlib on Python 3.14+. Try the full save
+                # first; if it recursion-crashes, fall back to a simpler save.
+                fig.tight_layout()
+                fig.savefig(out_path, bbox_extra_artists=[xlabel])
+            except RecursionError:
+                logger.debug(
+                    "matplotlib RecursionError during save; retrying without "
+                    "tight_layout/bbox_extra_artists"
+                )
+                try:
+                    fig.savefig(out_path)
+                except RecursionError:
+                    logger.warning(
+                        "matplotlib RecursionError on plain savefig for %s; "
+                        "bitmap will not be created",
+                        image_name,
+                    )
+                    return color_list
             logger.info("- image saved")
+        return color_list
+    except RecursionError:
+        logger.warning(
+            "matplotlib RecursionError while building figure for %s; "
+            "bitmap will not be created",
+            image_name,
+        )
         return color_list
     finally:
         if fig is not None:
