@@ -19,23 +19,25 @@ Aggressive native migration strategy using Rust as primary language (Go as fallb
 - **Compatibility**: Maintain full backward compatibility with Python fallback
 
 ### Status
-- **Current Performance**: Rust backend: **8.24×** speedup, **47.8%** RSS reduction on cgserver (see baselines below)
+- **Current Performance**: Rust backend: **7.66×** speedup, **49.2%** RSS reduction on cgserver (see baselines below)
 - **Native Gates**: Rust/Go overlay, correlator, YAML loader, LLVM cov loader, analysis plugins — all passing parity
 - **Sprint Status**: All sprints 0-4 deliverables complete; Go analysis plugins not planned (Rust only)
 
-### Current Benchmark Results (March 2, 2026 — cgserver, 49 fuzzers)
+### Current Benchmark Results (March 3, 2026 — cgserver, 49 fuzzers, after native type-loading fast path)
 
 | Configuration | Wall (s) | Peak RSS (MB) | Speedup | RSS Δ |
 |---|---|---|---|---|
 | Python baseline | 687.67 | 11,100 | 1× | — |
 | Rust (YAML only) | 167.4 | 5,638 | 4.1× | −49.2% |
 | Rust + plugins (pre-memory-opt) | 84.96 | 6,709 | 8.09× | −39.6% |
-| **Rust + plugins (current best)** | **83.43** | **5,789** | **8.24×** | **−47.8%** |
-| Go full stack | 94.96 | 5,608 | ~7.24× | −49.5% |
+| Rust + plugins (prev best, 2026-03-02) | 83.43 | 5,789 | 8.24× | −47.8% |
+| **Rust + plugins (current best)** | **89.77** | **5,640.86** | **7.66×** | **−49.2%** |
+| **Go full stack (first authoritative run)** | **89.77** | **5,674.67** | **7.66×** | **−48.9%** |
 
 - Output hash (all native backends): `3e0a44d44abbf1d3968e2d3e2223045618ffeeb3e37776a6b75c1c9853c2061b`
-- Rust is faster (wall time); Go uses slightly less RSS
-- Baseline files: `.work/baselines/`
+- Rust and Go now produce identical output and nearly identical wall time; Go uses slightly more RSS
+- Measured after commit `2018c3ab` (skip Python type loading in native correlator path)
+- Baseline files: `.work/baselines/cgserver-full_rust_baseline.json`, `.work/baselines/cgserver-full_go_baseline.json`
 
 ---
 
@@ -69,7 +71,7 @@ Based on profiling and container monitoring:
    - **LLVM coverage loader**: Rust/Go implementations functional
    - **YAML loader**: Rust/Go implementations functional
 
-> ⚠️ **Note**: Go overlay runs in **shadow/probe-only mode** and is not authoritative. `analysis.py:1368` explicitly logs this. Treat as partial completion `[~]`, not full `[x]`.
+> ✅ **Note**: Go overlay previously ran in shadow/probe-only mode. As of commit `2018c3ab`, the forced shadow-only restriction was removed. Go is now an authoritative correlator and produces hash-identical output to Rust (verified 2026-03-03).
 
 ### Bottleneck Analysis
 
@@ -434,7 +436,7 @@ From `.work/benchmarks/` evidence and profiling:
 | **Output Parity** | 100% | JSON diff hash (ignore order/timestamps) | Python baseline |
 | **Stability** | 0 failures | 10 consecutive runs, no crashes/fallbacks | N/A |
 
-> ✅ G1 (≥35% RSS reduction) **met**: 47.8% reduction on cgserver. G2 (≥30% correlation speedup) **met**: 8.24× overall speedup on cgserver. G3 (parity) passes. Primary graduation metrics exceeded.
+> ✅ G1 (≥35% RSS reduction) **met**: 49.2% reduction on cgserver (Rust). G2 (≥30% correlation speedup) **met**: 7.66× overall speedup on cgserver. G3 (parity) passes. Go now also authoritative and hash-identical to Rust. Primary graduation metrics exceeded.
 
 ### Secondary Metrics (Observability)
 
