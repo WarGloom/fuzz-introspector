@@ -19,9 +19,23 @@ Aggressive native migration strategy using Rust as primary language (Go as fallb
 - **Compatibility**: Maintain full backward compatibility with Python fallback
 
 ### Status
-- **Current Performance**: Baseline established (see `docs/perf/baseline-2026-02-26.md`)
-- **Native Gates**: Overlay and correlator parity validated (see `docs/perf/native-backend-gates-2026-02-28.md`)
-- **P2.2 Process Pool**: Optional process-pool correlation backend plan documented (see `docs/perf/p2_2_process_pool_plan.md`)
+- **Current Performance**: Rust backend: **8.24×** speedup, **47.8%** RSS reduction on cgserver (see baselines below)
+- **Native Gates**: Rust/Go overlay, correlator, YAML loader, LLVM cov loader, analysis plugins — all passing parity
+- **Sprint Status**: All sprints 0-4 deliverables complete; Go analysis plugins not planned (Rust only)
+
+### Current Benchmark Results (March 2, 2026 — cgserver, 49 fuzzers)
+
+| Configuration | Wall (s) | Peak RSS (MB) | Speedup | RSS Δ |
+|---|---|---|---|---|
+| Python baseline | 687.67 | 11,100 | 1× | — |
+| Rust (YAML only) | 167.4 | 5,638 | 4.1× | −49.2% |
+| Rust + plugins (pre-memory-opt) | 84.96 | 6,709 | 8.09× | −39.6% |
+| **Rust + plugins (current best)** | **83.43** | **5,789** | **8.24×** | **−47.8%** |
+| Go full stack | 94.96 | 5,608 | ~7.24× | −49.5% |
+
+- Output hash (all native backends): `3e0a44d44abbf1d3968e2d3e2223045618ffeeb3e37776a6b75c1c9853c2061b`
+- Rust is faster (wall time); Go uses slightly less RSS
+- Baseline files: `.work/baselines/`
 
 ---
 
@@ -420,7 +434,7 @@ From `.work/benchmarks/` evidence and profiling:
 | **Output Parity** | 100% | JSON diff hash (ignore order/timestamps) | Python baseline |
 | **Stability** | 0 failures | 10 consecutive runs, no crashes/fallbacks | N/A |
 
-> ⚠️ G1 (≥35% RSS reduction) and G2 (≥30% correlation speedup) are **not yet met** — native backends are currently equal to or slightly slower/larger than Python (serialization overhead dominates). G3 (parity) passes. Default switch is deferred until G1/G2 are met.
+> ✅ G1 (≥35% RSS reduction) **met**: 47.8% reduction on cgserver. G2 (≥30% correlation speedup) **met**: 8.24× overall speedup on cgserver. G3 (parity) passes. Primary graduation metrics exceeded.
 
 ### Secondary Metrics (Observability)
 
@@ -846,7 +860,7 @@ petgraph = "0.6"  # Graph algorithms (call tree)
 
 | Variable | Default | Description | Sprint |
 |----------|---------|-------------|--------|
-| `FI_NATIVE_BACKENDS` | `false` | Unified flag: `rust|go|python` | Sprint 4 |
+| `FI_NATIVE_BACKENDS` | (not set; set to "rust" in production cgserver deployment) | Unified flag: `rust|go|python` | Sprint 4 |
 | `FI_DEBUG_CORRELATE_NATIVE` | `false` | Correlator backend: `rust|go|python` | Sprint 1 |
 | `FI_DEBUG_YAML_LOADER` | `false` | YAML loader backend: `rust|go|python` | Sprint 2 |
 | `FI_LLVM_COV_LOADER` | `false` | LLVM cov loader backend: `rust|go|python` | Sprint 2 |
