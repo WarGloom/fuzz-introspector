@@ -39,4 +39,8 @@ tools/native_yaml_loader_cpp/native_yaml_loader_cpp
 tools/native_debug_correlator_rust/target/
 tools/native_analysis_plugins_rust/target/
 tools/native_debug_correlator_go/native_debug_correlator_go
+tools/native_overlay_backend_go/native_overlay_backend_go
+tools/native_overlay_backend_rust/target/
+tools/native_*_rust/target/
+tools/native_*_go/native_*_go
 .mypy_cache/
