@@ -78,14 +78,16 @@ rust)
 	export FI_DEBUG_CORRELATOR_RUST_BIN="${REPO_ROOT}/tools/native_debug_correlator_rust/target/release/native_debug_correlator_rust"
 	;;
 go)
-	export FI_NATIVE_BACKENDS=rust
+	export FI_NATIVE_BACKENDS=go
 	export FI_NATIVE_PLUGINS=rust
+	# Add plugin binary dir to PATH so NativePluginProxy.find_binary() can find it
 	PLUGIN_BIN_DIR="${REPO_ROOT}/tools/native_analysis_plugins_rust/target/release"
 	export PATH="${PLUGIN_BIN_DIR}:${PATH}"
-	export FI_PROFILE_YAML_LOADER_RUST_BIN="${REPO_ROOT}/tools/native_yaml_loader_rust/target/release/native_yaml_loader_rust"
-	export FI_DEBUG_YAML_LOADER_RUST_BIN="${REPO_ROOT}/tools/native_yaml_loader_rust/target/release/native_yaml_loader_rust"
-	export FI_LLVM_COV_LOADER_RUST_BIN="${REPO_ROOT}/tools/native_llvm_cov_loader_rust/target/release/native_llvm_cov_loader_rust"
-	export FI_DEBUG_CORRELATOR_RUST_BIN="${REPO_ROOT}/tools/native_debug_correlator_rust/target/release/native_debug_correlator_rust"
+	# Go binaries for all four loaders
+	export FI_PROFILE_YAML_LOADER_GO_BIN="${REPO_ROOT}/tools/native_yaml_loader_go/native_yaml_loader_go"
+	export FI_DEBUG_YAML_LOADER_GO_BIN="${REPO_ROOT}/tools/native_yaml_loader_go/native_yaml_loader_go"
+	export FI_LLVM_COV_LOADER_GO_BIN="${REPO_ROOT}/tools/native_llvm_cov_loader_go/native_llvm_cov_loader_go"
+	export FI_DEBUG_CORRELATOR_GO_BIN="${REPO_ROOT}/tools/native_debug_correlator_go/native_debug_correlator_go"
 	export FI_OVERLAY_BACKEND=native
 	export FI_OVERLAY_BIN="${REPO_ROOT}/tools/native_overlay_backend_go/native_overlay_backend_go"
 	;;
