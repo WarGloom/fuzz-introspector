@@ -93,18 +93,43 @@ def _serialize_project_for_native(
     proj_profile_obj: "project_profile.MergedProjectProfile",
     profiles_list: "List[fuzzer_profile.FuzzerProfile]",
 ) -> dict:
-    """Build a minimal JSON-serialisable summary of project data.
+    """Build a JSON-serialisable summary of project data for the Rust plugins.
 
-    Only the fields that stub implementations need are included.  When real
-    Rust implementations are added in Sprint 4 this function should be
-    extended to pass function complexity data, coverage maps, etc.
+    Passes the full function table so that optimal_targets,
+    runtime_coverage_analysis, and calltree_analysis have real data to work
+    with.  Any attribute access that may fail on older profile objects is
+    guarded with ``getattr`` fallbacks.
     """
-    function_names = list(proj_profile_obj.all_functions.keys())[:500]
+    functions = []
+    for fname, fp in proj_profile_obj.all_functions.items():
+        functions.append(
+            {
+                "name": fname,
+                "hitcount": fp.hitcount,
+                "arg_count": fp.arg_count,
+                "cyclomatic_complexity": fp.cyclomatic_complexity,
+                "total_cyclomatic_complexity": fp.total_cyclomatic_complexity,
+                "new_unreached_complexity": fp.new_unreached_complexity,
+                "bb_count": fp.bb_count,
+                "functions_reached": list(fp.functions_reached),
+                "reached_by_fuzzers": list(fp.reached_by_fuzzers),
+                "runtime_coverage_percent": (
+                    getattr(fp, "cov_init_graph_percentage", 0.0) or 0.0
+                ),
+                "source_file": (getattr(fp, "function_source_file", "") or ""),
+            }
+        )
+
     return {
         "function_count": len(proj_profile_obj.all_functions),
-        "function_names_sample": function_names,
         "fuzzer_count": len(profiles_list),
         "target_lang": proj_profile_obj.target_lang,
+        "has_coverage_data": (
+            proj_profile_obj.has_coverage_data()
+            if callable(getattr(proj_profile_obj, "has_coverage_data", None))
+            else False
+        ),
+        "functions": functions,
     }
 
 
@@ -1077,8 +1102,7 @@ def _serialize_branch_blockers(
         serialized.append(
             {
                 "blocked_side": repr(blocker.blocked_side),
-                "blocked_unique_not_covered_complexity":
-                blocker.blocked_unique_not_covered_complexity,
+                "blocked_unique_not_covered_complexity": blocker.blocked_unique_not_covered_complexity,
                 "blocked_unique_reachable_complexity": blocker.blocked_unique_reachable_complexity,
                 "blocked_unique_functions": blocker.blocked_unique_funcs,
                 "blocked_not_covered_complexity": blocker.blocked_not_covered_complexity,

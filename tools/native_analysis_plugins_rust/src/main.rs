@@ -29,6 +29,45 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::time::Instant;
 
+// ── Function entry deserialization ────────────────────────────────────────────
+
+/// Deserialised representation of one function from the project_data payload.
+#[derive(Debug, Deserialize, Clone)]
+struct FunctionEntry {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    hitcount: u64,
+    #[serde(default)]
+    arg_count: u64,
+    #[serde(default)]
+    cyclomatic_complexity: i64,
+    #[serde(default)]
+    total_cyclomatic_complexity: i64,
+    #[serde(default)]
+    new_unreached_complexity: i64,
+    #[serde(default)]
+    bb_count: u64,
+    #[serde(default)]
+    functions_reached: Vec<String>,
+    #[serde(default)]
+    reached_by_fuzzers: Vec<String>,
+    #[serde(default)]
+    #[allow(dead_code)] // deserialized from payload; available for future plugin use
+    runtime_coverage_percent: f64,
+    #[serde(default)]
+    source_file: String,
+}
+
+/// Parse `project_data["functions"]` into a `Vec<FunctionEntry>`.
+/// Returns an empty vec if the key is absent or malformed.
+fn parse_functions(project_data: &JsonValue) -> Vec<FunctionEntry> {
+    project_data
+        .get("functions")
+        .and_then(|v| serde_json::from_value::<Vec<FunctionEntry>>(v.clone()).ok())
+        .unwrap_or_default()
+}
+
 // ── Request / Response types ────────────────────────────────────────────────
 
 /// Top-level request sent by the Python `NativePluginProxy`.
@@ -78,64 +117,183 @@ struct Response {
     elapsed_ms: u64,
 }
 
-// ── Plugin stubs ─────────────────────────────────────────────────────────────
+// ── Plugin implementations ───────────────────────────────────────────────────
 //
 // Each `run_*` function receives a reference to the project_data JSON value
-// and returns a PluginResult.  The current implementations are intentional
-// stubs that return empty-but-schema-valid results so that the Python
-// integration path can be tested end-to-end.  Real implementations can be
-// dropped in per-plugin in Sprint 4 without changing the dispatch or
-// serialisation layer.
+// and returns a PluginResult.
 
-/// Stub for the `optimal_targets` analysis.
+/// Returns true when a function qualifies as an optimal fuzz target candidate.
 ///
-/// Real implementation would rank functions by unreached complexity and
-/// return candidate fuzz target rows.
-fn run_optimal_targets(_project_data: &JsonValue) -> PluginResult {
-    log::debug!("[optimal_targets] stub: returning empty result");
-    PluginResult {
-        tables: {
-            let mut t = HashMap::new();
-            // Schema: each row would have function_name, complexity, ...
-            t.insert("optimal_targets".to_string(), Vec::new());
-            t
-        },
-        summary: "optimal_targets stub (no results yet)".to_string(),
+/// Ports `qualifies_as_optimal_target()` from
+/// `src/fuzz_introspector/analyses/optimal_targets.py` lines 196-227.
+fn qualifies_as_optimal_target(f: &FunctionEntry) -> bool {
+    if f.hitcount != 0 {
+        return false;
     }
+    if f.functions_reached.len() < 1 {
+        return false;
+    }
+    if f.arg_count == 0 {
+        return false;
+    }
+    if f.name.contains("main2") || f.name == "main" {
+        return false;
+    }
+    if f.total_cyclomatic_complexity < 20 {
+        return false;
+    }
+    if f.bb_count <= 1 {
+        return false;
+    }
+    if f.new_unreached_complexity < 35 {
+        return false;
+    }
+    true
 }
 
-/// Stub for the `runtime_coverage_analysis` analysis.
+/// `optimal_targets` analysis: rank unreached functions by unreached complexity.
 ///
-/// Real implementation would aggregate per-function runtime hit-counts and
-/// highlight uncovered, reachable code.
-fn run_runtime_coverage_analysis(_project_data: &JsonValue) -> PluginResult {
-    log::debug!("[runtime_coverage_analysis] stub: returning empty result");
-    PluginResult {
-        tables: {
-            let mut t = HashMap::new();
-            // Schema: each row would have function_name, hit_count, coverage_pct, ...
-            t.insert("runtime_coverage".to_string(), Vec::new());
-            t
-        },
-        summary: "runtime_coverage_analysis stub (no results yet)".to_string(),
-    }
+/// Ports the core logic of `OptimalTargets.analysis_get_optimal_targets()` from
+/// `src/fuzz_introspector/analyses/optimal_targets.py`.  Returns up to 200
+/// candidate rows sorted descending by `new_unreached_complexity`.
+fn run_optimal_targets(project_data: &JsonValue) -> PluginResult {
+    log::debug!("[optimal_targets] running real implementation");
+
+    let functions = parse_functions(project_data);
+
+    // Filter in parallel, then collect and sort.
+    let mut candidates: Vec<&FunctionEntry> = functions
+        .par_iter()
+        .filter(|f| qualifies_as_optimal_target(f))
+        .collect();
+
+    candidates.sort_unstable_by(|a, b| {
+        b.new_unreached_complexity
+            .cmp(&a.new_unreached_complexity)
+    });
+    candidates.truncate(200);
+
+    let rows: Vec<JsonValue> = candidates
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "function_name": f.name,
+                "cyclomatic_complexity": f.cyclomatic_complexity,
+                "total_cyclomatic_complexity": f.total_cyclomatic_complexity,
+                "new_unreached_complexity": f.new_unreached_complexity,
+                "functions_reached_count": f.functions_reached.len(),
+                "arg_count": f.arg_count,
+                "bb_count": f.bb_count,
+                "source_file": f.source_file,
+            })
+        })
+        .collect();
+
+    let summary = format!(
+        "optimal_targets: {} candidate(s) found out of {} total functions",
+        rows.len(),
+        functions.len()
+    );
+    log::debug!("[optimal_targets] {}", summary);
+
+    let mut tables = HashMap::new();
+    tables.insert("optimal_targets".to_string(), rows);
+    PluginResult { tables, summary }
 }
 
-/// Stub for the `calltree_analysis` analysis.
+/// `runtime_coverage_analysis`: find reached functions with remaining unreached complexity.
 ///
-/// Real implementation would traverse the call-graph represented in
-/// project_data and annotate nodes with coverage colours / blockers.
-fn run_calltree_analysis(_project_data: &JsonValue) -> PluginResult {
-    log::debug!("[calltree_analysis] stub: returning empty result");
-    PluginResult {
-        tables: {
-            let mut t = HashMap::new();
-            // Schema: each row would have node_id, depth, hit_count, color, ...
-            t.insert("calltree_nodes".to_string(), Vec::new());
-            t
-        },
-        summary: "calltree_analysis stub (no results yet)".to_string(),
-    }
+/// Finds functions where `hitcount > 0` (reached by at least one fuzzer) AND
+/// `new_unreached_complexity > 20` (still has sub-complexity not yet exercised
+/// at runtime).  Sorted descending by `new_unreached_complexity`, capped at 200.
+///
+/// This is the Rust equivalent of `RuntimeCoverageAnalysis.get_low_cov_high_line_funcs()`.
+/// Because the payload does not include per-line coverage data, we use
+/// `new_unreached_complexity > 20` as a proxy for "low coverage despite being reached".
+fn run_runtime_coverage_analysis(project_data: &JsonValue) -> PluginResult {
+    log::debug!("[runtime_coverage_analysis] running real implementation");
+
+    let functions = parse_functions(project_data);
+
+    let mut candidates: Vec<&FunctionEntry> = functions
+        .par_iter()
+        .filter(|f| f.hitcount > 0 && f.new_unreached_complexity > 20)
+        .collect();
+
+    candidates.sort_unstable_by(|a, b| {
+        b.new_unreached_complexity
+            .cmp(&a.new_unreached_complexity)
+    });
+    candidates.truncate(200);
+
+    let rows: Vec<JsonValue> = candidates
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "function_name": f.name,
+                "hitcount": f.hitcount,
+                "new_unreached_complexity": f.new_unreached_complexity,
+                "total_cyclomatic_complexity": f.total_cyclomatic_complexity,
+                "reached_by_fuzzers": f.reached_by_fuzzers,
+            })
+        })
+        .collect();
+
+    let summary = format!(
+        "runtime_coverage_analysis: {} function(s) reached but with unreached sub-complexity",
+        rows.len()
+    );
+    log::debug!("[runtime_coverage_analysis] {}", summary);
+
+    let mut tables = HashMap::new();
+    tables.insert("runtime_coverage".to_string(), rows);
+    PluginResult { tables, summary }
+}
+
+/// `calltree_analysis`: emit a per-project reachability summary.
+///
+/// The Python `FuzzCalltreeAnalysis.analysis_func()` returns `""` (not
+/// implemented).  The Rust version emits a single summary row describing
+/// overall function reachability for the project.
+fn run_calltree_analysis(project_data: &JsonValue) -> PluginResult {
+    log::debug!("[calltree_analysis] running real implementation");
+
+    let functions = parse_functions(project_data);
+    let target_lang = project_data
+        .get("target_lang")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+
+    let total = functions.len() as u64;
+    let reached = functions.par_iter().filter(|f| f.hitcount > 0).count() as u64;
+    let unreached = total.saturating_sub(reached);
+    let reach_pct = if total > 0 {
+        (reached as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    // Round to one decimal place for readability.
+    let reach_pct_rounded = (reach_pct * 10.0).round() / 10.0;
+
+    let row = serde_json::json!({
+        "total_functions": total,
+        "reached_functions": reached,
+        "unreached_functions": unreached,
+        "reach_percentage": reach_pct_rounded,
+        "target_lang": target_lang,
+    });
+
+    let summary = format!(
+        "calltree_analysis: {reached}/{total} functions reached ({reach_pct_rounded:.1}%) \
+         for lang={target_lang}"
+    );
+    log::debug!("[calltree_analysis] {}", summary);
+
+    let mut tables = HashMap::new();
+    tables.insert("calltree_nodes".to_string(), vec![row]);
+    PluginResult { tables, summary }
 }
 
 /// Dispatcher: route a plugin name to its handler function.
@@ -272,6 +430,57 @@ mod tests {
         }
     }
 
+    /// Minimal project_data payload with three functions used across plugin tests.
+    fn sample_project_data() -> JsonValue {
+        json!({
+            "function_count": 3,
+            "fuzzer_count": 1,
+            "target_lang": "c-cpp",
+            "has_coverage_data": false,
+            "functions": [
+                {
+                    "name": "foo",
+                    "hitcount": 0,
+                    "arg_count": 2,
+                    "cyclomatic_complexity": 25,
+                    "total_cyclomatic_complexity": 80,
+                    "new_unreached_complexity": 60,
+                    "bb_count": 5,
+                    "functions_reached": ["bar", "baz"],
+                    "reached_by_fuzzers": [],
+                    "runtime_coverage_percent": 0.0,
+                    "source_file": "foo.cpp"
+                },
+                {
+                    "name": "bar",
+                    "hitcount": 1,
+                    "arg_count": 1,
+                    "cyclomatic_complexity": 10,
+                    "total_cyclomatic_complexity": 30,
+                    "new_unreached_complexity": 25,
+                    "bb_count": 3,
+                    "functions_reached": [],
+                    "reached_by_fuzzers": ["fuzzer1"],
+                    "runtime_coverage_percent": 40.0,
+                    "source_file": "bar.cpp"
+                },
+                {
+                    "name": "main",
+                    "hitcount": 0,
+                    "arg_count": 0,
+                    "cyclomatic_complexity": 1,
+                    "total_cyclomatic_complexity": 1,
+                    "new_unreached_complexity": 0,
+                    "bb_count": 1,
+                    "functions_reached": [],
+                    "reached_by_fuzzers": [],
+                    "runtime_coverage_percent": 0.0,
+                    "source_file": "main.cpp"
+                }
+            ]
+        })
+    }
+
     // ── dispatch tests ───────────────────────────────────────────────────────
 
     #[test]
@@ -298,30 +507,222 @@ mod tests {
         assert!(result.is_none());
     }
 
-    // ── stub schema tests ────────────────────────────────────────────────────
+    // ── optimal_targets tests ────────────────────────────────────────────────
 
     #[test]
-    fn optimal_targets_stub_has_expected_table_key() {
+    fn optimal_targets_has_expected_table_key() {
         let result = run_optimal_targets(&json!({}));
         assert!(result.tables.contains_key("optimal_targets"));
-        assert!(result.tables["optimal_targets"].is_empty());
         assert!(!result.summary.is_empty());
     }
 
     #[test]
-    fn runtime_coverage_stub_has_expected_table_key() {
+    fn optimal_targets_empty_functions_returns_empty_table() {
+        let result = run_optimal_targets(&json!({"functions": []}));
+        assert!(result.tables["optimal_targets"].is_empty());
+    }
+
+    #[test]
+    fn optimal_targets_selects_foo_not_main_or_bar() {
+        let data = sample_project_data();
+        let result = run_optimal_targets(&data);
+        let rows = &result.tables["optimal_targets"];
+        // foo qualifies: hitcount=0, arg_count=2, tcc=80>=20, bb=5>1, nuc=60>=35,
+        //                functions_reached=["bar","baz"] len>=1, name not "main"/"main2"
+        assert_eq!(rows.len(), 1, "expected exactly foo; got {:?}", rows);
+        assert_eq!(rows[0]["function_name"], "foo");
+    }
+
+    #[test]
+    fn optimal_targets_excludes_main() {
+        let data = json!({
+            "functions": [{
+                "name": "main",
+                "hitcount": 0,
+                "arg_count": 2,
+                "cyclomatic_complexity": 30,
+                "total_cyclomatic_complexity": 80,
+                "new_unreached_complexity": 60,
+                "bb_count": 5,
+                "functions_reached": ["bar"],
+                "reached_by_fuzzers": [],
+                "runtime_coverage_percent": 0.0,
+                "source_file": "main.cpp"
+            }]
+        });
+        let result = run_optimal_targets(&data);
+        assert!(result.tables["optimal_targets"].is_empty(), "main must be excluded");
+    }
+
+    #[test]
+    fn optimal_targets_excludes_main2_substring() {
+        let data = json!({
+            "functions": [{
+                "name": "setup_main2_handler",
+                "hitcount": 0,
+                "arg_count": 2,
+                "cyclomatic_complexity": 30,
+                "total_cyclomatic_complexity": 80,
+                "new_unreached_complexity": 60,
+                "bb_count": 5,
+                "functions_reached": ["bar"],
+                "reached_by_fuzzers": [],
+                "runtime_coverage_percent": 0.0,
+                "source_file": "x.cpp"
+            }]
+        });
+        let result = run_optimal_targets(&data);
+        assert!(result.tables["optimal_targets"].is_empty(), "main2 substring must be excluded");
+    }
+
+    #[test]
+    fn optimal_targets_excludes_already_reached() {
+        let data = json!({
+            "functions": [{
+                "name": "foo",
+                "hitcount": 1,
+                "arg_count": 2,
+                "cyclomatic_complexity": 30,
+                "total_cyclomatic_complexity": 80,
+                "new_unreached_complexity": 60,
+                "bb_count": 5,
+                "functions_reached": ["bar"],
+                "reached_by_fuzzers": ["fuzzer1"],
+                "runtime_coverage_percent": 0.0,
+                "source_file": "foo.cpp"
+            }]
+        });
+        let result = run_optimal_targets(&data);
+        assert!(result.tables["optimal_targets"].is_empty(), "hitcount>0 must be excluded");
+    }
+
+    #[test]
+    fn optimal_targets_sorted_descending_by_new_unreached_complexity() {
+        let data = json!({
+            "functions": [
+                {
+                    "name": "alpha",
+                    "hitcount": 0, "arg_count": 2, "cyclomatic_complexity": 30,
+                    "total_cyclomatic_complexity": 80, "new_unreached_complexity": 40,
+                    "bb_count": 5, "functions_reached": ["x"], "reached_by_fuzzers": [],
+                    "runtime_coverage_percent": 0.0, "source_file": "a.cpp"
+                },
+                {
+                    "name": "beta",
+                    "hitcount": 0, "arg_count": 2, "cyclomatic_complexity": 30,
+                    "total_cyclomatic_complexity": 80, "new_unreached_complexity": 80,
+                    "bb_count": 5, "functions_reached": ["y"], "reached_by_fuzzers": [],
+                    "runtime_coverage_percent": 0.0, "source_file": "b.cpp"
+                }
+            ]
+        });
+        let result = run_optimal_targets(&data);
+        let rows = &result.tables["optimal_targets"];
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["function_name"], "beta", "beta has higher nuc");
+        assert_eq!(rows[1]["function_name"], "alpha");
+    }
+
+    // ── runtime_coverage_analysis tests ─────────────────────────────────────
+
+    #[test]
+    fn runtime_coverage_has_expected_table_key() {
         let result = run_runtime_coverage_analysis(&json!({}));
         assert!(result.tables.contains_key("runtime_coverage"));
-        assert!(result.tables["runtime_coverage"].is_empty());
         assert!(!result.summary.is_empty());
     }
 
     #[test]
-    fn calltree_analysis_stub_has_expected_table_key() {
+    fn runtime_coverage_empty_functions_returns_empty_table() {
+        let result = run_runtime_coverage_analysis(&json!({"functions": []}));
+        assert!(result.tables["runtime_coverage"].is_empty());
+    }
+
+    #[test]
+    fn runtime_coverage_selects_bar_not_foo_or_main() {
+        let data = sample_project_data();
+        let result = run_runtime_coverage_analysis(&data);
+        let rows = &result.tables["runtime_coverage"];
+        // bar: hitcount=1 >0 AND new_unreached_complexity=25 >20  → included
+        // foo: hitcount=0  → excluded
+        // main: hitcount=0 → excluded
+        assert_eq!(rows.len(), 1, "expected only bar; got {:?}", rows);
+        assert_eq!(rows[0]["function_name"], "bar");
+    }
+
+    #[test]
+    fn runtime_coverage_excludes_unreached_functions() {
+        let data = json!({
+            "functions": [{
+                "name": "unreached",
+                "hitcount": 0, "arg_count": 2, "cyclomatic_complexity": 30,
+                "total_cyclomatic_complexity": 80, "new_unreached_complexity": 60,
+                "bb_count": 5, "functions_reached": ["x"], "reached_by_fuzzers": [],
+                "runtime_coverage_percent": 0.0, "source_file": "u.cpp"
+            }]
+        });
+        let result = run_runtime_coverage_analysis(&data);
+        assert!(result.tables["runtime_coverage"].is_empty(), "hitcount=0 must be excluded");
+    }
+
+    #[test]
+    fn runtime_coverage_excludes_low_unreached_complexity() {
+        let data = json!({
+            "functions": [{
+                "name": "reached_but_simple",
+                "hitcount": 5, "arg_count": 2, "cyclomatic_complexity": 5,
+                "total_cyclomatic_complexity": 10, "new_unreached_complexity": 10,
+                "bb_count": 2, "functions_reached": [], "reached_by_fuzzers": ["fuzzer1"],
+                "runtime_coverage_percent": 90.0, "source_file": "s.cpp"
+            }]
+        });
+        let result = run_runtime_coverage_analysis(&data);
+        assert!(
+            result.tables["runtime_coverage"].is_empty(),
+            "nuc<=20 must be excluded"
+        );
+    }
+
+    // ── calltree_analysis tests ───────────────────────────────────────────────
+
+    #[test]
+    fn calltree_analysis_has_expected_table_key() {
         let result = run_calltree_analysis(&json!({}));
         assert!(result.tables.contains_key("calltree_nodes"));
-        assert!(result.tables["calltree_nodes"].is_empty());
         assert!(!result.summary.is_empty());
+    }
+
+    #[test]
+    fn calltree_analysis_empty_project_returns_one_summary_row() {
+        let data = json!({"functions": [], "target_lang": "c-cpp"});
+        let result = run_calltree_analysis(&data);
+        let rows = &result.tables["calltree_nodes"];
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["total_functions"], 0);
+        assert_eq!(rows[0]["reached_functions"], 0);
+        assert_eq!(rows[0]["reach_percentage"], 0.0);
+        assert_eq!(rows[0]["target_lang"], "c-cpp");
+    }
+
+    #[test]
+    fn calltree_analysis_counts_reached_functions() {
+        let data = sample_project_data();
+        let result = run_calltree_analysis(&data);
+        let rows = &result.tables["calltree_nodes"];
+        assert_eq!(rows.len(), 1);
+        // bar has hitcount=1; foo and main have hitcount=0
+        assert_eq!(rows[0]["total_functions"], 3);
+        assert_eq!(rows[0]["reached_functions"], 1);
+        assert_eq!(rows[0]["unreached_functions"], 2);
+        assert_eq!(rows[0]["target_lang"], "c-cpp");
+    }
+
+    #[test]
+    fn calltree_analysis_reach_percentage_zero_for_no_functions() {
+        let data = json!({"target_lang": "rust"});
+        let result = run_calltree_analysis(&data);
+        let rows = &result.tables["calltree_nodes"];
+        assert_eq!(rows[0]["reach_percentage"], 0.0);
     }
 
     // ── parallel dispatch tests ──────────────────────────────────────────────
@@ -393,5 +794,23 @@ mod tests {
         assert_eq!(response.status, "error");
         assert_eq!(response.reason_code.as_deref(), Some("test_error"));
         assert!(response.results.is_empty());
+    }
+
+    // ── FunctionEntry deserialization tests ──────────────────────────────────
+
+    #[test]
+    fn parse_functions_returns_empty_for_missing_key() {
+        let data = json!({"function_count": 5});
+        assert!(parse_functions(&data).is_empty());
+    }
+
+    #[test]
+    fn parse_functions_handles_defaults_for_missing_fields() {
+        let data = json!({"functions": [{"name": "minimal"}]});
+        let funcs = parse_functions(&data);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "minimal");
+        assert_eq!(funcs[0].hitcount, 0);
+        assert_eq!(funcs[0].arg_count, 0);
     }
 }
