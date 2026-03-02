@@ -16,8 +16,7 @@
 import logging
 
 from typing import (
-    List,
-)
+    List, )
 
 from fuzz_introspector import analysis
 from fuzz_introspector import constants
@@ -60,8 +59,8 @@ class RuntimeCoverageAnalysis(analysis.AnalysisInterface):
         html_string = ""
         html_string += '<div class="report-box">'
         html_string += html_helpers.html_add_header_with_link(
-            "Runtime coverage analysis", html_helpers.HTML_HEADING.H1, table_of_contents
-        )
+            "Runtime coverage analysis", html_helpers.HTML_HEADING.H1,
+            table_of_contents)
         html_string += '<div class="collapsible">'
 
         if not proj_profile.has_coverage_data():
@@ -71,13 +70,13 @@ class RuntimeCoverageAnalysis(analysis.AnalysisInterface):
             if analysis.NativePluginProxy.is_enabled():
                 try:
                     native_result = analysis.NativePluginProxy().run_analysis(
-                        proj_profile, profiles, ["runtime_coverage_analysis"]
-                    )
-                    rows = native_result["runtime_coverage_analysis"]["tables"][
-                        "runtime_coverage"
-                    ]
+                        proj_profile, profiles, ["runtime_coverage_analysis"])
+                    rows = native_result["runtime_coverage_analysis"][
+                        "tables"]["runtime_coverage"]
                     if rows:
-                        functions_of_interest = [row["function_name"] for row in rows]
+                        functions_of_interest = [
+                            row["function_name"] for row in rows
+                        ]
                         logger.info(
                             "[native] RuntimeCoverageAnalysis: used Rust result"
                             " (%d functions)",
@@ -88,8 +87,10 @@ class RuntimeCoverageAnalysis(analysis.AnalysisInterface):
 
             if functions_of_interest is None:
                 functions_of_interest = self.get_low_cov_high_line_funcs(
-                    profiles, proj_profile, min_total_lines=30, max_hit_proportion=55
-                )
+                    profiles,
+                    proj_profile,
+                    min_total_lines=30,
+                    max_hit_proportion=55)
 
             html_string += (
                 "<p>This section shows analysis of runtime coverage data.</p> "
@@ -98,8 +99,7 @@ class RuntimeCoverageAnalysis(analysis.AnalysisInterface):
                 f"<p>For futher technical details on how this section is generated, please "
                 f"see the "
                 f'<a href="{constants.GIT_BRANCH_URL}/doc/Glossary.md#runtime'
-                f'-coverage-analysis">Glossary</a>.</p>'
-            )
+                f'-coverage-analysis">Glossary</a>.</p>')
             html_string += html_helpers.html_add_header_with_link(
                 "Complex functions with low coverage",
                 html_helpers.HTML_HEADING.H3,
@@ -120,16 +120,14 @@ class RuntimeCoverageAnalysis(analysis.AnalysisInterface):
             for funcname in functions_of_interest:
                 logger.debug("Iterating the function %s", funcname)
                 func_lines, hit_lines = proj_profile.runtime_coverage.get_hit_summary(
-                    funcname
-                )
+                    funcname)
 
                 if func_lines is None or hit_lines is None:
                     continue
 
                 if funcname in proj_profile.all_functions:
-                    reached_by = str(
-                        proj_profile.all_functions[funcname].reached_by_fuzzers_combined
-                    )
+                    reached_by = str(proj_profile.all_functions[funcname].
+                                     reached_by_fuzzers_combined)
                 else:
                     reached_by = ""
 
@@ -138,15 +136,13 @@ class RuntimeCoverageAnalysis(analysis.AnalysisInterface):
                 else:
                     demangled_name = utils.demangle_cpp_func(funcname)
 
-                html_string += html_helpers.html_table_add_row(
-                    [
-                        demangled_name,
-                        func_lines,
-                        hit_lines,
-                        "%.5s%%" % (str((hit_lines / func_lines) * 100.0)),
-                        reached_by,
-                    ]
-                )
+                html_string += html_helpers.html_table_add_row([
+                    demangled_name,
+                    func_lines,
+                    hit_lines,
+                    "%.5s%%" % (str((hit_lines / func_lines) * 100.0)),
+                    reached_by,
+                ])
             html_string += "</table>"
 
         html_string += "</div>"  # .collapsible
@@ -176,9 +172,9 @@ class RuntimeCoverageAnalysis(analysis.AnalysisInterface):
             logger.debug("Going through %s", funcname)
 
             total_lines, hit_lines = merged_profile.runtime_coverage.get_hit_summary(
-                funcname
-            )
-            logger.debug("Total lines: %d -- hit_lines: %d", total_lines, hit_lines)
+                funcname)
+            logger.debug("Total lines: %d -- hit_lines: %d", total_lines,
+                         hit_lines)
             if total_lines is None or hit_lines is None or total_lines == 0:
                 continue
 

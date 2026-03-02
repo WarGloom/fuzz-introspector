@@ -30,8 +30,7 @@ except ImportError:  # pragma: no cover
     _PSUTIL_AVAILABLE = False
     logger.warning(
         "psutil is not installed; memory_manager will use conservative "
-        "defaults. Install psutil for accurate memory detection."
-    )
+        "defaults. Install psutil for accurate memory detection.")
 
 # Conservative defaults used when psutil is unavailable.
 _FALLBACK_AVAILABLE_GB = 2.0
@@ -103,12 +102,14 @@ def get_recommended_worker_count(
         try:
             env_limit = int(raw_max_workers)
             if env_limit > 0:
-                logger.debug("FI_MAX_WORKERS=%d overrides worker count", env_limit)
+                logger.debug("FI_MAX_WORKERS=%d overrides worker count",
+                             env_limit)
                 if max_workers is not None:
                     env_limit = min(env_limit, max_workers)
                 return max(1, env_limit)
         except ValueError:
-            logger.warning("Invalid FI_MAX_WORKERS=%r; ignoring", raw_max_workers)
+            logger.warning("Invalid FI_MAX_WORKERS=%r; ignoring",
+                           raw_max_workers)
 
     # Memory ceiling: use FI_MAX_RSS_GB if set, else 75% of total RAM.
     raw_max_rss = os.environ.get("FI_MAX_RSS_GB", "").strip()
