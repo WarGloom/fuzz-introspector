@@ -161,16 +161,27 @@ def parse_backend_env(
     return default
 
 
+_YAML_LOADER_PREFIXES = frozenset({"FI_PROFILE_YAML_LOADER", "FI_DEBUG_YAML_LOADER"})
+_SHARED_YAML_LOADER_RUST_BIN = "FI_YAML_LOADER_RUST_BIN"
+
+
 def resolve_backend_command(command_env_prefix: str, backend: str) -> list[str] | None:
     """Resolve backend command from env vars.
 
     Lookup order:
     1) <PREFIX>_<BACKEND>_BIN
-    2) <PREFIX>_BIN
+    2) ``FI_YAML_LOADER_RUST_BIN`` — shared alias checked only when
+       ``command_env_prefix`` is ``FI_PROFILE_YAML_LOADER`` or
+       ``FI_DEBUG_YAML_LOADER`` and ``backend == 'rust'``.  Lets users
+       configure both YAML loader binaries with a single env var.
+    3) <PREFIX>_BIN
     """
     candidates = [f"{command_env_prefix}_{backend.upper()}_BIN"]
     if command_env_prefix == "FI_OVERLAY" and backend in (BACKEND_RUST, BACKEND_GO):
         candidates.append(f"{command_env_prefix}_{BACKEND_NATIVE.upper()}_BIN")
+    # Shared alias for both YAML loader prefixes (step 2 above).
+    if command_env_prefix in _YAML_LOADER_PREFIXES and backend == BACKEND_RUST:
+        candidates.append(_SHARED_YAML_LOADER_RUST_BIN)
     candidates.append(f"{command_env_prefix}_BIN")
 
     deduplicated_candidates = list(dict.fromkeys(candidates))

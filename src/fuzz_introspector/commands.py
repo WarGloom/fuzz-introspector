@@ -146,6 +146,13 @@ def _log_runtime_config() -> None:
     max_rss = os.getenv("FI_MAX_RSS_GB")
     if max_rss:
         logger.info("[runtime-config] FI_MAX_RSS_GB=%s (hard limit)", max_rss)
+    native_plugins_enabled = analysis.NativePluginProxy.is_enabled()
+    overlay_backend = backend_loaders.parse_overlay_backend_env()
+    logger.info(
+        "[runtime-config] native_plugins_enabled=%s overlay_backend=%s",
+        native_plugins_enabled,
+        overlay_backend,
+    )
 
 
 def diff_two_reports(report1: str, report2: str) -> int:

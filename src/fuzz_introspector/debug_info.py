@@ -1866,8 +1866,11 @@ def _resolve_correlator_backend() -> str:
     """
     raw = os.environ.get("FI_DEBUG_CORRELATE_NATIVE", "").strip().lower()
     if raw in (backend_loaders.BACKEND_RUST, backend_loaders.BACKEND_GO):
+        logger.warning(
+            "FI_DEBUG_CORRELATE_NATIVE is deprecated; use FI_DEBUG_CORRELATOR_BACKEND instead"
+        )
         logger.info(
-            "[correlator] FI_DEBUG_CORRELATE_NATIVE=%r → using %s backend",
+            "[correlator] FI_DEBUG_CORRELATE_NATIVE=%r -> using %s backend",
             raw,
             raw,
         )

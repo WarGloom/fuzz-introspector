@@ -148,10 +148,25 @@ class NativePluginProxy:
 
     @staticmethod
     def is_enabled() -> bool:
-        """Return True when the caller has opted in to native plugin dispatch."""
-        return (
-            os.environ.get(FI_NATIVE_PLUGINS_ENV, "").strip().lower()
-            == _NATIVE_PLUGINS_RUST_VALUE
+        """Return True when the caller has opted in to native plugin dispatch.
+
+        Priority:
+        1. ``FI_NATIVE_PLUGINS`` (per-component, explicit) — if set to 'rust',
+           returns True; if set to any other non-empty value, returns False
+           (explicit opt-out even when FI_NATIVE_BACKENDS=rust).
+        2. ``FI_NATIVE_BACKENDS`` (global) — activates native plugins when set
+           to 'rust' or 'go' (any native-capable backend).
+        """
+        # Per-component var takes precedence: explicit opt-in or opt-out.
+        fi_plugins_raw = os.environ.get(FI_NATIVE_PLUGINS_ENV, "").strip().lower()
+        if fi_plugins_raw:
+            return fi_plugins_raw == _NATIVE_PLUGINS_RUST_VALUE
+
+        # Fall back to the global unified backend selector.
+        global_backend = backend_loaders.parse_native_backends_env()
+        return global_backend in (
+            backend_loaders.BACKEND_RUST,
+            backend_loaders.BACKEND_GO,
         )
 
     @staticmethod
