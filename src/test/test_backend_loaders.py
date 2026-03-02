@@ -23,6 +23,7 @@ import pytest
 
 from fuzz_introspector import backend_loaders
 from fuzz_introspector import code_coverage
+from fuzz_introspector import debug_info
 
 
 class _FakePopen:
@@ -1092,3 +1093,170 @@ def test_overlay_missing_artifact_key_strict_raises(
         )
 
     assert exc_info.value.reason_code == backend_loaders.FI_OVERLAY_SCHEMA_ERROR
+
+
+# ---------------------------------------------------------------------------
+# FI_DEBUG_YAML_LOADER parity tests
+# ---------------------------------------------------------------------------
+
+
+def test_fi_debug_yaml_loader_rust_invokes_native_binary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """FI_DEBUG_YAML_LOADER=rust must invoke the native binary via subprocess."""
+    monkeypatch.setenv("FI_DEBUG_YAML_LOADER", "rust")
+    monkeypatch.setenv("FI_DEBUG_YAML_LOADER_RUST_BIN", "fake-yaml-loader")
+    monkeypatch.setenv("FI_DEBUG_PARALLEL", "0")
+
+    captured: dict[str, Any] = {}
+
+    def _fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        captured["command"] = command
+        captured["payload"] = json.loads(kwargs["input"])
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout='{"items":[{"k":"v"}]}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(backend_loaders.subprocess, "run", _fake_run)
+
+    yaml_path = tmp_path / "a.yaml"
+    yaml_path.write_text("- k: v\n")
+    debug_info.load_debug_all_yaml_files([str(yaml_path)])
+
+    assert captured.get("command") == ["fake-yaml-loader"]
+    assert "paths" in captured.get("payload", {})
+
+
+def test_fi_debug_yaml_loader_valid_json_parsed_correctly(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Native YAML loader returning valid JSON must be parsed into items list."""
+    monkeypatch.setenv("FI_DEBUG_PARALLEL", "0")
+
+    monkeypatch.setattr(
+        backend_loaders,
+        "load_json_with_backend",
+        lambda **_: ("rust", {"items": [{"func": "foo"}, {"func": "bar"}]}),
+    )
+
+    yaml_path = tmp_path / "b.yaml"
+    yaml_path.write_text("- func: foo\n")
+    items = debug_info.load_debug_all_yaml_files([str(yaml_path)])
+
+    assert items == [{"func": "foo"}, {"func": "bar"}]
+
+
+def test_fi_debug_yaml_loader_failure_falls_back_to_python(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """When native YAML loader fails (returns None), Python fallback must be used."""
+    monkeypatch.setenv("FI_DEBUG_PARALLEL", "0")
+
+    monkeypatch.setattr(
+        backend_loaders,
+        "load_json_with_backend",
+        lambda **_: ("python", None),
+    )
+
+    yaml_path = tmp_path / "c.yaml"
+    yaml_path.write_text("- idx: 42\n")
+    items = debug_info.load_debug_all_yaml_files([str(yaml_path)])
+
+    # Python fallback must parse the YAML file directly.
+    assert items == [{"idx": 42}]
+
+
+# ---------------------------------------------------------------------------
+# FI_LLVM_COV_LOADER parity tests
+# ---------------------------------------------------------------------------
+
+
+def test_fi_llvm_cov_loader_rust_invokes_native_binary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """FI_LLVM_COV_LOADER=rust must invoke the native binary via subprocess."""
+    monkeypatch.setenv("FI_LLVM_COV_LOADER", "rust")
+    monkeypatch.setenv("FI_LLVM_COV_LOADER_RUST_BIN", "fake-llvm-cov-loader")
+
+    covreport = tmp_path / "cov.covreport"
+    covreport.write_text("")
+
+    captured: dict[str, Any] = {}
+
+    def _fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        captured["command"] = command
+        captured["payload"] = json.loads(kwargs["input"])
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "covmap": {},
+                    "branch_cov_map": {},
+                    "coverage_files": [str(covreport)],
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(backend_loaders.subprocess, "run", _fake_run)
+
+    code_coverage.load_llvm_coverage(str(tmp_path))
+
+    assert captured.get("command") == ["fake-llvm-cov-loader"]
+    assert "coverage_reports" in captured.get("payload", {})
+
+
+def test_fi_llvm_cov_loader_valid_payload_applied_correctly(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Native LLVM cov loader returning valid {covmap, branch_cov_map} must be applied."""
+    covreport = tmp_path / "cov.covreport"
+    covreport.write_text("")
+
+    monkeypatch.setattr(
+        backend_loaders,
+        "load_json_with_backend",
+        lambda **_: (
+            "rust",
+            {
+                "covmap": {"funcZ": [[5, 3], [6, 0]]},
+                "branch_cov_map": {"funcZ:5,2": [3, 0]},
+                "coverage_files": [str(covreport)],
+            },
+        ),
+    )
+
+    cp = code_coverage.load_llvm_coverage(str(tmp_path))
+
+    assert cp.covmap["funcZ"] == [(5, 3), (6, 0)]
+    assert cp.branch_cov_map["funcZ:5,2"] == [3, 0]
+    assert cp.coverage_files == [str(covreport)]
+
+
+def test_fi_llvm_cov_loader_failure_falls_back_to_python(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """When native LLVM cov loader fails (returns None), Python fallback must be used."""
+    covreport = tmp_path / "cov.covreport"
+    covreport.write_text("LLVM\n 0: funcP\n /path/to/file.cpp:\n  10| 2|  doThing();\n")
+
+    monkeypatch.setattr(
+        backend_loaders,
+        "load_json_with_backend",
+        lambda **_: ("python", None),
+    )
+
+    # Python fallback runs without raising even if the covreport is minimal.
+    cp = code_coverage.load_llvm_coverage(str(tmp_path))
+    assert cp.get_type() == "function"
+    assert cp.coverage_files == [str(covreport)]
