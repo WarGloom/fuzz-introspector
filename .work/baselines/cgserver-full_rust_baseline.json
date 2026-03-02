@@ -1,0 +1,24 @@
+{
+  "project": "cgserver-full",
+  "backend": "rust",
+  "runs": 1,
+  "wall_time_s": 167.4,
+  "peak_rss_mb": 5638.18,
+  "output_hash": "3e0a44d44abbf1d3968e2d3e2223045618ffeeb3e37776a6b75c1c9853c2061b",
+  "timestamp": "20260302_185749",
+  "data_dir": "/home/nikita/work/Projects/cg/cgserver/build-introspector-full-2/introspector/",
+  "exit_code": 1,
+  "exit_code_note": "Same exit code 1 as python baseline; caused by FrontendAnalyser/DataLoaderError (pre-existing, not rust-related)",
+  "rust_backend_uses": 49,
+  "python_fallbacks": 0,
+  "binaries": {
+    "native_yaml_loader_rust": "/home/nikita/work/Projects/cg/fuzz-introspector/tools/native_yaml_loader_rust/target/release/native_yaml_loader_rust",
+    "native_debug_correlator_rust": "/home/nikita/work/Projects/cg/fuzz-introspector/tools/native_debug_correlator_rust/target/release/native_debug_correlator_rust",
+    "native_llvm_cov_loader_rust": "/home/nikita/work/Projects/cg/fuzz-introspector/tools/native_llvm_cov_loader_rust/target/release/native_llvm_cov_loader_rust"
+  },
+  "vs_python_baseline": {
+    "speedup_x": 4.10,
+    "memory_ratio_x": 1.96,
+    "hash_match": true
+  }
+}
