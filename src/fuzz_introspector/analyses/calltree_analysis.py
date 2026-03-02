@@ -411,10 +411,16 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                 cs_link = ('<span class="text-link" '
                            f"onclick=\" scrollToNodeInCT('{node_id}')\">"
                            f"call site: {node_id}</span>")
+
+            # Show actual function name for entrypoint instead of cryptic "EP"
+            parent_display = node.cov_parent
+            if parent_display == "EP":
+                parent_display = f"{node.dst_function_name} (entrypoint)"
+
             html_table_string += html_helpers.html_table_add_row([
                 str(node.cov_forward_reds),
                 str(node.cov_ct_idx),
-                node.cov_parent,
+                parent_display,
                 cs_link,
                 node.cov_largest_blocked_func,
             ])
