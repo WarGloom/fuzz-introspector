@@ -331,7 +331,7 @@ func parseCoverageReport(path string) (map[string][][]int, map[string][]int, err
 		hitCount, ok := extractHitCount(rawHitCount)
 		if !ok {
 			// Keep parity with python behavior for explicit zero forms.
-			if strings.Contains(line, " 0| ") {
+			if strings.Contains(line, " 0| ") || strings.Contains(line, "| 0|") {
 				hitCount = 0
 			} else {
 				continue

@@ -7,7 +7,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -209,12 +208,7 @@ func appendPythonExtend(items []any, parsed any) ([]any, bool) {
 		if len(typed) == 0 {
 			return items, true
 		}
-		keys := make([]string, 0, len(typed))
 		for key := range typed {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
 			items = append(items, key)
 		}
 		return items, true
