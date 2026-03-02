@@ -236,7 +236,7 @@ def test_load_llvm_coverage_demangles_external_backend_payload(
     assert cp.branch_cov_map["LibGMTTime():10,7"] == [1, 0]
 
 
-def test_load_llvm_coverage_uses_rust_default_backend(
+def test_load_llvm_coverage_uses_python_default_backend(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -250,9 +250,11 @@ def test_load_llvm_coverage_uses_rust_default_backend(
         return "python", None
 
     monkeypatch.setattr(backend_loaders, "load_json_with_backend", _fake_loader)
+    monkeypatch.delenv("FI_LLVM_COV_LOADER", raising=False)
+    monkeypatch.delenv("FI_NATIVE_BACKENDS", raising=False)
 
     cp = code_coverage.load_llvm_coverage(str(tmp_path))
-    assert captured["default_backend"] == backend_loaders.BACKEND_RUST
+    assert captured["default_backend"] == backend_loaders.BACKEND_PYTHON
     assert cp.coverage_files == [str(covreport_path)]
 
 

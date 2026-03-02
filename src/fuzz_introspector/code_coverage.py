@@ -612,7 +612,6 @@ def load_llvm_coverage(
         },
         default_backend=backend_loaders.resolve_component_backend(
             "FI_LLVM_COV_LOADER",
-            default_backend=backend_loaders.BACKEND_RUST,
         ),
         timeout_env="FI_LLVM_COV_LOADER_TIMEOUT_SEC",
     )
