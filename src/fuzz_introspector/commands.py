@@ -21,9 +21,11 @@ import yaml
 from typing import Optional, Dict, Any, Tuple
 
 from fuzz_introspector import analysis
+from fuzz_introspector import backend_loaders
 from fuzz_introspector import constants
 from fuzz_introspector import diff_report
 from fuzz_introspector import html_report
+from fuzz_introspector import memory_manager
 from fuzz_introspector import utils
 
 from fuzz_introspector.exceptions import DataLoaderError
@@ -45,15 +47,15 @@ def _resolve_report_exclusion_config_path(config_path: str | None) -> str:
     src_root = os.environ.get("SRC", "")
     if src_root:
         candidate_paths.append(
-            os.path.join(src_root, ".clusterfuzzlite",
-                         "fuzz_introspector_config.conf"))
+            os.path.join(src_root, ".clusterfuzzlite", "fuzz_introspector_config.conf")
+        )
 
     candidate_paths.append(
-        os.path.join("/src", ".clusterfuzzlite",
-                     "fuzz_introspector_config.conf"))
+        os.path.join("/src", ".clusterfuzzlite", "fuzz_introspector_config.conf")
+    )
     candidate_paths.append(
-        os.path.join(os.getcwd(), ".clusterfuzzlite",
-                     "fuzz_introspector_config.conf"))
+        os.path.join(os.getcwd(), ".clusterfuzzlite", "fuzz_introspector_config.conf")
+    )
 
     for candidate_path in candidate_paths:
         if os.path.isfile(candidate_path):
@@ -62,7 +64,8 @@ def _resolve_report_exclusion_config_path(config_path: str | None) -> str:
 
 
 def load_report_exclusion_patterns_from_config(
-    config_path: str | None = None, ) -> tuple[list[str], list[str]]:
+    config_path: str | None = None,
+) -> tuple[list[str], list[str]]:
     """Loads FILES_TO_AVOID and FUNCS_TO_AVOID patterns for report extraction.
 
     Returns empty lists if no config path is set or the config file
@@ -99,8 +102,9 @@ def load_report_exclusion_patterns_from_config(
                 elif active_avoid_list == "functions":
                     function_patterns.append(line)
     except OSError as err:
-        logger.warning("Could not read FUZZ_INTROSPECTOR_CONFIG '%s': %s",
-                       config_path, err)
+        logger.warning(
+            "Could not read FUZZ_INTROSPECTOR_CONFIG '%s': %s", config_path, err
+        )
         return [], []
 
     logger.info(
@@ -112,18 +116,36 @@ def load_report_exclusion_patterns_from_config(
 
 
 def load_report_exclude_patterns_from_config(
-    config_path: str | None = None, ) -> list[str]:
+    config_path: str | None = None,
+) -> list[str]:
     """Loads FILES_TO_AVOID patterns for report extraction."""
     file_patterns, _ = load_report_exclusion_patterns_from_config(config_path)
     return file_patterns
 
 
 def load_report_exclude_function_patterns_from_config(
-    config_path: str | None = None, ) -> list[str]:
+    config_path: str | None = None,
+) -> list[str]:
     """Loads FUNCS_TO_AVOID patterns for report extraction."""
-    _, function_patterns = load_report_exclusion_patterns_from_config(
-        config_path)
+    _, function_patterns = load_report_exclusion_patterns_from_config(config_path)
     return function_patterns
+
+
+def _log_runtime_config() -> None:
+    """Log native backend selection and memory configuration at startup."""
+    global_backend = backend_loaders.parse_native_backends_env()
+    avail_gb = memory_manager.get_available_memory_gb()
+    workers = memory_manager.get_recommended_worker_count()
+    logger.info(
+        "[runtime-config] global_backend=%s available_ram=%.1fGB "
+        "recommended_workers=%d",
+        global_backend,
+        avail_gb,
+        workers,
+    )
+    max_rss = os.getenv("FI_MAX_RSS_GB")
+    if max_rss:
+        logger.info("[runtime-config] FI_MAX_RSS_GB=%s (hard limit)", max_rss)
 
 
 def diff_two_reports(report1: str, report2: str) -> int:
@@ -207,8 +229,7 @@ def analyse_end_to_end(
     else:
         language = arg_language
 
-    correlation_file = os.path.join(out_dir,
-                                    "exe_to_fuzz_introspector_logs.yaml")
+    correlation_file = os.path.join(out_dir, "exe_to_fuzz_introspector_logs.yaml")
     if not os.path.isfile(correlation_file):
         correlation_file = ""
 
@@ -254,22 +275,24 @@ def run_analysis_on_dir(
     from a frontend run. The primary task is to aggregate the data
     and generate a HTML report."""
     logger.info("Running analysis")
+    _log_runtime_config()
     constants.should_dump_files = dump_files
 
     if exclude_patterns is None:
         (exclude_patterns, exclude_function_patterns) = (
-            load_report_exclusion_patterns_from_config())
-    elif exclude_function_patterns is None:
-        exclude_function_patterns = load_report_exclude_function_patterns_from_config(
+            load_report_exclusion_patterns_from_config()
         )
+    elif exclude_function_patterns is None:
+        exclude_function_patterns = load_report_exclude_function_patterns_from_config()
 
     if enable_all_analyses:
         for analysis_interface in analysis.get_all_analyses():
             if analysis_interface.get_name() not in analyses_to_run:
                 analyses_to_run.append(analysis_interface.get_name())
 
-    introspection_proj = analysis.IntrospectionProject(language, target_folder,
-                                                       coverage_url)
+    introspection_proj = analysis.IntrospectionProject(
+        language, target_folder, coverage_url
+    )
     introspection_proj.load_data_files(
         parallelise,
         correlation_file,
@@ -381,7 +404,8 @@ def analyse(args) -> int:
         entrypoint = "LLVMFuzzerTestOneInput"
 
     exclude_patterns, exclude_function_patterns = (
-        load_report_exclusion_patterns_from_config())
+        load_report_exclusion_patterns_from_config()
+    )
     # Run the frontend
     oss_fuzz.analyse_folder(
         language=args.language,
@@ -431,7 +455,8 @@ def analyse(args) -> int:
         target_analyser.set_base_information(args.target_dir, language)
 
     # Run the analyser
-    target_analyser.standalone_analysis(introspection_proj.proj_profile,
-                                        introspection_proj.profiles, out_dir)
+    target_analyser.standalone_analysis(
+        introspection_proj.proj_profile, introspection_proj.profiles, out_dir
+    )
 
     return constants.APP_EXIT_SUCCESS

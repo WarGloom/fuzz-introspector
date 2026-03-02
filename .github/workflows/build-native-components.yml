@@ -1,0 +1,48 @@
+name: Build Native Components
+
+on:
+  push:
+    branches: [ main, memory-improvements ]
+  pull_request:
+    branches: [ main, memory-improvements ]
+
+jobs:
+  build-native:
+    name: Build ${{ matrix.tool.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tool:
+          - path: tools/native_debug_correlator_rust
+            name: native_debug_correlator_rust
+          - path: tools/native_yaml_loader_rust
+            name: native_yaml_loader_rust
+          - path: tools/native_llvm_cov_loader_rust
+            name: native_llvm_cov_loader_rust
+          - path: tools/native_overlay_backend_rust
+            name: native_overlay_backend_rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ matrix.tool.path }}/target
+          key: ${{ runner.os }}-cargo-${{ matrix.tool.name }}-${{ hashFiles(format('{0}/Cargo.lock', matrix.tool.path)) }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.tool.name }}-
+      - name: Build ${{ matrix.tool.name }}
+        run: |
+          cd ${{ matrix.tool.path }}
+          cargo build --release
+          cargo test
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.tool.name }}-linux
+          path: ${{ matrix.tool.path }}/target/release/${{ matrix.tool.name }}
+          if-no-files-found: error
