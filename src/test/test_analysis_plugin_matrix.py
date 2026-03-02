@@ -237,7 +237,22 @@ def test_fi_native_plugins_is_enabled_when_env_set(monkeypatch) -> None:
 def test_fi_native_plugins_not_enabled_by_default(monkeypatch) -> None:
     """NativePluginProxy.is_enabled() returns False when env var is absent."""
     monkeypatch.delenv(analysis.FI_NATIVE_PLUGINS_ENV, raising=False)
+    monkeypatch.delenv("FI_NATIVE_BACKENDS", raising=False)
     assert analysis.NativePluginProxy.is_enabled() is False
+
+
+def test_native_proxy_not_enabled_for_global_go_backend(monkeypatch) -> None:
+    monkeypatch.delenv(analysis.FI_NATIVE_PLUGINS_ENV, raising=False)
+    monkeypatch.setenv("FI_NATIVE_BACKENDS", "go")
+
+    assert analysis.NativePluginProxy.is_enabled() is False
+
+
+def test_native_proxy_enabled_for_global_rust_backend(monkeypatch) -> None:
+    monkeypatch.delenv(analysis.FI_NATIVE_PLUGINS_ENV, raising=False)
+    monkeypatch.setenv("FI_NATIVE_BACKENDS", "rust")
+
+    assert analysis.NativePluginProxy.is_enabled() is True
 
 
 # ── Test 2: Empty native results → Python fallback ───────────────────────────

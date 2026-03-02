@@ -370,6 +370,50 @@ def test_parse_overlay_shadow_mode(
     assert backend_loaders.parse_overlay_shadow_mode()
 
 
+def test_parse_max_loop_iterations_unset_timeout_has_finite_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(backend_loaders.FI_CORRELATOR_MAX_ITERATIONS_ENV, raising=False)
+
+    max_iterations = backend_loaders._parse_max_loop_iterations(timeout_seconds=0)
+
+    expected = int(
+        backend_loaders.NATIVE_MONITOR_DEFAULT_TIMEOUT_SECONDS
+        / backend_loaders.NATIVE_MONITOR_POLL_INTERVAL_SECONDS
+    )
+    assert max_iterations == expected
+
+
+def test_parse_max_loop_iterations_overlay_env_is_authoritative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(backend_loaders.FI_OVERLAY_MAX_ITERATIONS_ENV, "123")
+    monkeypatch.setenv(backend_loaders.FI_CORRELATOR_MAX_ITERATIONS_ENV, "999")
+
+    max_iterations = backend_loaders._parse_max_loop_iterations(
+        timeout_seconds=0,
+        max_iterations_env=backend_loaders.FI_OVERLAY_MAX_ITERATIONS_ENV,
+        fallback_env=backend_loaders.FI_CORRELATOR_MAX_ITERATIONS_ENV,
+    )
+
+    assert max_iterations == 123
+
+
+def test_parse_max_loop_iterations_overlay_uses_legacy_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(backend_loaders.FI_OVERLAY_MAX_ITERATIONS_ENV, raising=False)
+    monkeypatch.setenv(backend_loaders.FI_CORRELATOR_MAX_ITERATIONS_ENV, "321")
+
+    max_iterations = backend_loaders._parse_max_loop_iterations(
+        timeout_seconds=0,
+        max_iterations_env=backend_loaders.FI_OVERLAY_MAX_ITERATIONS_ENV,
+        fallback_env=backend_loaders.FI_CORRELATOR_MAX_ITERATIONS_ENV,
+    )
+
+    assert max_iterations == 321
+
+
 def test_resolve_overlay_command_uses_fi_overlay_bin_when_specific_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

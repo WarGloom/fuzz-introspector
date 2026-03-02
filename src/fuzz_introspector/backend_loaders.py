@@ -21,7 +21,6 @@ import shlex
 import shutil
 import signal
 import subprocess
-import sys
 import threading
 import time
 
@@ -45,6 +44,11 @@ CORRELATOR_REQUIRED_RESPONSE_KEYS = (
     "timings",
 )
 CORRELATOR_TIMEOUT_GRACE_SECONDS = 10
+NATIVE_MONITOR_POLL_INTERVAL_SECONDS = 0.01
+NATIVE_MONITOR_TIMEOUT_MULTIPLIER = 10
+NATIVE_MONITOR_DEFAULT_TIMEOUT_SECONDS = 60 * 60
+FI_CORRELATOR_MAX_ITERATIONS_ENV = "FI_DEBUG_CORRELATOR_MAX_ITERATIONS"
+FI_OVERLAY_MAX_ITERATIONS_ENV = "FI_OVERLAY_MAX_ITERATIONS"
 # 1 MB is sufficient for metadata-only responses while bounding runaway output.
 CORRELATOR_MAX_STDOUT_BYTES = 1024 * 1024
 # 64 KB balances diagnostic visibility with DoS prevention.
@@ -623,40 +627,65 @@ def _parse_timeout_seconds(timeout_env: str) -> int:
     return timeout_value
 
 
-def _parse_max_loop_iterations(timeout_seconds: int) -> int:
-    """Parse max loop iterations from environment or derive from timeout.
+def _parse_max_loop_iterations(
+    timeout_seconds: int,
+    max_iterations_env: str = FI_CORRELATOR_MAX_ITERATIONS_ENV,
+    fallback_env: str | None = None,
+) -> int:
+    """Parse max monitor-loop iterations with bounded defaults.
 
-    When no explicit timeout is set (timeout_seconds == 0), returns sys.maxsize
-    to effectively remove the iteration limit. Otherwise returns a sensible
-    default or user-configured value.
+    Priority:
+      1. ``max_iterations_env`` (authoritative override)
+      2. ``fallback_env`` (compatibility alias)
+      3. Derived finite default from timeout (or default timeout if unset)
     """
-    # If no timeout is set, remove iteration limit
-    if timeout_seconds == 0:
-        raw_value = os.environ.get("FI_DEBUG_CORRELATOR_MAX_ITERATIONS", "").strip()
-        if raw_value:
-            try:
-                iterations = int(raw_value)
-                if iterations > 0:
-                    return iterations
-            except ValueError:
-                pass
-        return sys.maxsize  # No limit when no timeout
 
-    # When timeout is set, use a default or user-configured limit
-    raw_value = os.environ.get("FI_DEBUG_CORRELATOR_MAX_ITERATIONS", "").strip()
-    if raw_value:
+    def _read_env_iterations(env_name: str, warning_suffix: str = "") -> int | None:
+        raw_value = os.environ.get(env_name, "").strip()
+        if not raw_value:
+            return None
         try:
             iterations = int(raw_value)
-            if iterations > 0:
-                return iterations
         except ValueError:
+            logger.warning("Invalid %s=%r%s", env_name, raw_value, warning_suffix)
+            return None
+        if iterations <= 0:
             logger.warning(
-                "Invalid FI_DEBUG_CORRELATOR_MAX_ITERATIONS=%r; using default",
+                "Invalid %s=%r; max iterations must be positive%s",
+                env_name,
                 raw_value,
+                warning_suffix,
             )
+            return None
+        return iterations
 
-    # Default: 10x the timeout in iterations (assuming 0.01s sleep)
-    return timeout_seconds * 100 * 10
+    max_iterations = _read_env_iterations(max_iterations_env)
+    if max_iterations is not None:
+        return max_iterations
+
+    if fallback_env is not None:
+        max_iterations = _read_env_iterations(
+            fallback_env,
+            warning_suffix=f"; set {max_iterations_env} instead",
+        )
+        if max_iterations is not None:
+            return max_iterations
+
+    if timeout_seconds > 0:
+        poll_count = max(
+            1,
+            int(timeout_seconds / NATIVE_MONITOR_POLL_INTERVAL_SECONDS),
+        )
+        return poll_count * NATIVE_MONITOR_TIMEOUT_MULTIPLIER
+
+    # Keep deadlock protection bounded even when timeout is unset.
+    return max(
+        1,
+        int(
+            NATIVE_MONITOR_DEFAULT_TIMEOUT_SECONDS
+            / NATIVE_MONITOR_POLL_INTERVAL_SECONDS
+        ),
+    )
 
 
 def _handle_correlator_failure(
@@ -1044,15 +1073,19 @@ def run_overlay_backend(
             )
 
         _loop_iteration = 0
-        _max_loop_iterations = _parse_max_loop_iterations(timeout_seconds)
+        _max_loop_iterations = _parse_max_loop_iterations(
+            timeout_seconds,
+            max_iterations_env=FI_OVERLAY_MAX_ITERATIONS_ENV,
+            fallback_env=FI_CORRELATOR_MAX_ITERATIONS_ENV,
+        )
         try:
             while True:
                 _loop_iteration += 1
                 if _loop_iteration > _max_loop_iterations:
                     logger.error(
                         "[overlay] process monitor loop exceeded %d iterations; "
-                        "forcing termination (set FI_DEBUG_OVERLAY_TIMEOUT_SEC or adjust "
-                        "FI_DEBUG_CORRELATOR_MAX_ITERATIONS if needed)",
+                        "forcing termination (set FI_OVERLAY_TIMEOUT_SEC or adjust "
+                        "FI_OVERLAY_MAX_ITERATIONS if needed)",
                         _max_loop_iterations,
                     )
                     cleanup_status = _terminate_process_group(
@@ -1153,7 +1186,7 @@ def run_overlay_backend(
                 ):
                     break
 
-                time.sleep(0.01)
+                time.sleep(NATIVE_MONITOR_POLL_INTERVAL_SECONDS)
 
             stdout_reader.join(timeout=0.1)
             stderr_reader.join(timeout=0.1)
@@ -1377,7 +1410,10 @@ def run_correlator_backend(
             )
 
         _loop_iteration = 0
-        _max_loop_iterations = _parse_max_loop_iterations(timeout_seconds)
+        _max_loop_iterations = _parse_max_loop_iterations(
+            timeout_seconds,
+            max_iterations_env=FI_CORRELATOR_MAX_ITERATIONS_ENV,
+        )
         try:
             while True:
                 _loop_iteration += 1
@@ -1475,7 +1511,7 @@ def run_correlator_backend(
                 ):
                     break
 
-                time.sleep(0.01)
+                time.sleep(NATIVE_MONITOR_POLL_INTERVAL_SECONDS)
 
             stdout_reader.join(timeout=0.1)
             stderr_reader.join(timeout=0.1)

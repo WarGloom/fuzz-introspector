@@ -154,8 +154,8 @@ class NativePluginProxy:
         1. ``FI_NATIVE_PLUGINS`` (per-component, explicit) — if set to 'rust',
            returns True; if set to any other non-empty value, returns False
            (explicit opt-out even when FI_NATIVE_BACKENDS=rust).
-        2. ``FI_NATIVE_BACKENDS`` (global) — activates native plugins when set
-           to 'rust' or 'go' (any native-capable backend).
+        2. ``FI_NATIVE_BACKENDS`` (global) — activates native plugins only
+           when set to 'rust'.
         """
         # Per-component var takes precedence: explicit opt-in or opt-out.
         fi_plugins_raw = os.environ.get(FI_NATIVE_PLUGINS_ENV, "").strip().lower()
@@ -164,10 +164,7 @@ class NativePluginProxy:
 
         # Fall back to the global unified backend selector.
         global_backend = backend_loaders.parse_native_backends_env()
-        return global_backend in (
-            backend_loaders.BACKEND_RUST,
-            backend_loaders.BACKEND_GO,
-        )
+        return global_backend == backend_loaders.BACKEND_RUST
 
     @staticmethod
     def find_binary() -> Optional[str]:
@@ -1117,7 +1114,9 @@ def _serialize_branch_blockers(
         serialized.append(
             {
                 "blocked_side": repr(blocker.blocked_side),
-                "blocked_unique_not_covered_complexity": blocker.blocked_unique_not_covered_complexity,
+                "blocked_unique_not_covered_complexity": (
+                    blocker.blocked_unique_not_covered_complexity
+                ),
                 "blocked_unique_reachable_complexity": blocker.blocked_unique_reachable_complexity,
                 "blocked_unique_functions": blocker.blocked_unique_funcs,
                 "blocked_not_covered_complexity": blocker.blocked_not_covered_complexity,
