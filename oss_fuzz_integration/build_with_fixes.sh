@@ -40,9 +40,25 @@ fi
 # Step 1b: Update OSS-Fuzz to latest
 echo "Updating OSS-Fuzz..."
 cd "$OSS_FUZZ_DIR"
-git stash || true
-git pull origin master || true
-git stash pop || true
+stashed_changes=0
+if ! git diff --quiet || ! git diff --cached --quiet; then
+	git stash push -m "build_with_fixes.sh auto-stash before pull"
+	stashed_changes=1
+else
+	echo "No local tracked changes to stash before pull"
+fi
+
+if ! git pull origin master; then
+	echo "ERROR: Failed to update OSS-Fuzz via git pull origin master" >&2
+	exit 1
+fi
+
+if [ "$stashed_changes" -eq 1 ]; then
+	if ! git stash pop; then
+		echo "ERROR: git stash pop failed (likely merge conflicts). Resolve conflicts manually." >&2
+		exit 1
+	fi
+fi
 cd "$SCRIPT_DIR"
 
 # Step 2: Pull base-clang:ubuntu-24-04 first (has LLVM with introspector pass)
@@ -55,14 +71,32 @@ mkdir -p "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector"
 cp -rf "$SCRIPT_DIR/src" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/"
 cp -rf "$SCRIPT_DIR/frontends" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/"
 mkdir -p "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools"
-cp -rf "$SCRIPT_DIR/tools/native_yaml_loader_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
-cp -rf "$SCRIPT_DIR/tools/native_yaml_loader_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
-cp -rf "$SCRIPT_DIR/tools/native_llvm_cov_loader_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
-cp -rf "$SCRIPT_DIR/tools/native_llvm_cov_loader_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
-cp -rf "$SCRIPT_DIR/tools/native_debug_correlator_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
-cp -rf "$SCRIPT_DIR/tools/native_debug_correlator_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
-cp -rf "$SCRIPT_DIR/tools/native_overlay_backend_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
-cp -rf "$SCRIPT_DIR/tools/native_overlay_backend_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
+if command -v rsync &>/dev/null; then
+	RSYNC_EXCLUDES=(
+		--exclude='target/'
+		--exclude='build/'
+		--exclude='dist/'
+		--exclude='native_*_go'
+	)
+	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_yaml_loader_go/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_yaml_loader_go/"
+	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_yaml_loader_rust/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_yaml_loader_rust/"
+	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_llvm_cov_loader_go/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_llvm_cov_loader_go/"
+	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_llvm_cov_loader_rust/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_llvm_cov_loader_rust/"
+	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_debug_correlator_go/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_debug_correlator_go/"
+	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_debug_correlator_rust/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_debug_correlator_rust/"
+	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_overlay_backend_go/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_overlay_backend_go/"
+	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_overlay_backend_rust/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_overlay_backend_rust/"
+else
+	echo "rsync not found, falling back to cp -rf for native tools"
+	cp -rf "$SCRIPT_DIR/tools/native_yaml_loader_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
+	cp -rf "$SCRIPT_DIR/tools/native_yaml_loader_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
+	cp -rf "$SCRIPT_DIR/tools/native_llvm_cov_loader_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
+	cp -rf "$SCRIPT_DIR/tools/native_llvm_cov_loader_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
+	cp -rf "$SCRIPT_DIR/tools/native_debug_correlator_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
+	cp -rf "$SCRIPT_DIR/tools/native_debug_correlator_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
+	cp -rf "$SCRIPT_DIR/tools/native_overlay_backend_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
+	cp -rf "$SCRIPT_DIR/tools/native_overlay_backend_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
+fi
 rm -rf "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_yaml_loader_rust/target"
 rm -rf "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_llvm_cov_loader_rust/target"
 rm -rf "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_debug_correlator_rust/target"
@@ -195,6 +229,16 @@ if ! grep -q "tree-sitter>=0.25.0,<0.26.0" "$COMPILE_FILE"; then
 
 	# Change "pip install -e ." to "pip install -e . --no-deps"
 	sed -i 's/python3 -m pip install -e \./python3 -m pip install -e . --no-deps/g' "$COMPILE_FILE"
+fi
+
+if ! grep -q "python3 -m pip install --upgrade 'tree-sitter>=0.25.0,<0.26.0'" "$COMPILE_FILE"; then
+	echo "ERROR: compile patch verification failed: tree-sitter upgrade command missing" >&2
+	exit 1
+fi
+
+if ! grep -q "python3 -m pip install -e \. --no-deps" "$COMPILE_FILE"; then
+	echo "ERROR: compile patch verification failed: pip editable install with --no-deps missing" >&2
+	exit 1
 fi
 
 # Step 7: Build the base-builder image
