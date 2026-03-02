@@ -13,6 +13,7 @@
 # limitations under the License.
 """Fuzz JVM report generation routines"""
 
+import glob
 import os
 import sys
 import json
@@ -77,6 +78,12 @@ def process_mapping(map_str):
 )
 def test_full_jvm_report_generation(tmpdir, testcase):
     result_dir = os.path.join(test_base_dir, "result", testcase)
+
+    if not glob.glob(os.path.join(result_dir, "fuzzerLogFile-*.data")):
+        pytest.skip(
+            f"No fuzzerLogFile-*.data fixtures in {result_dir}; "
+            "run 'cd tests/java && ./runTest.sh " + testcase + "' to generate them"
+        )
 
     config_path = os.path.join(test_base_dir, testcase, ".config")
     config = configparser.ConfigParser()
