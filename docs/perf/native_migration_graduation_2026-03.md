@@ -9,7 +9,7 @@
 ## Executive Summary
 
 **GRADUATED.** The native Rust backend meets both graduation gate thresholds:
-**5.50× wall-time speedup** and **−40.0% peak RSS** versus the Python baseline,
+**6.94× wall-time speedup** and **−42.5% peak RSS** versus the Python baseline,
 measured on the cgserver production corpus (49 fuzzers). Output is hash-identical
 across all three backends (Python, Rust, Go). The 10-run stability test passed
 with zero crashes and zero Python fallbacks. `FI_NATIVE_BACKENDS=rust` is baked
@@ -21,8 +21,8 @@ into the OSS-Fuzz base-builder Dockerfile and is the active default.
 
 | Metric | Gate threshold | Actual (Rust) | Pass/Fail |
 |--------|---------------|--------------|-----------|
-| Speedup (cgserver) | ≥ 5× | **5.50×** | ✅ Pass |
-| RSS reduction (cgserver) | ≥ 40% | **−40.0%** (−4,440.62 MB) | ✅ Pass |
+| Speedup (cgserver) | ≥ 5× | **6.94×** | ✅ Pass |
+| RSS reduction (cgserver) | ≥ 40% | **−42.5%** (−4,713.61 MB) | ✅ Pass |
 | Output parity | 100% hash match | **100%** | ✅ Pass |
 | Stability (10 consecutive runs) | 0 failures | **0 failures** | ✅ Pass |
 
@@ -54,17 +54,17 @@ cgserver (49 fuzzers, real production scale) is the sole authoritative benchmark
 | Backend | Wall time (s) | Peak RSS (MB) | Runs | Output hash (SHA-256) |
 |---------|--------------|--------------|------|-----------------------|
 | Python (baseline) | 687.67 | 11,100.30 | 1 | `3e0a44d4…` |
-| **Rust (3-run avg)** | **125.05** | **6,659.68** | **3** | `3e0a44d4…` ✅ |
+| **Rust (3-run avg)** | **99.03** | **6,386.69** | **3** | `3e0a44d4…` ✅ |
 | Go | 94.19 | 5,768.00 | 1 | `3e0a44d4…` ✅ |
 
 Full hash: `3e0a44d44abbf1d3968e2d3e2223045618ffeeb3e37776a6b75c1c9853c2061b`
 
-Post-`function_table` plugin delta versus previous Rust baseline (84.82 s / 5,613.71 MB):
-**+40.23 s wall time (+47.43%)** and **+1,045.97 MB peak RSS (+18.63%)**.
+Post-`function_table` plugin delta versus previous Rust baseline (125.05 s / 6,659.68 MB):
+**−26.02 s wall time (−20.81%)** and **−272.99 MB peak RSS (−4.10%)**.
 
 Baseline files:
 - Python — `.work/baselines/cgserver-full_baseline.json` (timestamp `20260302_182612`)
-- Rust — `.work/baselines/cgserver-full_rust_baseline.json` (timestamp `20260303_160924`)
+- Rust — `.work/baselines/cgserver-full_rust_baseline.json` (timestamp `20260303_184339`)
 
 ---
 
@@ -165,8 +165,8 @@ BACKEND_CPP removal) are present in the branch history and covered by the parity
 
 Both graduation gate thresholds are satisfied:
 
-- Speedup: **5.50×** ≥ required 5× ✅
-- RSS reduction: **40.0%** ≥ required 40% ✅
+- Speedup: **6.94×** ≥ required 5× ✅
+- RSS reduction: **42.5%** ≥ required 40% ✅
 
 Output parity is confirmed (hash-identical, all backends). Stability is confirmed
 (10/10 runs, 0 crashes, 0 fallbacks). OSS-Fuzz integration is automated and requires
