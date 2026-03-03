@@ -645,50 +645,77 @@ class FuzzerProfile:
         return profile
 
     def _propagate_functions_reached(self) -> None:
-        """Accummulates all functions reached by a given fuzzer. This is
-        achieved by iterating the outgoing edges of each function recursively
+        """Accumulates all functions transitively reached by each function.
+
+        Replaces the previous per-function BFS with a single-pass iterative
+        DFS that computes the full transitive closure in post-order.  Each
+        function is fully resolved exactly once; results are memoised so that
+        callers can union them in O(1) lookup instead of re-traversing.
+
+        Semantics preserved from the original implementation:
+        - ``fd.functions_reached`` is set to the full transitive closure
+          (list of unique names, excluding the function itself).
+        - ``fd.function_depth`` is set to the maximum call-chain depth from
+          this function to any leaf it can reach.
         """
-        new_all_class_functions: Dict[
-            str, function_profile.FunctionProfile] = dict()
+        acf = self.all_class_functions
 
-        for func, func_profile in self.all_class_functions.items():
-            worklist = []
-            max_depth = 0
-            for func_reached in func_profile.functions_reached:
-                worklist.append((func_reached, 1))
-            visited = set()
+        # memo[name]  = frozenset of all transitively reachable names
+        # depth[name] = max call-chain depth from name to any leaf
+        memo: Dict[str, Set[str]] = {}
+        depth: Dict[str, int] = {}
 
-            while len(worklist) > 0:
-                elem, depth = worklist.pop()
-                max_depth = max(depth, max_depth)
+        # Iterative post-order DFS using an explicit stack.
+        # Stack entries: (func_name, iterator_over_its_direct_callees, phase)
+        #   phase == False  → first visit (push callees)
+        #   phase == True   → returning (all children resolved; compute own result)
+        for root in acf:
+            if root in memo:
+                continue
 
-                if elem in visited:
-                    continue
-                visited.add(elem)
+            stack: List[Any] = [(root, False)]
+            # Track the path to detect back-edges (cycles).
+            on_path: Set[str] = set()
 
-                # Check if we have done this function already.
-                try:
-                    fd = new_all_class_functions[elem]
-                    visited.update(set(fd.functions_reached))
-                    tmp_depth = fd.function_depth + depth
-                    max_depth = max(max_depth, tmp_depth)
-                    continue
-                except KeyError:
-                    pass
+            while stack:
+                name, returning = stack[-1]
 
-                # Otherwise traverse the functions reached.
-                try:
-                    for func_reached2 in self.all_class_functions[
-                            elem].functions_reached:
-                        worklist.append((func_reached2, depth + 1))
-                except KeyError:
-                    pass
+                if returning:
+                    stack.pop()
+                    on_path.discard(name)
 
-            # Save the work
-            new_all_class_functions[func] = func_profile
-            new_all_class_functions[func].functions_reached = list(visited)
-            new_all_class_functions[func].function_depth = max_depth
-        self.all_class_functions = new_all_class_functions
+                    # Union transitive closures of all direct callees.
+                    own_direct = acf[
+                        name].functions_reached if name in acf else []
+                    reachable: Set[str] = set()
+                    max_d = 0
+                    for callee in own_direct:
+                        reachable.add(callee)
+                        if callee in memo:
+                            reachable.update(memo[callee])
+                            callee_d = depth.get(callee, 0) + 1
+                            if callee_d > max_d:
+                                max_d = callee_d
+                    memo[name] = reachable
+                    depth[name] = max_d
+                else:
+                    # First visit.
+                    if name in memo:
+                        stack.pop()
+                        continue
+                    on_path.add(name)
+                    stack[-1] = (name, True)
+
+                    # Push unresolved, non-cyclic callees.
+                    if name in acf:
+                        for callee in acf[name].functions_reached:
+                            if callee not in memo and callee not in on_path:
+                                stack.append((callee, False))
+
+        # Write results back into the FunctionProfile objects.
+        for name, fp in acf.items():
+            fp.functions_reached = list(memo.get(name, set()))
+            fp.function_depth = depth.get(name, 0)
 
     def _set_fd_cache(self):
         for _, fd in self.all_class_functions.items():

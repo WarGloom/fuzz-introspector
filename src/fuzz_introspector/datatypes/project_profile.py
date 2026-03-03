@@ -79,12 +79,10 @@ class MergedProjectProfile:
             str, set[str]] = collections.defaultdict(set)
         for profile in profiles:
             profile_id = profile.identifier
-            static_funcs = set(profile.functions_reached_by_fuzzer)
-            runtime_funcs = set(profile.functions_reached_by_fuzzer_runtime)
-
-            for func_name in static_funcs:
+            # functions_reached_by_fuzzer* are already Set[str]; no copy needed.
+            for func_name in profile.functions_reached_by_fuzzer:
                 static_reached_by_fuzzers[func_name].add(profile_id)
-            for func_name in runtime_funcs:
+            for func_name in profile.functions_reached_by_fuzzer_runtime:
                 runtime_reached_by_fuzzers[func_name].add(profile_id)
 
         # Add all functions from the various profiles into the merged profile. Don't
@@ -112,21 +110,24 @@ class MergedProjectProfile:
                 runtime_reached = runtime_reached_by_fuzzers.get(
                     fd.function_name, set())
 
+                combined = static_reached | runtime_reached
                 fd.reached_by_fuzzers = sorted(static_reached)
                 fd.reached_by_fuzzers_runtime = sorted(runtime_reached)
-                fd.reached_by_fuzzers_combined = sorted(static_reached
-                                                        | runtime_reached)
+                fd.reached_by_fuzzers_combined = sorted(combined)
 
-                # Refine hitcount
-                fd.hitcount = len(fd.reached_by_fuzzers)
-                fd.hitcount_runtime = len(fd.reached_by_fuzzers_runtime)
-                fd.hitcount_combined = len(fd.reached_by_fuzzers_combined)
+                # Compute hitcounts from set sizes directly (avoid len of sorted list).
+                fd.hitcount = len(static_reached)
+                fd.hitcount_runtime = len(runtime_reached)
+                fd.hitcount_combined = len(combined)
 
         # Gather complexity information about each function
         logger.info(
             "Gathering complexity and incoming references of each function")
         all_functions = self.all_functions
         all_constructors = self.all_constructors
+        # Resolve once before the loop; target_lang may iterate all profiles
+        # on first access if cache is cold.
+        _target_lang = self.target_lang
         for fp_obj in itertools.chain(all_functions.values(),
                                       all_constructors.values()):
             total_cyclomatic_complexity = 0
@@ -138,13 +139,14 @@ class MergedProjectProfile:
                 elif reached_func_name in all_constructors:
                     reached_func_obj = all_constructors[reached_func_name]
                 else:
-                    if self.target_lang == "jvm":
+                    if _target_lang == "jvm":
                         logger.debug(
-                            f"{reached_func_name} not provided within classpath"
+                            "%s not provided within classpath",
+                            reached_func_name,
                         )
                     else:
-                        logger.debug(
-                            f"Mismatched function name: {reached_func_name}")
+                        logger.debug("Mismatched function name: %s",
+                                     reached_func_name)
                     continue
                 reached_func_obj.incoming_references.append(
                     fp_obj.function_name)
