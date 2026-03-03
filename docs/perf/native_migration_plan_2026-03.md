@@ -870,9 +870,9 @@ petgraph = "0.6"  # Graph algorithms (call tree)
 | `FI_MAX_RSS_GB` | auto-detect | Max RSS limit (GB), triggers degradation | Sprint 4 |
 | `FI_MAX_WORKERS` | `cpu_count` | Override worker count | Sprint 4 |
 | `FI_MEMORY_MONITOR_INTERVAL` | `5` | RSS sampling interval (seconds) | Sprint 4 |
-| `FI_DEBUG_CORRELATOR_BACKEND=cpp` | N/A | ⚠️ Undocumented — silent Python fallback (see `backend_loaders.py:36-37`) | — |
+| `FI_DEBUG_CORRELATOR_BACKEND=cpp` | N/A | ❌ Removed — `BACKEND_CPP` constant and its entry in `SUPPORTED_BACKENDS` were deleted; setting this value produces the standard unsupported-backend warning and Python fallback. | — |
 
-> **`FI_DEBUG_CORRELATOR_BACKEND=cpp`** — **Undocumented backend**. `backend_loaders.py` lines 36-37 include `BACKEND_CPP` in `SUPPORTED_BACKENDS`, but `parse_correlator_backend_env()` does not handle it, causing silent Python fallback. Do not use until handled explicitly.
+> **`FI_DEBUG_CORRELATOR_BACKEND=cpp`** — **Removed**. `BACKEND_CPP` and its `SUPPORTED_BACKENDS` entry were deleted from `backend_loaders.py`; the value is now treated as any other unsupported string (warning + Python fallback).
 
 > ⚠️ `FI_CORR_FALLBACK_OK` was described in an earlier draft as a "deprecated alias" but was **never defined** in the codebase. Remove from any derived docs or scripts.
 
