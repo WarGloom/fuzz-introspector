@@ -64,8 +64,8 @@ class FuzzerProfile:
         self._target_lang = target_lang
         self.introspector_data_file = cfg_file
 
-        self.functions_reached_by_fuzzer: List[str] = []
-        self.functions_reached_by_fuzzer_runtime: List[str] = []
+        self.functions_reached_by_fuzzer: Set[str] = set()
+        self.functions_reached_by_fuzzer_runtime: Set[str] = set()
 
         # Load calltree file
         self.fuzzer_callsite_calltree = cfg_load.data_file_read_calltree(
@@ -608,9 +608,9 @@ class FuzzerProfile:
         profile._target_lang = payload.get("target_lang", "c-cpp")
         profile.introspector_data_file = payload.get("introspector_data_file",
                                                      "")
-        profile.functions_reached_by_fuzzer = list(
+        profile.functions_reached_by_fuzzer = set(
             payload.get("functions_reached_by_fuzzer", []))
-        profile.functions_reached_by_fuzzer_runtime = list(
+        profile.functions_reached_by_fuzzer_runtime = set(
             payload.get("functions_reached_by_fuzzer_runtime", []))
         profile.fuzzer_callsite_calltree = cls._deserialize_calltree_node(
             payload.get("fuzzer_callsite_calltree"))
@@ -623,7 +623,7 @@ class FuzzerProfile:
             list(payload.get("exclude_patterns", [])),
             list(payload.get("exclude_function_patterns", [])),
         )
-        profile.functions_unreached_by_fuzzer = list(
+        profile.functions_unreached_by_fuzzer = set(
             payload.get("functions_unreached_by_fuzzer", []))
         profile.total_basic_blocks = payload.get("total_basic_blocks", 0)
         profile.total_cyclomatic_complexity = payload.get(
@@ -754,16 +754,18 @@ class FuzzerProfile:
         self.file_targets = filtered_file_targets
         self._file_targets_cache_version += 1
         self._invalidate_is_file_covered_cache()
-        self.functions_reached_by_fuzzer = [
-            func for func in self.functions_reached_by_fuzzer
+        self.functions_reached_by_fuzzer = {
+            func
+            for func in self.functions_reached_by_fuzzer
             if not self._should_exclude_function_name(func)
             and func not in removed_function_names
-        ]
-        self.functions_reached_by_fuzzer_runtime = [
-            func for func in self.functions_reached_by_fuzzer_runtime
+        }
+        self.functions_reached_by_fuzzer_runtime = {
+            func
+            for func in self.functions_reached_by_fuzzer_runtime
             if not self._should_exclude_function_name(func)
             and func not in removed_function_names
-        ]
+        }
         self._set_all_unreached_functions()
 
     def get_cov_uncovered_reachable_funcs(self) -> List[str]:
@@ -921,18 +923,18 @@ class FuzzerProfile:
         if (self._target_lang == "c-cpp" or self.target_lang == "rust"
                 or self.target_lang == "go"):
             if self.entrypoint_function in self.all_class_functions:
-                self.functions_reached_by_fuzzer = self.all_class_functions[
-                    self.entrypoint_function].functions_reached
-                self.functions_reached_by_fuzzer.append(
-                    self.entrypoint_function)
+                self.functions_reached_by_fuzzer = set(
+                    self.all_class_functions[
+                        self.entrypoint_function].functions_reached)
+                self.functions_reached_by_fuzzer.add(self.entrypoint_function)
                 return
 
         # Find Python entrypoint
         elif self._target_lang == "python":
             ep_key = f"{self.entrypoint_mod}.{self.entrypoint_fun}"
             reached = self.all_class_functions[ep_key].functions_reached
-            self.functions_reached_by_fuzzer = reached
-            self.functions_reached_by_fuzzer.append(self.entrypoint_function)
+            self.functions_reached_by_fuzzer = set(reached)
+            self.functions_reached_by_fuzzer.add(self.entrypoint_function)
             return
 
         # Find JVM entrypoint
@@ -943,9 +945,9 @@ class FuzzerProfile:
                     entrypoint = name
                     break
             if entrypoint:
-                self.functions_reached_by_fuzzer = self.all_class_functions[
-                    entrypoint].functions_reached
-                self.functions_reached_by_fuzzer.append(entrypoint)
+                self.functions_reached_by_fuzzer = set(
+                    self.all_class_functions[entrypoint].functions_reached)
+                self.functions_reached_by_fuzzer.add(entrypoint)
                 return
 
     def _set_all_unreached_functions(self) -> None:
@@ -953,10 +955,11 @@ class FuzzerProfile:
         statically unreached. This is computed as the set difference between
         self.all_class_functions and self.functions_reached_by_fuzzer.
         """
-        self.functions_unreached_by_fuzzer = [
-            f.function_name for f in self.all_class_functions.values()
+        self.functions_unreached_by_fuzzer = {
+            f.function_name
+            for f in self.all_class_functions.values()
             if f.function_name not in self.functions_reached_by_fuzzer
-        ]
+        }
 
     def _set_all_reached_functions_runtime(self) -> None:
         """Sets self.functions_reached_by_fuzzer_runtime to all functions
@@ -970,7 +973,7 @@ class FuzzerProfile:
 
         for func_name in self.coverage.covmap:
             if self.coverage.is_func_hit(func_name):
-                self.functions_reached_by_fuzzer_runtime.append(func_name)
+                self.functions_reached_by_fuzzer_runtime.add(func_name)
 
     def _load_coverage(self, target_folder: str) -> None:
         """Load coverage data for this profile"""

@@ -206,6 +206,10 @@ class MergedProjectProfile:
             # identify blockers based on all fuzz targets coverage
         self._set_basefolder()
         self._set_fd_cache()
+        # Cached complexity/count results (computed lazily on first access)
+        self._total_complexity_cache: Tuple[int, int] | None = None
+        self._reached_count_cache: int | None = None
+        self._unreached_count_cache: int | None = None
         logger.info("Completed creationg of merged profile")
 
     def get_all_runtime_covered_functions(self) -> List[str]:
@@ -513,20 +517,28 @@ class MergedProjectProfile:
         self.basefolder = utils.longest_common_prefix(all_strs) + "/"
 
     def _get_total_unreached_function_count(self) -> int:
+        if self._unreached_count_cache is not None:
+            return self._unreached_count_cache
         unreached_function_count = 0
         for fd in self.get_all_functions_with_source().values():
             if fd.hitcount == 0:
                 unreached_function_count += 1
-        return unreached_function_count
+        self._unreached_count_cache = unreached_function_count
+        return self._unreached_count_cache
 
     def _get_total_reached_function_count(self) -> int:
+        if self._reached_count_cache is not None:
+            return self._reached_count_cache
         reached_function_count = 0
         for fd in self.get_all_functions_with_source().values():
             if fd.hitcount != 0:
                 reached_function_count += 1
-        return reached_function_count
+        self._reached_count_cache = reached_function_count
+        return self._reached_count_cache
 
     def _get_total_complexity(self) -> Tuple[int, int]:
+        if self._total_complexity_cache is not None:
+            return self._total_complexity_cache
         reached_complexity = 0
         unreached_complexity = 0
         for fd in self.get_all_functions_with_source().values():
@@ -534,7 +546,9 @@ class MergedProjectProfile:
                 unreached_complexity += fd.cyclomatic_complexity
             else:
                 reached_complexity += fd.cyclomatic_complexity
-        return reached_complexity, unreached_complexity
+        self._total_complexity_cache = (reached_complexity,
+                                        unreached_complexity)
+        return self._total_complexity_cache
 
     def get_all_functions(self) -> Dict[str, function_profile.FunctionProfile]:
         """Returns all function profiles of this project. This includes both
