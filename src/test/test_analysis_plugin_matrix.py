@@ -26,9 +26,10 @@ from fuzz_introspector import analysis
 from fuzz_introspector import cli
 from fuzz_introspector import commands
 from fuzz_introspector import html_report
+from fuzz_introspector.analyses import calltree_analysis as ct_module
+from fuzz_introspector.analyses import sinks_analyser as sinks_module
 from fuzz_introspector.analyses import optimal_targets as ot_module
 from fuzz_introspector.analyses import runtime_coverage_analysis as rca_module
-from fuzz_introspector.analyses import calltree_analysis as ct_module
 
 
 def test_all_registered_analysis_plugins_have_unique_names() -> None:
@@ -695,6 +696,16 @@ def _make_calltree_native_result(total, reached, unreached, pct):
     return {"calltree_analysis": {"tables": {"calltree_nodes": [row]}, "summary": ""}}
 
 
+def _make_sink_native_result(rows):
+    """Build a valid native result dict for sink_coverage_analysis."""
+    return {
+        "sink_coverage_analysis": {
+            "tables": {"sink_coverage": rows},
+            "summary": "",
+        }
+    }
+
+
 # ── OptimalTargets plugin wiring ──────────────────────────────────────────────
 
 
@@ -1071,6 +1082,133 @@ def test_calltree_returns_empty_string_when_rust_returns_empty(
 
     assert result == ""
     assert instance.json_string_result == "[]"
+
+
+# ── SinkCoverageAnalyser plugin wiring ───────────────────────────────────────
+
+
+def test_sink_coverage_uses_native_targets_when_available(monkeypatch) -> None:
+    """When native sink rows exist, per-CWE sink targets are passed downstream."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    sink_function = _make_fake_func_profile("system")
+    proj_profile = _make_full_fake_proj_profile(["system"], has_coverage=True)
+    proj_profile.runtime_coverage = mock.MagicMock()
+    profiles = [mock.MagicMock(target_lang="c-cpp")]
+
+    proxy = mock.MagicMock()
+    proxy.run_analysis.return_value = _make_sink_native_result(
+        [{"func_name": "system", "cwe": "CWE78"}]
+    )
+
+    instance = sinks_module.SinkCoverageAnalyser()
+    instance.display_html = False
+
+    def _fake_rows(*args, **kwargs):
+        cwe = args[4]
+        return "", json.dumps({cwe: []}), args[7]
+
+    with (
+        mock.patch.object(
+            instance,
+            "_retrieve_data_list",
+            return_value=([], [sink_function], ["fuzzer.cc"]),
+        ),
+        mock.patch.object(
+            instance, "_retrieve_content_rows", side_effect=_fake_rows
+        ) as rows_mock,
+        mock.patch(
+            "fuzz_introspector.analyses.sinks_analyser.analysis.get_native_plugin_proxy",
+            return_value=proxy,
+        ),
+        mock.patch(
+            "fuzz_introspector.analyses.sinks_analyser.html_helpers"
+            ".html_add_header_with_link",
+            return_value="",
+        ),
+        mock.patch(
+            "fuzz_introspector.analyses.sinks_analyser.json_report"
+            ".add_analysis_json_str_as_dict_to_report"
+        ),
+    ):
+        instance.analysis_func(
+            table_of_contents=mock.MagicMock(),
+            tables=[],
+            proj_profile=proj_profile,
+            profiles=profiles,
+            basefolder="",
+            coverage_url="",
+            conclusions=[],
+            out_dir=".",
+        )
+
+    proxy.run_analysis.assert_called_once_with(
+        proj_profile, profiles, ["sink_coverage_analysis"]
+    )
+    cwe_to_sink_arg = {
+        call.args[4]: call.kwargs.get("sink_functions")
+        for call in rows_mock.call_args_list
+    }
+    assert cwe_to_sink_arg["CWE78"] == [sink_function]
+    assert cwe_to_sink_arg["CWE79"] == []
+
+
+def test_sink_coverage_falls_back_when_native_sink_rows_empty(monkeypatch) -> None:
+    """When native sink table is empty, Python sink filtering path stays active."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    proj_profile = _make_full_fake_proj_profile(["system"], has_coverage=True)
+    proj_profile.runtime_coverage = mock.MagicMock()
+    profiles = [mock.MagicMock(target_lang="c-cpp")]
+
+    proxy = mock.MagicMock()
+    proxy.run_analysis.return_value = _make_sink_native_result([])
+
+    instance = sinks_module.SinkCoverageAnalyser()
+    instance.display_html = False
+
+    def _fake_rows(*args, **kwargs):
+        cwe = args[4]
+        return "", json.dumps({cwe: []}), args[7]
+
+    with (
+        mock.patch.object(
+            instance,
+            "_retrieve_data_list",
+            return_value=([], [_make_fake_func_profile("system")], ["fuzzer.cc"]),
+        ),
+        mock.patch.object(
+            instance, "_retrieve_content_rows", side_effect=_fake_rows
+        ) as rows_mock,
+        mock.patch(
+            "fuzz_introspector.analyses.sinks_analyser.analysis.get_native_plugin_proxy",
+            return_value=proxy,
+        ),
+        mock.patch(
+            "fuzz_introspector.analyses.sinks_analyser.html_helpers"
+            ".html_add_header_with_link",
+            return_value="",
+        ),
+        mock.patch(
+            "fuzz_introspector.analyses.sinks_analyser.json_report"
+            ".add_analysis_json_str_as_dict_to_report"
+        ),
+    ):
+        instance.analysis_func(
+            table_of_contents=mock.MagicMock(),
+            tables=[],
+            proj_profile=proj_profile,
+            profiles=profiles,
+            basefolder="",
+            coverage_url="",
+            conclusions=[],
+            out_dir=".",
+        )
+
+    assert rows_mock.call_count == len(sinks_module.CWES)
+    assert all(
+        call.kwargs.get("sink_functions") is None for call in rows_mock.call_args_list
+    )
 
 
 # ── FunctionTable native plugin wiring ───────────────────────────────────────

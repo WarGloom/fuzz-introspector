@@ -165,24 +165,88 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
                 fuzzer_name = fuzzer_name.rsplit("/", 1)[1]
             fuzzer_name_list.append(fuzzer_name)
 
-            # Retrieve all call sites
-            if profile.fuzzer_callsite_calltree is not None:
-                callsite_list.extend(
-                    cfg_load.extract_all_callsites(profile.fuzzer_callsite_calltree)
-                )
-
             # Retrieve all functions
             for key, function in profile.all_class_functions.items():
                 if key not in function_name_list:
                     function_list.append(function)
                     function_name_list.append(function.function_name)
 
-        # Make the list unique
-        callsite_list = list(set(callsite_list))
+        # callsite_list is retained for backward compatibility with callers,
+        # but this analyser no longer needs to precompute all callsites.
         function_list = list(set(function_list))
         fuzzer_name_list = list(set(fuzzer_name_list))
 
         return (callsite_list, function_list, fuzzer_name_list)
+
+    def _retrieve_native_sink_targets(
+        self,
+        proj_profile: project_profile.MergedProjectProfile,
+        profiles: list[fuzzer_profile.FuzzerProfile],
+        functions: list[function_profile.FunctionProfile],
+    ) -> Optional[dict[str, list[function_profile.FunctionProfile]]]:
+        """Return per-CWE sink function targets from native results when usable.
+
+        Native rows are only used when they are present and structurally valid.
+        Any malformed or empty native payload falls back to the Python filter
+        path to preserve output compatibility.
+        """
+        if not analysis.NativePluginProxy.is_enabled():
+            return None
+
+        try:
+            native_result = analysis.get_native_plugin_proxy().run_analysis(
+                proj_profile, profiles, ["sink_coverage_analysis"]
+            )
+            native_rows = native_result["sink_coverage_analysis"]["tables"][
+                "sink_coverage"
+            ]
+        except (KeyError, IndexError, TypeError):
+            return None
+
+        if not native_rows:
+            return None
+
+        known_function_map = {
+            fd.function_name: fd
+            for fd in functions
+            if isinstance(fd.function_name, str) and fd.function_name
+        }
+        sink_targets_by_cwe: dict[str, list[function_profile.FunctionProfile]] = {
+            cwe: [] for cwe in CWES
+        }
+
+        seen_sink_targets: set[tuple[str, str]] = set()
+        for row in native_rows:
+            if not isinstance(row, dict):
+                return None
+
+            cwe = row.get("cwe")
+            func_name = row.get("func_name")
+            if (
+                not isinstance(cwe, str)
+                or not isinstance(func_name, str)
+                or cwe not in sink_targets_by_cwe
+            ):
+                return None
+
+            if (cwe, func_name) in seen_sink_targets:
+                continue
+
+            matched_function = known_function_map.get(func_name)
+            if matched_function is None:
+                continue
+
+            sink_targets_by_cwe[cwe].append(matched_function)
+            seen_sink_targets.add((cwe, func_name))
+
+        if not any(sink_targets_by_cwe.values()):
+            return None
+
+        logger.info(
+            "[native] SinkCoverageAnalyser: using Rust sink candidates (%d matched sinks)",
+            len(seen_sink_targets),
+        )
+        return sink_targets_by_cwe
 
     def _handle_function_name(self, callsite: cfg_load.CalltreeCallsite) -> str:
         """
@@ -610,6 +674,7 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         index: int,
         handled_sink: dict[str, str],
         out_dir: str,
+        sink_functions: Optional[list[function_profile.FunctionProfile]] = None,
     ) -> tuple[str, str, int]:
         """
         Retrieve the content for this analyser for a specific cwe
@@ -620,7 +685,13 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         html_string = ""
         json_list = []
 
-        for fd in self._filter_function_list(functions, target_lang, cwe):
+        target_sink_functions = sink_functions
+        if target_sink_functions is None:
+            target_sink_functions = self._filter_function_list(
+                functions, target_lang, cwe
+            )
+
+        for fd in target_sink_functions:
             json_dict: dict[str, Any] = {}
             callpath_list, callpath_name_list = proj_profile.get_function_callpaths(
                 fd, []
@@ -768,6 +839,9 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         _, function_list, fuzzer_name_list = self._retrieve_data_list(
             proj_profile, profiles
         )
+        native_sink_targets = self._retrieve_native_sink_targets(
+            proj_profile, profiles, function_list
+        )
 
         logger.info(fuzzer_name_list)
 
@@ -785,6 +859,10 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
             logger.info(" - Running analysis %s for %s", self.get_name(), cwe)
 
             # Retrieve table content rows
+            sink_functions = None
+            if native_sink_targets is not None:
+                sink_functions = native_sink_targets.get(cwe, [])
+
             html_rows, json_row, index = self._retrieve_content_rows(
                 function_list,
                 proj_profile,
@@ -795,6 +873,7 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
                 index,
                 handled_sink,
                 out_dir,
+                sink_functions=sink_functions,
             )
 
             self.set_json_string_result(json_row)
