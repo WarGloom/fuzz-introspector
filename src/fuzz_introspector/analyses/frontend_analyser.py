@@ -217,7 +217,7 @@ class FrontendAnalyser(analysis.AnalysisInterface):
         functions: list[function_profile.FunctionProfile] = []
         for profile in profiles:
             functions.extend(profile.all_class_functions.values())
-        func_names = [f.function_name.split("::")[-1] for f in functions]
+        func_names = {f.function_name.split("::")[-1] for f in functions}
 
         # Get test files from json
         test_files = set()
@@ -256,7 +256,7 @@ class FrontendAnalyser(analysis.AnalysisInterface):
         query = tree_sitter_utils.get_query(tree_sitter_lang, QUERY)
         for test_file in test_files:
             func_call_list = []
-            handled = []
+            handled = set()
 
             # Tree sitter parsing of the test filees
             node = None
@@ -369,7 +369,7 @@ class FrontendAnalyser(analysis.AnalysisInterface):
                 if key in handled:
                     continue
 
-                handled.append(key)
+                handled.add(key)
                 func_call_list.append({
                     "function_name": name,
                     "params": filtered,
