@@ -66,6 +66,13 @@ Baseline files:
 - Python — `.work/baselines/cgserver-full_baseline.json` (timestamp `20260302_182612`)
 - Rust — `.work/baselines/cgserver-full_rust_baseline.json` (timestamp `20260303_184339`)
 
+Post native-dispatch caching validation (Rust, 2-run, `2026-03-03`):
+- Avg wall: `88.07 s` (run1 `90.84 s`, run2 `85.30 s`)
+- Avg RSS: `6,499.59 MB` (run1 `6,597.19 MB`, run2 `6,401.99 MB`)
+- Output parity: hash `3e0a44d44abbf1d3968e2d3e2223045618ffeeb3e37776a6b75c1c9853c2061b` (both runs)
+- Delta vs Rust 3-run baseline (`99.03 s / 6,386.69 MB`): `-10.96 s` wall (`-11.07%`), `+112.90 MB` RSS (`+1.77%`)
+- Delta vs prior Rust 2-run validation (`84.56 s / 6,372.55 MB`): `+3.51 s` wall (`+4.15%`), `+127.04 MB` RSS (`+1.99%`)
+
 ---
 
 ## Stability Results (Rust, 10-run test)
