@@ -19,6 +19,7 @@ This module provides functions to parse and extract debug information
 from various sources, including DWARF debug info and other debug formats.
 """
 
+import collections
 import hashlib
 import json
 import logging
@@ -1453,12 +1454,15 @@ def create_friendly_debug_types(debug_type_dictionary,
     if not dump_files:
         return
 
-    member_entries_by_scope: dict[int, list[dict[str, Any]]] = {}
+    # Performance: Use defaultdict to avoid creating empty lists on every iteration
+    # as happens with dict.setdefault(key, [])
+    member_entries_by_scope: dict[int, list[dict[
+        str, Any]]] = collections.defaultdict(list)
     for elem_addr, elem_val in debug_type_dictionary.items():
         if elem_val["tag"] != "DW_TAG_member":
             continue
         scope_addr = int(elem_val["scope"])
-        member_entries_by_scope.setdefault(scope_addr, []).append({
+        member_entries_by_scope[scope_addr].append({
             "addr":
             elem_addr,
             "elem_name":
