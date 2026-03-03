@@ -40,6 +40,7 @@ tools/native_llvm_cov_loader_cpp/native_llvm_cov_loader_cpp
 tools/native_yaml_loader_cpp/native_yaml_loader_cpp
 tools/native_debug_correlator_rust/target/
 tools/native_analysis_plugins_rust/target/
+tools/native_reachability_rust/target/
 tools/native_debug_correlator_go/native_debug_correlator_go
 tools/native_overlay_backend_go/native_overlay_backend_go
 tools/native_overlay_backend_rust/target/
