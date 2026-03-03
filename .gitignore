@@ -8,6 +8,7 @@ tmp
 *.profile
 *fuzz_report.html
 .serena
+.claude
 
 __pycache__/
 *.py[cod]
