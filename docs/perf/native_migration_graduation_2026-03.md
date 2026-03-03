@@ -166,7 +166,7 @@ BACKEND_CPP removal) are present in the branch history and covered by the parity
 | Item | Notes |
 |------|-------|
 | Go backend | Fully functional alternative (`--backend go`); 94.19 s / 5,768 MB on cgserver. Not the default; available for comparison or fallback. |
-| Stage markers | `stage_markers.py` emits per-phase timing to `<out_dir>/stage_markers.log`. Useful for future profiling; not yet integrated into CI dashboards. |
+| Stage markers | `stage_markers.py` emits per-phase timing to `<out_dir>/stage_markers.log`; regression gate runs via `python benchmarks/run_stage_marker_gate.py --baseline-log <...> --candidate-log <...> --output-json .work/benchmarks/cgserver/stage_gate/<ts>/stage_gate_validation.json`. |
 | simdjson corpus | Dropped from benchmarks — the local copy was a symlink to cgserver data. There is no independent simdjson dataset; cgserver is the sole benchmark corpus. |
 | Sprint 3 plugins (parallel) | Rust analysis plugin parallelism is wired and passing parity. Full plugin-level parallelism tuning is a post-graduation follow-on. |
 | 30-day production monitoring | Per the migration plan: track crash rate (<0.1%), fallback rate (<2%), and per-project performance for 30 days after enabling by default. |

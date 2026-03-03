@@ -29,7 +29,36 @@ Recent findings on `memory-improvements` indicate:
 
 1. **Payload trimming for native plugin calls** (`src/fuzz_introspector/analysis.py`): remove non-essential fields for each requested plugin key.
 2. **Stage marker CI smoke gate** (`src/fuzz_introspector/stage_markers.py` + test harness): fail CI when key stage deltas regress above agreed threshold.
-   - Gate command: `python benchmarks/validate_stage_marker_regression.py --baseline-log <baseline-stage-markers.log> --candidate-log <candidate-stage-markers.log> --stages optional_analyses,report_generation --max-regression-percent 10 --output-json .work/stage-marker-gate.json`
+   - Gate command (direct): `python benchmarks/validate_stage_marker_regression.py --baseline-log <baseline-stage-markers.log> --candidate-log <candidate-stage-markers.log> --stages optional_analyses,report_generation --max-regression-percent 10 --output-json .work/stage-marker-gate.json`
+   - Gate command (helper): `python benchmarks/run_stage_marker_gate.py --baseline-log <baseline-stage-markers.log> --candidate-log <candidate-stage-markers.log> --output-json .work/stage-marker-gate.json`
+
+### Real cgserver run usage
+
+```bash
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+OUT_BASE=".work/benchmarks/cgserver/stage_gate/${TS}"
+mkdir -p "$OUT_BASE/baseline" "$OUT_BASE/candidate"
+
+# Run baseline and candidate with rust backends and stage marker output enabled.
+for SIDE in baseline candidate; do
+  FI_NATIVE_BACKENDS=rust \
+  FI_NATIVE_PLUGINS=rust \
+  MPLBACKEND=Agg \
+  PATH="$(pwd)/tools/native_analysis_plugins_rust/target/release:${PATH}" \
+  FI_PROFILE_YAML_LOADER_RUST_BIN="$(pwd)/tools/native_yaml_loader_rust/target/release/native_yaml_loader_rust" \
+  FI_DEBUG_YAML_LOADER_RUST_BIN="$(pwd)/tools/native_yaml_loader_rust/target/release/native_yaml_loader_rust" \
+  FI_LLVM_COV_LOADER_RUST_BIN="$(pwd)/tools/native_llvm_cov_loader_rust/target/release/native_llvm_cov_loader_rust" \
+  FI_DEBUG_CORRELATOR_RUST_BIN="$(pwd)/tools/native_debug_correlator_rust/target/release/native_debug_correlator_rust" \
+  /usr/bin/time -v -o "$OUT_BASE/${SIDE}/time.log" \
+    .venv/bin/python -c "import os,sys; from fuzz_introspector import commands; analyses=['OptimalTargets','RuntimeCoverageAnalysis','FuzzCalltreeAnalysis']; rc,_=commands.run_analysis_on_dir('/home/nikita/work/Projects/cg/cgserver/build-introspector-full-2/introspector/','/covreport/linux',analyses,'',False,'cgserver-stage-gate','c-cpp',None,skip_html_report=False,out_dir=os.getcwd()); sys.exit(rc)" \
+    > "$OUT_BASE/${SIDE}/run.log" 2>&1
+done
+
+python benchmarks/run_stage_marker_gate.py \
+  --baseline-log "$OUT_BASE/baseline/stage_markers.log" \
+  --candidate-log "$OUT_BASE/candidate/stage_markers.log" \
+  --output-json "$OUT_BASE/stage_gate_validation.json"
+```
 3. **Correlator clone minimization (targeted)** (`tools/native_debug_correlator_rust/src/main.rs`): replace obvious per-row string clone paths in cached record fan-out.
 
 ### Bigger Bets
