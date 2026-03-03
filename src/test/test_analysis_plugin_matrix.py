@@ -524,6 +524,81 @@ def test_native_proxy_function_table_uses_slim_payload(monkeypatch) -> None:
         assert set(function_entry.keys()) == {"name", "total_cyclomatic_complexity"}
 
 
+def test_native_proxy_caches_results_for_repeated_calls(monkeypatch) -> None:
+    """Repeated requests for same plugin set are served from proxy cache."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    fake_proc = _make_native_proc(
+        _make_optimal_targets_native_result(["alpha"]),
+    )
+    proj_profile = _make_full_fake_proj_profile(["alpha"])
+    proxy = analysis.NativePluginProxy()
+
+    with (
+        mock.patch.object(
+            analysis.NativePluginProxy,
+            "find_binary",
+            return_value="/usr/bin/native_analysis_plugins_rust",
+        ),
+        mock.patch(
+            "fuzz_introspector.analysis.subprocess.run",
+            return_value=fake_proc,
+        ) as run_mock,
+    ):
+        first = proxy.run_analysis(proj_profile, [], ["optimal_targets"])
+        second = proxy.run_analysis(proj_profile, [], ["optimal_targets"])
+
+    assert "optimal_targets" in first
+    assert "optimal_targets" in second
+    assert run_mock.call_count == 1
+
+
+def test_native_proxy_prefetches_once_and_reuses_cached_plugin_results(
+    monkeypatch,
+) -> None:
+    """First full-plugin call prefetches native plugins and caches follow-up calls."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    fake_proc = _make_native_proc(
+        {
+            **_make_optimal_targets_native_result(["alpha"]),
+            **_make_runtime_cov_native_result(["alpha"]),
+            **_make_calltree_native_result(10, 1, 9, 10.0),
+        }
+    )
+    proj_profile = _make_full_fake_proj_profile(["alpha"], has_coverage=True)
+    proxy = analysis.NativePluginProxy()
+
+    with (
+        mock.patch.object(
+            analysis.NativePluginProxy,
+            "find_binary",
+            return_value="/usr/bin/native_analysis_plugins_rust",
+        ),
+        mock.patch(
+            "fuzz_introspector.analysis.subprocess.run",
+            return_value=fake_proc,
+        ) as run_mock,
+    ):
+        first = proxy.run_analysis(proj_profile, [], ["optimal_targets"])
+        second = proxy.run_analysis(proj_profile, [], ["runtime_coverage_analysis"])
+
+    assert "optimal_targets" in first
+    assert "runtime_coverage_analysis" in second
+    assert run_mock.call_count == 1
+
+
+def test_get_native_plugin_proxy_returns_shared_instance() -> None:
+    previous_proxy = analysis._NATIVE_PLUGIN_PROXY
+    try:
+        analysis._NATIVE_PLUGIN_PROXY = None
+        first = analysis.get_native_plugin_proxy()
+        second = analysis.get_native_plugin_proxy()
+        assert first is second
+    finally:
+        analysis._NATIVE_PLUGIN_PROXY = previous_proxy
+
+
 # ── Plugin wiring tests ───────────────────────────────────────────────────────
 
 

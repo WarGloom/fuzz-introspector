@@ -173,6 +173,20 @@ class NativePluginProxy:
     NATIVE_BINARY = "native_analysis_plugins_rust"
     SCHEMA_VERSION = 1
     TIMEOUT_SECONDS = 300
+    _FULL_PAYLOAD_PLUGIN_NAMES: tuple[str, ...] = (
+        "optimal_targets",
+        "runtime_coverage_analysis",
+        "calltree_analysis",
+        "sink_coverage_analysis",
+    )
+
+    def __init__(self) -> None:
+        self._serialized_payload_cache: dict[tuple[str, int, int], bytes] = {}
+        self._result_cache_by_plugin_set: dict[
+            tuple[int, int, tuple[str, ...]], dict[str, dict[str, Any]]
+        ] = {}
+        self._result_cache_by_plugin: dict[tuple[int, int, str], dict[str, Any]] = {}
+        self._prefetch_done_for_project: set[tuple[int, int]] = set()
 
     @staticmethod
     def is_enabled() -> bool:
@@ -199,47 +213,67 @@ class NativePluginProxy:
         """Return the absolute path to the Rust binary, or None."""
         return shutil.which(NativePluginProxy.NATIVE_BINARY)
 
-    def run_analysis(
+    def _project_cache_key(
         self,
         proj_profile_obj: "project_profile.MergedProjectProfile",
         profiles_list: "List[fuzzer_profile.FuzzerProfile]",
-        plugin_names: List[str],
-    ) -> dict:
-        """Run ``plugin_names`` via the native binary.
+    ) -> tuple[int, int]:
+        return (id(proj_profile_obj), id(profiles_list))
 
-        :returns: A dict mapping plugin name → raw result dict.  Returns an
-                  empty dict on any error (caller must run Python fallback).
-        """
-        native_bin = self.find_binary()
-        if not native_bin:
-            logger.warning(
-                "[native-plugins] binary %r not found on PATH; "
-                "all plugins will use Python path",
-                self.NATIVE_BINARY,
-            )
-            return {}
+    def _build_payload_bytes(
+        self,
+        proj_profile_obj: "project_profile.MergedProjectProfile",
+        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
+        plugin_names: tuple[str, ...],
+    ) -> bytes:
+        use_function_table_slim_payload = plugin_names == ("function_table",)
+        project_key = self._project_cache_key(proj_profile_obj, profiles_list)
+        payload_key = (
+            "function_table" if use_function_table_slim_payload else "full",
+            project_key[0],
+            project_key[1],
+        )
+        project_data_bytes = self._serialized_payload_cache.get(payload_key)
+        if project_data_bytes is None:
+            if use_function_table_slim_payload:
+                project_data = _serialize_project_for_native_function_table(
+                    proj_profile_obj
+                )
+            else:
+                project_data = _serialize_project_for_native(
+                    proj_profile_obj, profiles_list
+                )
+            project_data_bytes = json.dumps(project_data).encode()
+            self._serialized_payload_cache[payload_key] = project_data_bytes
 
-        if plugin_names == ["function_table"]:
-            project_data = _serialize_project_for_native_function_table(
-                proj_profile_obj
-            )
-        else:
-            project_data = _serialize_project_for_native(
-                proj_profile_obj, profiles_list
-            )
+        payload = b"".join(
+            [
+                b'{"schema_version":',
+                str(self.SCHEMA_VERSION).encode(),
+                b',"plugins":',
+                json.dumps(list(plugin_names)).encode(),
+                b',"project_data":',
+                project_data_bytes,
+                b"}",
+            ]
+        )
+        return payload
 
-        payload = json.dumps(
-            {
-                "schema_version": self.SCHEMA_VERSION,
-                "plugins": plugin_names,
-                "project_data": project_data,
-            }
+    def _dispatch_to_native(
+        self,
+        native_bin: str,
+        proj_profile_obj: "project_profile.MergedProjectProfile",
+        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
+        plugin_names: tuple[str, ...],
+    ) -> dict[str, dict[str, Any]]:
+        payload = self._build_payload_bytes(
+            proj_profile_obj, profiles_list, plugin_names
         )
 
         try:
             proc = subprocess.run(
                 [native_bin],
-                input=payload.encode(),
+                input=payload,
                 capture_output=True,
                 timeout=self.TIMEOUT_SECONDS,
             )
@@ -287,7 +321,159 @@ class NativePluginProxy:
             )
             return {}
 
-        return response.get("results", {})
+        raw_results = response.get("results", {})
+        if not isinstance(raw_results, dict):
+            return {}
+
+        results: dict[str, dict[str, Any]] = {}
+        for plugin_name, plugin_result in raw_results.items():
+            if isinstance(plugin_name, str) and isinstance(plugin_result, dict):
+                results[plugin_name] = plugin_result
+        return results
+
+    def _cache_results(
+        self,
+        proj_profile_obj: "project_profile.MergedProjectProfile",
+        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
+        plugin_names: tuple[str, ...],
+        results: dict[str, dict[str, Any]],
+    ) -> None:
+        project_key = self._project_cache_key(proj_profile_obj, profiles_list)
+        self._result_cache_by_plugin_set[
+            (project_key[0], project_key[1], plugin_names)
+        ] = results
+        for plugin_name, plugin_result in results.items():
+            self._result_cache_by_plugin[
+                (project_key[0], project_key[1], plugin_name)
+            ] = plugin_result
+
+    def _get_cached_plugin_results(
+        self,
+        proj_profile_obj: "project_profile.MergedProjectProfile",
+        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
+        plugin_names: tuple[str, ...],
+    ) -> Optional[dict[str, dict[str, Any]]]:
+        project_key = self._project_cache_key(proj_profile_obj, profiles_list)
+        by_set = self._result_cache_by_plugin_set.get(
+            (project_key[0], project_key[1], plugin_names)
+        )
+        if by_set is not None:
+            return by_set
+
+        collected: dict[str, dict[str, Any]] = {}
+        for plugin_name in plugin_names:
+            plugin_result = self._result_cache_by_plugin.get(
+                (project_key[0], project_key[1], plugin_name)
+            )
+            if plugin_result is None:
+                return None
+            collected[plugin_name] = plugin_result
+        return collected
+
+    def _maybe_prefetch_full_payload_plugins(
+        self,
+        native_bin: str,
+        proj_profile_obj: "project_profile.MergedProjectProfile",
+        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
+        plugin_names: tuple[str, ...],
+    ) -> None:
+        project_key = self._project_cache_key(proj_profile_obj, profiles_list)
+        if project_key in self._prefetch_done_for_project:
+            return
+
+        requires_full_payload = any(name != "function_table" for name in plugin_names)
+        if not requires_full_payload:
+            return
+
+        prefetch_results = self._dispatch_to_native(
+            native_bin,
+            proj_profile_obj,
+            profiles_list,
+            self._FULL_PAYLOAD_PLUGIN_NAMES,
+        )
+        self._prefetch_done_for_project.add(project_key)
+        if prefetch_results:
+            self._cache_results(
+                proj_profile_obj,
+                profiles_list,
+                self._FULL_PAYLOAD_PLUGIN_NAMES,
+                prefetch_results,
+            )
+
+    def run_analysis(
+        self,
+        proj_profile_obj: "project_profile.MergedProjectProfile",
+        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
+        plugin_names: List[str],
+    ) -> dict:
+        """Run ``plugin_names`` via the native binary.
+
+        :returns: A dict mapping plugin name → raw result dict.  Returns an
+                  empty dict on any error (caller must run Python fallback).
+        """
+        if not plugin_names:
+            return {}
+
+        normalized_plugin_names = tuple(plugin_names)
+        cached_results = self._get_cached_plugin_results(
+            proj_profile_obj, profiles_list, normalized_plugin_names
+        )
+        if cached_results is not None:
+            return cached_results
+
+        native_bin = self.find_binary()
+        if not native_bin:
+            logger.warning(
+                "[native-plugins] binary %r not found on PATH; "
+                "all plugins will use Python path",
+                self.NATIVE_BINARY,
+            )
+            return {}
+
+        self._maybe_prefetch_full_payload_plugins(
+            native_bin, proj_profile_obj, profiles_list, normalized_plugin_names
+        )
+
+        cached_results = self._get_cached_plugin_results(
+            proj_profile_obj, profiles_list, normalized_plugin_names
+        )
+        if cached_results is not None:
+            return cached_results
+
+        results = self._dispatch_to_native(
+            native_bin,
+            proj_profile_obj,
+            profiles_list,
+            normalized_plugin_names,
+        )
+        if not results:
+            return {}
+
+        self._cache_results(
+            proj_profile_obj,
+            profiles_list,
+            normalized_plugin_names,
+            results,
+        )
+
+        cached_results = self._get_cached_plugin_results(
+            proj_profile_obj, profiles_list, normalized_plugin_names
+        )
+        if cached_results is not None:
+            return cached_results
+
+        return {}
+
+
+_NATIVE_PLUGIN_PROXY: NativePluginProxy | None = None
+
+
+def get_native_plugin_proxy() -> NativePluginProxy:
+    """Returns a process-level proxy instance used by report generation."""
+    global _NATIVE_PLUGIN_PROXY
+    if _NATIVE_PLUGIN_PROXY is None:
+        _NATIVE_PLUGIN_PROXY = NativePluginProxy()
+    return _NATIVE_PLUGIN_PROXY
 
 
 _SOURCES_SCAN_CACHE: dict[tuple[str, tuple[str, ...], str, str], frozenset[str]] = {}

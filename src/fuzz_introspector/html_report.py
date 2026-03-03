@@ -589,7 +589,7 @@ def _get_native_function_table_order(
     if not analysis.NativePluginProxy.is_enabled():
         return None
     try:
-        native_result = analysis.NativePluginProxy().run_analysis(
+        native_result = analysis.get_native_plugin_proxy().run_analysis(
             proj_profile, [], ["function_table"]
         )
         function_table_result = native_result.get("function_table", {})
