@@ -64,6 +64,7 @@ CALLTREE_BITMAP_MAX_NODES_DEFAULT = 999999
 STAGE_WARN_SECONDS_ENV = "FI_STAGE_WARN_SECONDS"
 STAGE_WARN_SECONDS_DEFAULT = 0
 TABLE_ID_STRIDE = 100000
+_NATIVE_FUNCTION_TABLE_ORDER_CACHE: Dict[int, Optional[List[str]]] = {}
 
 
 def _parse_parallel_worker_count() -> int:
@@ -589,12 +590,28 @@ def _get_native_function_table_order(
         return None
     try:
         native_result = analysis.NativePluginProxy().run_analysis(
-            proj_profile, [], ["function_table"])
-        rows = native_result["function_table"]["tables"]["all_functions_table"]
+            proj_profile, [], ["function_table"]
+        )
+        function_table_result = native_result.get("function_table", {})
+        function_table_tables = function_table_result.get("tables", {})
+
+        # New compact response: list[str]
+        ordered_names = function_table_tables.get("ordered_function_names", [])
+        if ordered_names:
+            ordered = [name for name in ordered_names if isinstance(name, str)]
+            logger.debug(
+                "[native] function_table: using compact Rust sort order (%d functions)",
+                len(ordered),
+            )
+            return ordered
+
+        # Backward-compatible response: list[dict] rows with ``name`` key.
+        rows = function_table_tables.get("all_functions_table", [])
         if rows:
             ordered = [
-                row["name"] for row in rows
-                if isinstance(row.get("name"), str)
+                row["name"]
+                for row in rows
+                if isinstance(row, dict) and isinstance(row.get("name"), str)
             ]
             logger.debug(
                 "[native] function_table: using Rust sort order (%d functions)",
@@ -604,6 +621,18 @@ def _get_native_function_table_order(
     except (KeyError, IndexError, TypeError):
         pass
     return None
+
+
+def _get_cached_native_function_table_order(
+    proj_profile: project_profile.MergedProjectProfile,
+) -> Optional[List[str]]:
+    """Return cached native order for a profile, computing it once."""
+    cache_key = id(proj_profile)
+    if cache_key not in _NATIVE_FUNCTION_TABLE_ORDER_CACHE:
+        _NATIVE_FUNCTION_TABLE_ORDER_CACHE[cache_key] = (
+            _get_native_function_table_order(proj_profile)
+        )
+    return _NATIVE_FUNCTION_TABLE_ORDER_CACHE[cache_key]
 
 
 def create_all_function_table(
@@ -616,7 +645,8 @@ def create_all_function_table(
     """Table for all functions in the project. Contains many details about each
     function"""
     random_suffix = "_" + "".join(
-        random.choices(string.ascii_lowercase + string.ascii_uppercase, k=7))
+        random.choices(string.ascii_lowercase + string.ascii_uppercase, k=7)
+    )
     if table_id is None:
         table_id = tables[-1]
 
@@ -638,12 +668,14 @@ def create_all_function_table(
     # Attempt to use the native Rust plugin for a pre-sorted iteration order
     # (sorted by total_cyclomatic_complexity descending).  Fall back to default
     # dict order when native is disabled or unavailable.
-    native_order = _get_native_function_table_order(proj_profile)
+    native_order = _get_cached_native_function_table_order(proj_profile)
     if native_order is not None:
         # Iterate in native sort order, skipping names absent from the source map.
         func_items: typing.Iterable[typing.Tuple[str, Any]] = (
-            (name, all_funcs_with_source[name]) for name in native_order
-            if name in all_funcs_with_source)
+            (name, all_funcs_with_source[name])
+            for name in native_order
+            if name in all_funcs_with_source
+        )
     else:
         func_items = all_funcs_with_source.items()
 

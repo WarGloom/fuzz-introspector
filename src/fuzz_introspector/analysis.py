@@ -141,6 +141,26 @@ def _serialize_project_for_native(
     }
 
 
+def _serialize_project_for_native_function_table(
+    proj_profile_obj: "project_profile.MergedProjectProfile",
+) -> dict:
+    """Build a slim payload for function-table ordering-only requests."""
+    functions = []
+    for fname, fp in proj_profile_obj.all_functions.items():
+        functions.append(
+            {
+                "name": fname,
+                "total_cyclomatic_complexity": fp.total_cyclomatic_complexity,
+            }
+        )
+
+    return {
+        "function_count": len(proj_profile_obj.all_functions),
+        "target_lang": proj_profile_obj.target_lang,
+        "functions": functions,
+    }
+
+
 class NativePluginProxy:
     """Invokes the native_analysis_plugins_rust binary for analysis plugins.
 
@@ -199,13 +219,20 @@ class NativePluginProxy:
             )
             return {}
 
+        if plugin_names == ["function_table"]:
+            project_data = _serialize_project_for_native_function_table(
+                proj_profile_obj
+            )
+        else:
+            project_data = _serialize_project_for_native(
+                proj_profile_obj, profiles_list
+            )
+
         payload = json.dumps(
             {
                 "schema_version": self.SCHEMA_VERSION,
                 "plugins": plugin_names,
-                "project_data": _serialize_project_for_native(
-                    proj_profile_obj, profiles_list
-                ),
+                "project_data": project_data,
             }
         )
 

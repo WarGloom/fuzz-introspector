@@ -821,8 +821,7 @@ fn run_sink_coverage_analysis(project_data: &JsonValue) -> PluginResult {
 ///
 /// Used by `html_report.py` `create_all_function_table()` to avoid the Python
 /// dict-order iteration when building the "all functions" HTML table.
-/// Returns every function with all available fields preserved so the Python
-/// side can look up functions in `proj_profile.all_functions` by name.
+/// Returns only ordered function names (compact payload/response).
 fn run_function_table(project_data: &JsonValue) -> PluginResult {
     log::debug!("[function_table] running");
 
@@ -839,24 +838,9 @@ fn run_function_table(project_data: &JsonValue) -> PluginResult {
         .map(|f| f.total_cyclomatic_complexity)
         .unwrap_or(0);
 
-    let rows: Vec<JsonValue> = sorted
+    let ordered_names: Vec<JsonValue> = sorted
         .iter()
-        .map(|f| {
-            serde_json::json!({
-                "name": f.name,
-                "source_file": f.source_file,
-                "hitcount": f.hitcount,
-                "arg_count": f.arg_count,
-                "cyclomatic_complexity": f.cyclomatic_complexity,
-                "total_cyclomatic_complexity": f.total_cyclomatic_complexity,
-                "bb_count": f.bb_count,
-                "runtime_coverage_percent": f.runtime_coverage_percent,
-                "reached_by_fuzzers": f.reached_by_fuzzers,
-                "functions_reached_count": effective_reached_count(f),
-                "new_unreached_complexity": f.new_unreached_complexity,
-                "incoming_references": f.incoming_references,
-            })
-        })
+        .map(|f| JsonValue::String(f.name.clone()))
         .collect();
 
     let summary = format!(
@@ -866,7 +850,7 @@ fn run_function_table(project_data: &JsonValue) -> PluginResult {
     log::debug!("[function_table] {}", summary);
 
     let mut tables = HashMap::new();
-    tables.insert("all_functions_table".to_string(), rows);
+    tables.insert("ordered_function_names".to_string(), ordered_names);
     PluginResult { tables, summary }
 }
 
@@ -1081,6 +1065,18 @@ mod tests {
     fn dispatch_unknown_plugin_returns_none() {
         let result = dispatch_plugin("no_such_plugin", &json!({}));
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn function_table_returns_compact_ordered_names() {
+        let data = sample_project_data();
+        let result = run_function_table(&data);
+        let names = &result.tables["ordered_function_names"];
+
+        assert_eq!(names.len(), 3);
+        assert_eq!(names[0], "foo");
+        assert_eq!(names[1], "bar");
+        assert_eq!(names[2], "main");
     }
 
     // ── optimal_targets tests ────────────────────────────────────────────────

@@ -485,6 +485,45 @@ def test_native_proxy_schema_version_in_request(monkeypatch) -> None:
     assert "project_data" in request_payload
 
 
+def test_native_proxy_function_table_uses_slim_payload(monkeypatch) -> None:
+    """function_table-only requests send a slim project payload."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    fake_response = _make_native_response(["function_table"])
+    fake_proc = mock.MagicMock()
+    fake_proc.returncode = 0
+    fake_proc.stdout = json.dumps(fake_response).encode()
+    fake_proc.stderr = b""
+
+    proxy = analysis.NativePluginProxy()
+    captured_input: list[bytes] = []
+
+    def _capture_run(*args, **kwargs):
+        captured_input.append(kwargs.get("input", b""))
+        return fake_proc
+
+    with (
+        mock.patch.object(
+            analysis.NativePluginProxy,
+            "find_binary",
+            return_value="/usr/bin/native_analysis_plugins_rust",
+        ),
+        mock.patch(
+            "fuzz_introspector.analysis.subprocess.run", side_effect=_capture_run
+        ),
+    ):
+        proxy.run_analysis(
+            _make_full_fake_proj_profile(["alpha", "beta"]), [], ["function_table"]
+        )
+
+    assert captured_input, "subprocess.run was not called"
+    request_payload = json.loads(captured_input[0])
+    functions_payload = request_payload["project_data"]["functions"]
+    assert functions_payload
+    for function_entry in functions_payload:
+        assert set(function_entry.keys()) == {"name", "total_cyclomatic_complexity"}
+
+
 # ── Plugin wiring tests ───────────────────────────────────────────────────────
 
 
@@ -983,6 +1022,15 @@ def _make_function_table_native_result(function_names_with_complexity):
     return {"function_table": {"tables": {"all_functions_table": rows}, "summary": ""}}
 
 
+def _make_function_table_native_order_result(function_names):
+    return {
+        "function_table": {
+            "tables": {"ordered_function_names": list(function_names)},
+            "summary": "",
+        }
+    }
+
+
 def test_function_table_in_native_plugin_names() -> None:
     assert "FunctionTable" in analysis._NATIVE_PLUGIN_NAMES
 
@@ -1015,6 +1063,52 @@ def test_get_native_function_table_order_returns_sorted_names(
         result = html_report._get_native_function_table_order(proj_profile)
 
     assert result == ["high_cc", "mid_cc", "low_cc"]
+
+
+def test_get_native_function_table_order_accepts_compact_ordered_names(
+    monkeypatch,
+) -> None:
+    """When native returns compact ordering, names are returned in order."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    fake_proc = _make_native_proc(
+        _make_function_table_native_order_result(["high_cc", "mid_cc", "low_cc"])
+    )
+    proj_profile = _make_full_fake_proj_profile()
+
+    with (
+        mock.patch.object(
+            analysis.NativePluginProxy,
+            "find_binary",
+            return_value="/usr/bin/native_analysis_plugins_rust",
+        ),
+        mock.patch(
+            "fuzz_introspector.analysis.subprocess.run",
+            return_value=fake_proc,
+        ),
+    ):
+        result = html_report._get_native_function_table_order(proj_profile)
+
+    assert result == ["high_cc", "mid_cc", "low_cc"]
+
+
+def test_get_cached_native_function_table_order_caches_per_profile(monkeypatch) -> None:
+    """Native ordering is computed once and reused for the same profile."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+    html_report._NATIVE_FUNCTION_TABLE_ORDER_CACHE.clear()
+
+    proj_profile = _make_full_fake_proj_profile(["one", "two"])
+
+    with mock.patch(
+        "fuzz_introspector.html_report._get_native_function_table_order",
+        return_value=["one", "two"],
+    ) as native_order_mock:
+        first = html_report._get_cached_native_function_table_order(proj_profile)
+        second = html_report._get_cached_native_function_table_order(proj_profile)
+
+    assert first == ["one", "two"]
+    assert second == ["one", "two"]
+    assert native_order_mock.call_count == 1
 
 
 def test_get_native_function_table_order_returns_none_when_disabled(
