@@ -178,5 +178,60 @@ class TestEmitSilentlyIgnoresIOError(unittest.TestCase):
             stage_markers.emit("/some/dir", "stage", "start")
 
 
+class TestStageMarkerParsingAndSummary(unittest.TestCase):
+    """Parsing and summary helpers for stage marker logs."""
+
+    def test_normal_start_end_pairing(self):
+        """Start/end markers are paired and produce expected durations."""
+        lines = [
+            "2026-03-03T10:00:00.000000Z optional_analyses start {}\n",
+            "2026-03-03T10:00:02.500000Z optional_analyses end {}\n",
+            "2026-03-03T10:00:10.000000Z report_generation start {}\n",
+            "2026-03-03T10:00:15.000000Z report_generation end {}\n",
+        ]
+
+        events = stage_markers.parse_stage_marker_lines(lines)
+        summary = stage_markers.summarize_stage_metrics(
+            events, ["optional_analyses", "report_generation"]
+        )
+
+        self.assertEqual(len(events), 4)
+        self.assertEqual(summary["optional_analyses"]["count"], 1)
+        self.assertEqual(summary["report_generation"]["count"], 1)
+        self.assertAlmostEqual(summary["optional_analyses"]["total_seconds"], 2.5)
+        self.assertAlmostEqual(summary["report_generation"]["total_seconds"], 5.0)
+
+    def test_missing_pair_behavior(self):
+        """Unmatched starts/ends are tracked without raising errors."""
+        lines = [
+            "2026-03-03T10:00:00.000000Z optional_analyses start {}\n",
+            "2026-03-03T10:00:15.000000Z report_generation end {}\n",
+        ]
+
+        events = stage_markers.parse_stage_marker_lines(lines)
+        summary = stage_markers.summarize_stage_metrics(
+            events, ["optional_analyses", "report_generation"]
+        )
+
+        self.assertEqual(summary["optional_analyses"]["count"], 0)
+        self.assertEqual(summary["optional_analyses"]["missing_ends"], 1)
+        self.assertEqual(summary["report_generation"]["count"], 0)
+        self.assertEqual(summary["report_generation"]["missing_starts"], 1)
+
+    def test_malformed_lines_are_ignored(self):
+        """Malformed marker lines are skipped during parsing."""
+        lines = [
+            "not a marker line\n",
+            "2026-03-03T10:00:00.000000Z optional_analyses start {not-json}\n",
+            "2026-03-03T10:00:00.000000Z optional_analyses start {}\n",
+        ]
+
+        events = stage_markers.parse_stage_marker_lines(lines)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].stage, "optional_analyses")
+        self.assertEqual(events[0].event, "start")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -29,6 +29,7 @@ Recent findings on `memory-improvements` indicate:
 
 1. **Payload trimming for native plugin calls** (`src/fuzz_introspector/analysis.py`): remove non-essential fields for each requested plugin key.
 2. **Stage marker CI smoke gate** (`src/fuzz_introspector/stage_markers.py` + test harness): fail CI when key stage deltas regress above agreed threshold.
+   - Gate command: `python benchmarks/validate_stage_marker_regression.py --baseline-log <baseline-stage-markers.log> --candidate-log <candidate-stage-markers.log> --stages optional_analyses,report_generation --max-regression-percent 10 --output-json .work/stage-marker-gate.json`
 3. **Correlator clone minimization (targeted)** (`tools/native_debug_correlator_rust/src/main.rs`): replace obvious per-row string clone paths in cached record fan-out.
 
 ### Bigger Bets
