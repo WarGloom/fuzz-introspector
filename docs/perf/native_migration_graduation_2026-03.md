@@ -80,6 +80,12 @@ Post parse-once optimization validation (commit `024aeb55`, Rust, 2-run, `2026-0
 - Delta vs latest documented 2-run validation (`88.07 s / 6,499.59 MB`): `+3.71 s` wall (`+4.21%`), `-87.07 MB` RSS (`-1.34%`)
 - Delta vs Rust 3-run baseline (`99.03 s / 6,386.69 MB`): `-7.25 s` wall (`-7.32%`), `+25.83 MB` RSS (`+0.40%`)
 
+Post type-correlation optimization stage-gate validation (commit `4ba993b7`, `2026-03-03`):
+- Gate config: `10%` max regression across `optional_analyses,report_generation,type_correlation,debug_functions_yaml`
+- Outcome: `PASS` (`ok=true`, no failed stages) using `.work/benchmarks/cgserver/stage_gate/20260303T191815Z/baseline/stage_markers.log` vs `.work/benchmarks/cgserver/type-corr/20260303T201656Z/stage_markers.log`
+- Stage deltas (candidate vs baseline): `optional_analyses 0.00% (0.000s -> 0.000s)`, `report_generation -9.67% (342.685s -> 309.561s)`, `type_correlation -12.76% (186.518s -> 162.722s)`, `debug_functions_yaml -7.28% (66.581s -> 61.732s)`
+- Validator JSON: `.work/benchmarks/cgserver/type-corr/20260303T201656Z/stage_gate_validation.json`
+
 ---
 
 ## Stability Results (Rust, 10-run test)
