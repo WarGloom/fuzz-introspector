@@ -7,6 +7,7 @@ tmp
 *.err
 *.profile
 *fuzz_report.html
+.serena
 
 __pycache__/
 *.py[cod]
@@ -44,3 +45,16 @@ tools/native_overlay_backend_rust/target/
 tools/native_*_rust/target/
 tools/native_*_go/native_*_go
 .mypy_cache/
+
+# Fuzz-introspector report output (generated at runtime)
+calltree_view_*.html
+analysis_*.js
+summary.json
+branch-blockers.json
+fuzz-introspector-engine-input.json
+full_type_defs.json
+
+# CI tooling virtualenvs
+.ci-*/
+
+
