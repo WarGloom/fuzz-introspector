@@ -73,6 +73,13 @@ Post native-dispatch caching validation (Rust, 2-run, `2026-03-03`):
 - Delta vs Rust 3-run baseline (`99.03 s / 6,386.69 MB`): `-10.96 s` wall (`-11.07%`), `+112.90 MB` RSS (`+1.77%`)
 - Delta vs prior Rust 2-run validation (`84.56 s / 6,372.55 MB`): `+3.51 s` wall (`+4.15%`), `+127.04 MB` RSS (`+1.99%`)
 
+Post parse-once optimization validation (commit `024aeb55`, Rust, 2-run, `2026-03-03`):
+- Avg wall: `91.78 s` (run1 `90.44 s`, run2 `93.13 s`)
+- Avg RSS: `6,412.52 MB` (run1 `6,458.34 MB`, run2 `6,366.70 MB`)
+- Output parity: hash `3e0a44d44abbf1d3968e2d3e2223045618ffeeb3e37776a6b75c1c9853c2061b` (both runs)
+- Delta vs latest documented 2-run validation (`88.07 s / 6,499.59 MB`): `+3.71 s` wall (`+4.21%`), `-87.07 MB` RSS (`-1.34%`)
+- Delta vs Rust 3-run baseline (`99.03 s / 6,386.69 MB`): `-7.25 s` wall (`-7.32%`), `+25.83 MB` RSS (`+0.40%`)
+
 ---
 
 ## Stability Results (Rust, 10-run test)
