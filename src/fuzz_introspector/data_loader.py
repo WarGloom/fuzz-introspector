@@ -42,8 +42,11 @@ def _get_profile_executor_backend() -> tuple[
     str,
 ]:
     """Returns configured parallel backend for profile loading."""
-    backend = (os.environ.get(FI_PROFILE_BACKEND_ENV,
-                              FI_PROFILE_BACKEND_THREAD).strip().lower())
+    backend = (
+        os.environ.get(FI_PROFILE_BACKEND_ENV, FI_PROFILE_BACKEND_THREAD)
+        .strip()
+        .lower()
+    )
 
     if backend == FI_PROFILE_BACKEND_PROCESS:
         return concurrent.futures.ProcessPoolExecutor, backend
@@ -66,19 +69,17 @@ def _parse_int_env(var_name: str, default: int, minimum: int = 1) -> int:
     try:
         value = int(raw_value)
     except ValueError:
-        logger.warning("Invalid %s=%r; using default %d", var_name, raw_value,
-                       default)
+        logger.warning("Invalid %s=%r; using default %d", var_name, raw_value, default)
         return default
     if value < minimum:
-        logger.warning("Invalid %s=%r; using minimum %d", var_name, raw_value,
-                       minimum)
+        logger.warning("Invalid %s=%r; using minimum %d", var_name, raw_value, minimum)
         return minimum
     return value
 
 
 def read_fuzzer_data_file_to_profile(
-        cfg_file: str,
-        language: str) -> Optional[fuzzer_profile.FuzzerProfile]:
+    cfg_file: str, language: str, preloaded_yaml: Optional[dict[Any, Any]] = None
+) -> Optional[fuzzer_profile.FuzzerProfile]:
     """
     For a given .data file (CFG) read the corresponding .yaml file
     This is a bit odd way of doing it and should probably be improved.
@@ -87,10 +88,12 @@ def read_fuzzer_data_file_to_profile(
     target_data_f = cfg_file
     if cfg_file.endswith(".txt"):
         target_data_f = "/".join(cfg_file.split("/")[:-1]) + "/report"
+    yaml_path = target_data_f + ".yaml"
 
     logger.info("target data f: %s", target_data_f)
-    if not os.path.isfile(target_data_f) and not os.path.isfile(target_data_f +
-                                                                ".yaml"):
+    if not os.path.isfile(target_data_f) and not os.path.isfile(
+        target_data_f + ".yaml"
+    ):
         logger.info("R1")
         return None
 
@@ -100,13 +103,13 @@ def read_fuzzer_data_file_to_profile(
             command_env_prefix="FI_PROFILE_YAML_LOADER",
             payload={"path": yaml_path},
             default_backend=backend_loaders.resolve_component_backend(
-                "FI_PROFILE_YAML_LOADER"),
+                "FI_PROFILE_YAML_LOADER"
+            ),
             timeout_env="FI_PROFILE_YAML_LOADER_TIMEOUT_SEC",
         )
         if backend_payload is not None:
             if isinstance(backend_payload, dict):
-                logger.info("Loaded %s using %s backend", yaml_path,
-                            selected_backend)
+                logger.info("Loaded %s using %s backend", yaml_path, selected_backend)
                 return backend_payload
             logger.warning(
                 "Backend payload for %s is not a dictionary; falling back to python",
@@ -115,7 +118,9 @@ def read_fuzzer_data_file_to_profile(
         logger.info("[profile-yaml-loader] using python backend")
         return utils.data_file_read_yaml(yaml_path)
 
-    data_dict_yaml = _load_profile_yaml(target_data_f + ".yaml")
+    data_dict_yaml = preloaded_yaml
+    if data_dict_yaml is None:
+        data_dict_yaml = _load_profile_yaml(yaml_path)
 
     # Must be  dictionary
     if data_dict_yaml is None or not isinstance(data_dict_yaml, dict):
@@ -136,10 +141,9 @@ def read_fuzzer_data_file_to_profile(
         logger.info("CFG file not valid.")
         return None
 
-    profile = fuzzer_profile.FuzzerProfile(cfg_file,
-                                           data_dict_yaml,
-                                           language,
-                                           cfg_content=cfg_content)
+    profile = fuzzer_profile.FuzzerProfile(
+        cfg_file, data_dict_yaml, language, cfg_content=cfg_content
+    )
 
     if not profile.has_entry_point():
         logger.info("Found no entrypoints")
@@ -151,6 +155,84 @@ def read_fuzzer_data_file_to_profile(
 def _load_profile(data_file: str, language: str):
     """Internal function used for parallel profile loading."""
     return data_file, read_fuzzer_data_file_to_profile(data_file, language)
+
+
+def _load_profile_with_preloaded_yaml(
+    data_file: str,
+    language: str,
+    preloaded_yaml: Optional[dict[Any, Any]] = None,
+):
+    """Internal function used for profile loading with optional preloaded YAML."""
+    return data_file, read_fuzzer_data_file_to_profile(
+        data_file,
+        language,
+        preloaded_yaml=preloaded_yaml,
+    )
+
+
+def _load_profiles_yaml_batch(
+    data_files: List[str],
+) -> Dict[str, dict[Any, Any]]:
+    """Try loading profile YAMLs in one native invocation."""
+    if len(data_files) <= 1:
+        return {}
+
+    yaml_paths = []
+    for data_file in data_files:
+        target_data_f = data_file
+        if data_file.endswith(".txt"):
+            target_data_f = "/".join(data_file.split("/")[:-1]) + "/report"
+        yaml_paths.append(target_data_f + ".yaml")
+
+    selected_backend, backend_payload = backend_loaders.load_json_with_backend(
+        backend_env="FI_PROFILE_YAML_LOADER",
+        command_env_prefix="FI_PROFILE_YAML_LOADER",
+        payload={
+            "paths": yaml_paths,
+            "category": "profile",
+        },
+        default_backend=backend_loaders.resolve_component_backend(
+            "FI_PROFILE_YAML_LOADER"
+        ),
+        timeout_env="FI_PROFILE_YAML_LOADER_TIMEOUT_SEC",
+    )
+    if backend_payload is None:
+        return {}
+    if not isinstance(backend_payload, dict):
+        logger.warning(
+            "Batch profile YAML payload is not a dictionary; falling back to per-file loading",
+        )
+        return {}
+
+    profile_payloads = backend_payload.get("profiles")
+    if not isinstance(profile_payloads, list):
+        logger.warning(
+            "Batch profile YAML payload is missing list field 'profiles'; "
+            "falling back to per-file loading",
+        )
+        return {}
+    if len(profile_payloads) != len(data_files):
+        logger.warning(
+            "Batch profile YAML payload has %d entries for %d inputs; "
+            "falling back to per-file loading",
+            len(profile_payloads),
+            len(data_files),
+        )
+        return {}
+
+    profile_yaml_by_data_file: Dict[str, dict[Any, Any]] = {}
+    for idx, payload in enumerate(profile_payloads):
+        if isinstance(payload, dict):
+            profile_yaml_by_data_file[data_files[idx]] = payload
+
+    if profile_yaml_by_data_file:
+        logger.info(
+            "Loaded %d profile YAML files in batch using %s backend",
+            len(profile_yaml_by_data_file),
+            selected_backend,
+        )
+
+    return profile_yaml_by_data_file
 
 
 def _resolve_profile_worker_count(data_file_count: int) -> int:
@@ -165,7 +247,8 @@ def _resolve_profile_worker_count(data_file_count: int) -> int:
 def load_all_debug_files(target_folder: str):
     """Loads all .debug_info files"""
     debug_info_files = utils.get_all_files_in_tree_with_regex(
-        target_folder, ".*debug_info$")
+        target_folder, ".*debug_info$"
+    )
     for file in debug_info_files:
         logger.info("debug info file: %s", file)
     return debug_info_files
@@ -174,7 +257,8 @@ def load_all_debug_files(target_folder: str):
 def find_all_debug_all_types_files(target_folder: str):
     """Loads all .debug_info files"""
     debug_info_files = utils.get_all_files_in_tree_with_regex(
-        target_folder, ".*debug_all_types$")
+        target_folder, ".*debug_all_types$"
+    )
     for file in debug_info_files:
         logger.info("debug info file: %s", file)
     return debug_info_files
@@ -183,37 +267,39 @@ def find_all_debug_all_types_files(target_folder: str):
 def find_all_debug_function_files(target_folder: str):
     """Loads all debug_all_functions files"""
     debug_info_files = utils.get_all_files_in_tree_with_regex(
-        target_folder, ".*debug_all_functions$")
+        target_folder, ".*debug_all_functions$"
+    )
     for file in debug_info_files:
         logger.info("debug info file: %s", file)
     return debug_info_files
 
 
 def load_all_profiles(
-        target_folder: str,
-        language: str,
-        parallelise: bool = True) -> List[fuzzer_profile.FuzzerProfile]:
+    target_folder: str, language: str, parallelise: bool = True
+) -> List[fuzzer_profile.FuzzerProfile]:
     """Loads all profiles in target_folder in a multi-threaded manner"""
     logger.info("Loading profiles from %s", target_folder)
     default_worker_count = 3 if language == "jvm" else os.cpu_count() or 1
 
     profiles = []
     data_files = utils.get_all_files_in_tree_with_regex(
-        target_folder, r"fuzzerLogFile.*\.data$")
+        target_folder, r"fuzzerLogFile.*\.data$"
+    )
     data_files.extend(
-        utils.get_all_files_in_tree_with_regex(target_folder,
-                                               "fuzzer-calltree-*"))
+        utils.get_all_files_in_tree_with_regex(target_folder, "fuzzer-calltree-*")
+    )
     target_calltrees = utils.get_all_files_in_tree_with_regex(
-        target_folder, "targetCalltree.txt$")
+        target_folder, "targetCalltree.txt$"
+    )
     logger.info(target_calltrees)
     data_files.extend(target_calltrees)
 
     logger.info(" - found %d profiles to load", len(data_files))
+    preloaded_profile_yaml = _load_profiles_yaml_batch(data_files)
     if parallelise:
         worker_count = _resolve_profile_worker_count(len(data_files))
         if worker_count == 1:
-            logger.info(
-                "Profile loading configured with 1 worker; running serially")
+            logger.info("Profile loading configured with 1 worker; running serially")
         if language == "jvm":
             worker_count = max(1, min(worker_count, default_worker_count))
         worker_count = max(1, min(worker_count, len(data_files)))
@@ -224,11 +310,15 @@ def load_all_profiles(
             worker_count,
         )
         try:
-            indexed_profiles: Dict[
-                int, Optional[fuzzer_profile.FuzzerProfile]] = {}
+            indexed_profiles: Dict[int, Optional[fuzzer_profile.FuzzerProfile]] = {}
             with executor_cls(max_workers=worker_count) as executor:
                 future_to_idx = {
-                    executor.submit(_load_profile, data_file, language): idx
+                    executor.submit(
+                        _load_profile_with_preloaded_yaml,
+                        data_file,
+                        language,
+                        preloaded_profile_yaml.get(data_file),
+                    ): idx
                     for idx, data_file in enumerate(data_files)
                 }
                 for future in concurrent.futures.as_completed(future_to_idx):
@@ -236,8 +326,7 @@ def load_all_profiles(
                     try:
                         _, loaded_profile = future.result()
                     except Exception as err:
-                        logger.error("Failed to load profile at index %d: %s",
-                                     idx, err)
+                        logger.error("Failed to load profile at index %d: %s", idx, err)
                         continue
                     if loaded_profile is None:
                         logger.error("Profile is none")
@@ -254,12 +343,20 @@ def load_all_profiles(
                 err,
             )
             for data_file in data_files:
-                _, loaded_profile = _load_profile(data_file, language)
+                _, loaded_profile = _load_profile_with_preloaded_yaml(
+                    data_file,
+                    language,
+                    preloaded_profile_yaml.get(data_file),
+                )
                 if loaded_profile is not None:
                     profiles.append(loaded_profile)
     else:
         for data_file in data_files:
-            _, loaded_profile = _load_profile(data_file, language)
+            _, loaded_profile = _load_profile_with_preloaded_yaml(
+                data_file,
+                language,
+                preloaded_profile_yaml.get(data_file),
+            )
             if loaded_profile is not None:
                 profiles.append(loaded_profile)
 

@@ -14,11 +14,13 @@ cp tools/native_yaml_loader_rust/target/release/native_yaml_loader_rust /tmp/nat
 Reads JSON from stdin and writes JSON to stdout.
 
 - Profile mode input: `{"path": "/abs/path/file.yaml"}`
+- Profile batch input: `{"paths": ["/abs/path/a.yaml", "/abs/path/b.yaml"], "category": "profile"}`
 - Debug mode input: `{"paths": ["/abs/path/a.yaml", "/abs/path/b.yaml"], "category": "debug-info"}`
 
 Outputs:
 
 - Profile mode: parsed YAML value as JSON.
+- Profile batch mode: `{"profiles": [<yaml-or-null>, ...]}` (order matches input `paths`).
 - Debug mode: `{"items": [...]}`.
 
 Implementation note:

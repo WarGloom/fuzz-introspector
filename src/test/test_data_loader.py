@@ -45,8 +45,8 @@ class _ExecutorStubOutOfOrder:
     def __exit__(self, *_args):
         return False
 
-    def submit(self, fn, data_file, language):
-        del fn, language
+    def submit(self, fn, data_file, language, *_args):
+        del fn, language, _args
         self.futures.append(data_file)
         return _FutureStub((data_file, _ProfileStub(data_file)))
 
@@ -168,11 +168,17 @@ def test_load_all_profiles_fallback_to_serial_on_parallel_failure(monkeypatch):
 
     loaded = []
 
-    def fake_load_profile(data_file: str, _language: str):
+    def fake_load_profile(
+        data_file: str,
+        _language: str,
+        _preloaded_yaml: dict[str, Any] | None = None,
+    ):
         loaded.append(data_file)
         return data_file, _ProfileStub(data_file)
 
-    monkeypatch.setattr(data_loader, "_load_profile", fake_load_profile)
+    monkeypatch.setattr(
+        data_loader, "_load_profile_with_preloaded_yaml", fake_load_profile
+    )
 
     def _boom_executor(*_args, **_kwargs):
         del _args, _kwargs
@@ -187,6 +193,155 @@ def test_load_all_profiles_fallback_to_serial_on_parallel_failure(monkeypatch):
 
     assert [profile.name for profile in profiles] == ["x.data", "y.data"]
     assert loaded == ["x.data", "y.data"]
+
+
+def test_load_all_profiles_uses_batched_yaml_loader_for_multiple_profiles(
+    monkeypatch,
+    tmp_path,
+):
+    cfg_a = tmp_path / "fuzzerLogFile-a.data"
+    cfg_b = tmp_path / "fuzzerLogFile-b.data"
+    cfg_a.write_text("Call tree\n", encoding="utf-8")
+    cfg_b.write_text("Call tree\n", encoding="utf-8")
+    (tmp_path / "fuzzerLogFile-a.data.yaml").write_text(
+        "Fuzzer filename: a.cc\nAll functions:\n  Elements: []\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "fuzzerLogFile-b.data.yaml").write_text(
+        "Fuzzer filename: b.cc\nAll functions:\n  Elements: []\n",
+        encoding="utf-8",
+    )
+
+    def _fake_profile_data_files(_root: str, pattern: str):
+        del _root
+        if "fuzzerLogFile" in pattern:
+            return [str(cfg_a), str(cfg_b)]
+        if pattern.endswith("targetCalltree.txt$"):
+            return []
+        if "fuzzer-calltree-*" in pattern:
+            return []
+        return []
+
+    monkeypatch.setattr(
+        data_loader.utils, "get_all_files_in_tree_with_regex", _fake_profile_data_files
+    )
+
+    calls = []
+
+    def _fake_loader(**kwargs):
+        calls.append(kwargs.get("payload"))
+        payload = kwargs.get("payload", {})
+        if "paths" in payload:
+            return (
+                "rust",
+                {
+                    "profiles": [
+                        {
+                            "Fuzzer filename": "a.cc",
+                            "All functions": {"Elements": []},
+                        },
+                        {
+                            "Fuzzer filename": "b.cc",
+                            "All functions": {"Elements": []},
+                        },
+                    ]
+                },
+            )
+        raise AssertionError("Per-file YAML load should not run when batch succeeds")
+
+    class _FuzzerProfileStub:
+        def __init__(self, cfg_path, yaml_dict, language, cfg_content):
+            del yaml_dict, language, cfg_content
+            self.name = cfg_path
+
+        def has_entry_point(self):
+            return True
+
+    monkeypatch.setattr(
+        data_loader.backend_loaders, "load_json_with_backend", _fake_loader
+    )
+    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile", _FuzzerProfileStub)
+
+    profiles = data_loader.load_all_profiles(str(tmp_path), "c-cpp", parallelise=False)
+
+    assert len(calls) == 1
+    assert calls[0]["paths"] == [
+        str(tmp_path / "fuzzerLogFile-a.data.yaml"),
+        str(tmp_path / "fuzzerLogFile-b.data.yaml"),
+    ]
+    assert [profile.name for profile in profiles] == [str(cfg_a), str(cfg_b)]
+
+
+def test_load_all_profiles_batch_yaml_failure_falls_back_to_python_loader(
+    monkeypatch,
+    tmp_path,
+):
+    cfg_a = tmp_path / "fuzzerLogFile-a.data"
+    cfg_b = tmp_path / "fuzzerLogFile-b.data"
+    cfg_a.write_text("Call tree\n", encoding="utf-8")
+    cfg_b.write_text("Call tree\n", encoding="utf-8")
+    yaml_a = tmp_path / "fuzzerLogFile-a.data.yaml"
+    yaml_b = tmp_path / "fuzzerLogFile-b.data.yaml"
+    yaml_a.write_text(
+        "Fuzzer filename: a.cc\nAll functions:\n  Elements: []\n", encoding="utf-8"
+    )
+    yaml_b.write_text(
+        "Fuzzer filename: b.cc\nAll functions:\n  Elements: []\n", encoding="utf-8"
+    )
+
+    def _fake_profile_data_files(_root: str, pattern: str):
+        del _root
+        if "fuzzerLogFile" in pattern:
+            return [str(cfg_a), str(cfg_b)]
+        if pattern.endswith("targetCalltree.txt$"):
+            return []
+        if "fuzzer-calltree-*" in pattern:
+            return []
+        return []
+
+    monkeypatch.setattr(
+        data_loader.utils, "get_all_files_in_tree_with_regex", _fake_profile_data_files
+    )
+
+    calls = []
+
+    def _fake_loader(**kwargs):
+        calls.append(kwargs.get("payload"))
+        return "python", None
+
+    yaml_reads = []
+
+    def _fake_yaml_reader(path: str):
+        yaml_reads.append(path)
+        if path == str(yaml_a):
+            return {"Fuzzer filename": "a.cc", "All functions": {"Elements": []}}
+        if path == str(yaml_b):
+            return {"Fuzzer filename": "b.cc", "All functions": {"Elements": []}}
+        return None
+
+    class _FuzzerProfileStub:
+        def __init__(self, cfg_path, yaml_dict, language, cfg_content):
+            del language, cfg_content
+            self.name = yaml_dict["Fuzzer filename"]
+            self.cfg = cfg_path
+
+        def has_entry_point(self):
+            return True
+
+    monkeypatch.setattr(
+        data_loader.backend_loaders, "load_json_with_backend", _fake_loader
+    )
+    monkeypatch.setattr(data_loader.utils, "data_file_read_yaml", _fake_yaml_reader)
+    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile", _FuzzerProfileStub)
+
+    profiles = data_loader.load_all_profiles(str(tmp_path), "c-cpp", parallelise=False)
+
+    assert len(calls) == 3
+    assert "paths" in calls[0]
+    assert calls[1] == {"path": str(yaml_a)}
+    assert calls[2] == {"path": str(yaml_b)}
+    assert yaml_reads == [str(yaml_a), str(yaml_b)]
+    assert [profile.name for profile in profiles] == ["a.cc", "b.cc"]
 
 
 def test_read_fuzzer_data_file_to_profile_uses_external_yaml_backend(

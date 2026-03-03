@@ -191,6 +191,32 @@ fn handle_profile_mode(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn handle_profile_batch_mode(paths: &[JsonValue]) -> Result<(), String> {
+    let string_paths: Vec<&str> = paths
+        .iter()
+        .map(|raw| {
+            raw.as_str()
+                .ok_or_else(|| "paths must be an array of strings".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let loaded: Vec<JsonValue> = string_paths
+        .par_iter()
+        .map(|path| match load_yaml(path) {
+            Ok(parsed) => parsed,
+            Err(_) => JsonValue::Null,
+        })
+        .collect();
+
+    let mut stdout = io::stdout().lock();
+    let out = serde_json::json!({"profiles": loaded});
+    serde_json::to_writer(&mut stdout, &out).map_err(|err| format!("json write error: {err}"))?;
+    stdout
+        .write_all(b"\n")
+        .map_err(|err| format!("stdout write error: {err}"))?;
+    Ok(())
+}
+
 fn handle_debug_mode(paths: &[JsonValue]) -> Result<(), String> {
     // Validate all paths upfront.
     let string_paths: Vec<&str> = paths
@@ -254,7 +280,12 @@ fn run() -> Result<i32, String> {
     let Some(paths) = payload.get("paths").and_then(JsonValue::as_array) else {
         return Err("expected payload with path or paths".to_string());
     };
-    handle_debug_mode(paths)?;
+
+    if payload.get("category").and_then(JsonValue::as_str) == Some("profile") {
+        handle_profile_batch_mode(paths)?;
+    } else {
+        handle_debug_mode(paths)?;
+    }
     Ok(0)
 }
 
