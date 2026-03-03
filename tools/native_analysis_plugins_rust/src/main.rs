@@ -75,6 +75,24 @@ fn parse_functions(project_data: &JsonValue) -> Vec<FunctionEntry> {
         .unwrap_or_default()
 }
 
+/// Request-scoped parsed data shared by all plugin handlers.
+#[derive(Debug)]
+struct ParsedProjectData {
+    functions: Vec<FunctionEntry>,
+    target_lang: Option<String>,
+}
+
+/// Parse the subset of `project_data` used by Rust-native plugins once.
+fn parse_project_data(project_data: &JsonValue) -> ParsedProjectData {
+    ParsedProjectData {
+        functions: parse_functions(project_data),
+        target_lang: project_data
+            .get("target_lang")
+            .and_then(JsonValue::as_str)
+            .map(str::to_string),
+    }
+}
+
 // ── Request / Response types ────────────────────────────────────────────────
 
 /// Top-level request sent by the Python `NativePluginProxy`.
@@ -126,8 +144,8 @@ struct Response {
 
 // ── Plugin implementations ───────────────────────────────────────────────────
 //
-// Each `run_*` function receives a reference to the project_data JSON value
-// and returns a PluginResult.
+// Each `run_*` function receives request-scoped parsed project data and
+// returns a PluginResult.
 
 /// Returns the effective number of functions reached by `f`.
 ///
@@ -182,10 +200,10 @@ fn qualifies_as_optimal_target(f: &FunctionEntry) -> bool {
 /// Ports the core logic of `OptimalTargets.analysis_get_optimal_targets()` from
 /// `src/fuzz_introspector/analyses/optimal_targets.py`.  Returns up to 200
 /// candidate rows sorted descending by `new_unreached_complexity`.
-fn run_optimal_targets(project_data: &JsonValue) -> PluginResult {
+fn run_optimal_targets(parsed_data: &ParsedProjectData) -> PluginResult {
     log::debug!("[optimal_targets] running real implementation");
 
-    let functions = parse_functions(project_data);
+    let functions = &parsed_data.functions;
 
     // Filter in parallel, then collect and sort.
     let mut candidates: Vec<&FunctionEntry> = functions
@@ -236,10 +254,10 @@ fn run_optimal_targets(project_data: &JsonValue) -> PluginResult {
 /// This is the Rust equivalent of `RuntimeCoverageAnalysis.get_low_cov_high_line_funcs()`.
 /// Because the payload does not include per-line coverage data, we use
 /// `new_unreached_complexity > 20` as a proxy for "low coverage despite being reached".
-fn run_runtime_coverage_analysis(project_data: &JsonValue) -> PluginResult {
+fn run_runtime_coverage_analysis(parsed_data: &ParsedProjectData) -> PluginResult {
     log::debug!("[runtime_coverage_analysis] running real implementation");
 
-    let functions = parse_functions(project_data);
+    let functions = &parsed_data.functions;
 
     let mut candidates: Vec<&FunctionEntry> = functions
         .par_iter()
@@ -281,15 +299,14 @@ fn run_runtime_coverage_analysis(project_data: &JsonValue) -> PluginResult {
 /// The Python `FuzzCalltreeAnalysis.analysis_func()` returns `""` (not
 /// implemented).  The Rust version emits a single summary row describing
 /// overall function reachability for the project.
-fn run_calltree_analysis(project_data: &JsonValue) -> PluginResult {
+fn run_calltree_analysis(parsed_data: &ParsedProjectData) -> PluginResult {
     log::debug!("[calltree_analysis] running real implementation");
 
-    let functions = parse_functions(project_data);
-    let target_lang = project_data
-        .get("target_lang")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("unknown")
-        .to_string();
+    let functions = &parsed_data.functions;
+    let target_lang = parsed_data
+        .target_lang
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
 
     let total = functions.len() as u64;
     let reached = functions.par_iter().filter(|f| f.hitcount > 0).count() as u64;
@@ -749,14 +766,11 @@ fn matches_sink(f: &FunctionEntry, sink: &SinkEntry, lang: &str) -> bool {
 ///   - `source_file`: source location
 ///   - `reached_by_fuzzers`: list of fuzzers that statically reach this sink
 ///   - `callers`: list of `incoming_references` entries for this function
-fn run_sink_coverage_analysis(project_data: &JsonValue) -> PluginResult {
+fn run_sink_coverage_analysis(parsed_data: &ParsedProjectData) -> PluginResult {
     log::debug!("[sink_coverage_analysis] running");
 
-    let functions = parse_functions(project_data);
-    let target_lang = project_data
-        .get("target_lang")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("c-cpp");
+    let functions = &parsed_data.functions;
+    let target_lang = parsed_data.target_lang.as_deref().unwrap_or("c-cpp");
 
     // Build a lookup from function name → FunctionEntry for caller discovery.
     let name_to_func: HashMap<&str, &FunctionEntry> =
@@ -822,10 +836,10 @@ fn run_sink_coverage_analysis(project_data: &JsonValue) -> PluginResult {
 /// Used by `html_report.py` `create_all_function_table()` to avoid the Python
 /// dict-order iteration when building the "all functions" HTML table.
 /// Returns only ordered function names (compact payload/response).
-fn run_function_table(project_data: &JsonValue) -> PluginResult {
+fn run_function_table(parsed_data: &ParsedProjectData) -> PluginResult {
     log::debug!("[function_table] running");
 
-    let functions = parse_functions(project_data);
+    let functions = &parsed_data.functions;
     let total = functions.len();
 
     // Sort by total_cyclomatic_complexity descending; stable to keep original
@@ -857,18 +871,36 @@ fn run_function_table(project_data: &JsonValue) -> PluginResult {
 /// Dispatcher: route a plugin name to its handler function.
 ///
 /// Returns `None` for unknown plugin names so the caller can log and skip.
-fn dispatch_plugin(name: &str, project_data: &JsonValue) -> Option<PluginResult> {
+fn dispatch_plugin(name: &str, parsed_data: &ParsedProjectData) -> Option<PluginResult> {
     match name {
-        "optimal_targets" => Some(run_optimal_targets(project_data)),
-        "runtime_coverage_analysis" => Some(run_runtime_coverage_analysis(project_data)),
-        "calltree_analysis" => Some(run_calltree_analysis(project_data)),
-        "sink_coverage_analysis" => Some(run_sink_coverage_analysis(project_data)),
-        "function_table" => Some(run_function_table(project_data)),
+        "optimal_targets" => Some(run_optimal_targets(parsed_data)),
+        "runtime_coverage_analysis" => Some(run_runtime_coverage_analysis(parsed_data)),
+        "calltree_analysis" => Some(run_calltree_analysis(parsed_data)),
+        "sink_coverage_analysis" => Some(run_sink_coverage_analysis(parsed_data)),
+        "function_table" => Some(run_function_table(parsed_data)),
         _ => {
             log::warn!("unknown plugin requested: {:?}", name);
             None
         }
     }
+}
+
+type ProjectDataParser = fn(&JsonValue) -> ParsedProjectData;
+
+fn run_request_with_parser(
+    request: &Request,
+    parse_project_data_fn: ProjectDataParser,
+) -> HashMap<String, PluginResult> {
+    let parsed_data = parse_project_data_fn(&request.project_data);
+
+    // Collect (name, result) pairs in parallel; rayon preserves input order.
+    request
+        .plugins
+        .par_iter()
+        .filter_map(|plugin_name| {
+            dispatch_plugin(plugin_name, &parsed_data).map(|result| (plugin_name.clone(), result))
+        })
+        .collect()
 }
 
 // ── Request execution ────────────────────────────────────────────────────────
@@ -877,15 +909,7 @@ fn dispatch_plugin(name: &str, project_data: &JsonValue) -> Option<PluginResult>
 ///
 /// Plugin names that are not recognised are silently omitted from `results`.
 fn run_request(request: &Request) -> HashMap<String, PluginResult> {
-    // Collect (name, result) pairs in parallel; rayon preserves input order.
-    request
-        .plugins
-        .par_iter()
-        .filter_map(|plugin_name| {
-            dispatch_plugin(plugin_name, &request.project_data)
-                .map(|result| (plugin_name.clone(), result))
-        })
-        .collect()
+    run_request_with_parser(request, parse_project_data)
 }
 
 // ── I/O helpers ──────────────────────────────────────────────────────────────
@@ -981,6 +1005,7 @@ fn main() {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn make_request(plugins: &[&str]) -> Request {
         Request {
@@ -1041,36 +1066,45 @@ mod tests {
         })
     }
 
+    fn parsed(data: &JsonValue) -> ParsedProjectData {
+        parse_project_data(data)
+    }
+
     // ── dispatch tests ───────────────────────────────────────────────────────
 
     #[test]
     fn dispatch_optimal_targets_returns_some() {
-        let result = dispatch_plugin("optimal_targets", &json!({}));
+        let parsed_data = parsed(&json!({}));
+        let result = dispatch_plugin("optimal_targets", &parsed_data);
         assert!(result.is_some());
     }
 
     #[test]
     fn dispatch_runtime_coverage_analysis_returns_some() {
-        let result = dispatch_plugin("runtime_coverage_analysis", &json!({}));
+        let parsed_data = parsed(&json!({}));
+        let result = dispatch_plugin("runtime_coverage_analysis", &parsed_data);
         assert!(result.is_some());
     }
 
     #[test]
     fn dispatch_calltree_analysis_returns_some() {
-        let result = dispatch_plugin("calltree_analysis", &json!({}));
+        let parsed_data = parsed(&json!({}));
+        let result = dispatch_plugin("calltree_analysis", &parsed_data);
         assert!(result.is_some());
     }
 
     #[test]
     fn dispatch_unknown_plugin_returns_none() {
-        let result = dispatch_plugin("no_such_plugin", &json!({}));
+        let parsed_data = parsed(&json!({}));
+        let result = dispatch_plugin("no_such_plugin", &parsed_data);
         assert!(result.is_none());
     }
 
     #[test]
     fn function_table_returns_compact_ordered_names() {
         let data = sample_project_data();
-        let result = run_function_table(&data);
+        let parsed_data = parsed(&data);
+        let result = run_function_table(&parsed_data);
         let names = &result.tables["ordered_function_names"];
 
         assert_eq!(names.len(), 3);
@@ -1083,21 +1117,21 @@ mod tests {
 
     #[test]
     fn optimal_targets_has_expected_table_key() {
-        let result = run_optimal_targets(&json!({}));
+        let result = run_optimal_targets(&parsed(&json!({})));
         assert!(result.tables.contains_key("optimal_targets"));
         assert!(!result.summary.is_empty());
     }
 
     #[test]
     fn optimal_targets_empty_functions_returns_empty_table() {
-        let result = run_optimal_targets(&json!({"functions": []}));
+        let result = run_optimal_targets(&parsed(&json!({"functions": []})));
         assert!(result.tables["optimal_targets"].is_empty());
     }
 
     #[test]
     fn optimal_targets_selects_foo_not_main_or_bar() {
         let data = sample_project_data();
-        let result = run_optimal_targets(&data);
+        let result = run_optimal_targets(&parsed(&data));
         let rows = &result.tables["optimal_targets"];
         // foo qualifies: hitcount=0, arg_count=2, tcc=80>=20, bb=5>1, nuc=60>=35,
         //                functions_reached=["bar","baz"] len>=1, name not "main"/"main2"
@@ -1122,7 +1156,7 @@ mod tests {
                 "source_file": "main.cpp"
             }]
         });
-        let result = run_optimal_targets(&data);
+        let result = run_optimal_targets(&parsed(&data));
         assert!(result.tables["optimal_targets"].is_empty(), "main must be excluded");
     }
 
@@ -1143,7 +1177,7 @@ mod tests {
                 "source_file": "x.cpp"
             }]
         });
-        let result = run_optimal_targets(&data);
+        let result = run_optimal_targets(&parsed(&data));
         assert!(result.tables["optimal_targets"].is_empty(), "main2 substring must be excluded");
     }
 
@@ -1164,7 +1198,7 @@ mod tests {
                 "source_file": "foo.cpp"
             }]
         });
-        let result = run_optimal_targets(&data);
+        let result = run_optimal_targets(&parsed(&data));
         assert!(result.tables["optimal_targets"].is_empty(), "hitcount>0 must be excluded");
     }
 
@@ -1188,7 +1222,7 @@ mod tests {
                 }
             ]
         });
-        let result = run_optimal_targets(&data);
+        let result = run_optimal_targets(&parsed(&data));
         let rows = &result.tables["optimal_targets"];
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["function_name"], "beta", "beta has higher nuc");
@@ -1199,21 +1233,21 @@ mod tests {
 
     #[test]
     fn runtime_coverage_has_expected_table_key() {
-        let result = run_runtime_coverage_analysis(&json!({}));
+        let result = run_runtime_coverage_analysis(&parsed(&json!({})));
         assert!(result.tables.contains_key("runtime_coverage"));
         assert!(!result.summary.is_empty());
     }
 
     #[test]
     fn runtime_coverage_empty_functions_returns_empty_table() {
-        let result = run_runtime_coverage_analysis(&json!({"functions": []}));
+        let result = run_runtime_coverage_analysis(&parsed(&json!({"functions": []})));
         assert!(result.tables["runtime_coverage"].is_empty());
     }
 
     #[test]
     fn runtime_coverage_selects_bar_not_foo_or_main() {
         let data = sample_project_data();
-        let result = run_runtime_coverage_analysis(&data);
+        let result = run_runtime_coverage_analysis(&parsed(&data));
         let rows = &result.tables["runtime_coverage"];
         // bar: hitcount=1 >0 AND new_unreached_complexity=25 >20  → included
         // foo: hitcount=0  → excluded
@@ -1233,7 +1267,7 @@ mod tests {
                 "runtime_coverage_percent": 0.0, "source_file": "u.cpp"
             }]
         });
-        let result = run_runtime_coverage_analysis(&data);
+        let result = run_runtime_coverage_analysis(&parsed(&data));
         assert!(result.tables["runtime_coverage"].is_empty(), "hitcount=0 must be excluded");
     }
 
@@ -1248,7 +1282,7 @@ mod tests {
                 "runtime_coverage_percent": 90.0, "source_file": "s.cpp"
             }]
         });
-        let result = run_runtime_coverage_analysis(&data);
+        let result = run_runtime_coverage_analysis(&parsed(&data));
         assert!(
             result.tables["runtime_coverage"].is_empty(),
             "nuc<=20 must be excluded"
@@ -1259,7 +1293,7 @@ mod tests {
 
     #[test]
     fn calltree_analysis_has_expected_table_key() {
-        let result = run_calltree_analysis(&json!({}));
+        let result = run_calltree_analysis(&parsed(&json!({})));
         assert!(result.tables.contains_key("calltree_nodes"));
         assert!(!result.summary.is_empty());
     }
@@ -1267,7 +1301,7 @@ mod tests {
     #[test]
     fn calltree_analysis_empty_project_returns_one_summary_row() {
         let data = json!({"functions": [], "target_lang": "c-cpp"});
-        let result = run_calltree_analysis(&data);
+        let result = run_calltree_analysis(&parsed(&data));
         let rows = &result.tables["calltree_nodes"];
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["total_functions"], 0);
@@ -1279,7 +1313,7 @@ mod tests {
     #[test]
     fn calltree_analysis_counts_reached_functions() {
         let data = sample_project_data();
-        let result = run_calltree_analysis(&data);
+        let result = run_calltree_analysis(&parsed(&data));
         let rows = &result.tables["calltree_nodes"];
         assert_eq!(rows.len(), 1);
         // bar has hitcount=1; foo and main have hitcount=0
@@ -1292,12 +1326,19 @@ mod tests {
     #[test]
     fn calltree_analysis_reach_percentage_zero_for_no_functions() {
         let data = json!({"target_lang": "rust"});
-        let result = run_calltree_analysis(&data);
+        let result = run_calltree_analysis(&parsed(&data));
         let rows = &result.tables["calltree_nodes"];
         assert_eq!(rows[0]["reach_percentage"], 0.0);
     }
 
     // ── parallel dispatch tests ──────────────────────────────────────────────
+
+    static PARSE_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+    fn counting_parse_project_data(project_data: &JsonValue) -> ParsedProjectData {
+        PARSE_INVOCATIONS.fetch_add(1, Ordering::SeqCst);
+        parse_project_data(project_data)
+    }
 
     #[test]
     fn run_request_all_known_plugins() {
@@ -1327,6 +1368,24 @@ mod tests {
         let request = make_request(&[]);
         let results = run_request(&request);
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn run_request_parses_project_data_once_for_multiple_plugins() {
+        PARSE_INVOCATIONS.store(0, Ordering::SeqCst);
+        let request = Request {
+            schema_version: 1,
+            plugins: vec![
+                "optimal_targets".to_string(),
+                "runtime_coverage_analysis".to_string(),
+                "calltree_analysis".to_string(),
+            ],
+            project_data: sample_project_data(),
+        };
+
+        let results = run_request_with_parser(&request, counting_parse_project_data);
+        assert_eq!(results.len(), 3);
+        assert_eq!(PARSE_INVOCATIONS.load(Ordering::SeqCst), 1);
     }
 
     // ── serialisation round-trip test ────────────────────────────────────────
@@ -1442,7 +1501,7 @@ mod tests {
                 "runtime_coverage_percent": 0.0, "source_file": "c.cpp"
             }]
         });
-        let result = run_optimal_targets(&data);
+        let result = run_optimal_targets(&parsed(&data));
         let rows = &result.tables["optimal_targets"];
         assert_eq!(rows.len(), 1, "function with count>0 should qualify");
         assert_eq!(rows[0]["function_name"], "counted");
@@ -1463,7 +1522,7 @@ mod tests {
                 "runtime_coverage_percent": 0.0, "source_file": "e.cpp"
             }]
         });
-        let result = run_optimal_targets(&data);
+        let result = run_optimal_targets(&parsed(&data));
         assert!(
             result.tables["optimal_targets"].is_empty(),
             "functions_reached_count=0 must be excluded"
