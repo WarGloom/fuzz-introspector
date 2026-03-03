@@ -1662,11 +1662,11 @@ def _collect_correlator_shard_updates(
     response: dict[str, Any],
     require_complete_coverage: bool = True,
     expected_native_output_dir: str | None = None,
-) -> list[tuple[int, dict[str, Any], dict[str, Any]]]:
+) -> dict[int, tuple[dict[str, Any], dict[str, Any]]]:
     function_count = len(all_debug_functions)
     shard_paths = _extract_correlator_shard_paths(
         response, allow_empty=(function_count == 0))
-    validated_updates: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
+    staged_updates: dict[int, tuple[dict[str, Any], dict[str, Any]]] = {}
     seen_row_indexes: set[int] = set()
 
     for shard_path in shard_paths:
@@ -1677,9 +1677,8 @@ def _collect_correlator_shard_updates(
                 "Correlator shard file not found: "
                 f"shard={shard_path!r} resolved={resolved_shard_path!r}")
 
-        shard_updates = list(
-            _iter_correlator_shard_updates(resolved_shard_path))
-        for row_idx, _, _ in shard_updates:
+        for row_idx, func_signature_elems, source_location in _iter_correlator_shard_updates(
+                resolved_shard_path):
             if row_idx < 0 or row_idx >= function_count:
                 raise ValueError(
                     f"Correlator shard row index out of range: {row_idx}")
@@ -1687,7 +1686,7 @@ def _collect_correlator_shard_updates(
                 raise ValueError(
                     f"Correlator shard duplicate row index: {row_idx}")
             seen_row_indexes.add(row_idx)
-        validated_updates.extend(shard_updates)
+            staged_updates[row_idx] = (func_signature_elems, source_location)
 
     if require_complete_coverage and len(seen_row_indexes) != function_count:
         missing_row_indexes = sorted(
@@ -1697,19 +1696,28 @@ def _collect_correlator_shard_updates(
             f"expected={function_count} updated={len(seen_row_indexes)} "
             f"missing_rows={missing_row_indexes[:10]}")
 
-    return validated_updates
+    return staged_updates
 
 
 def _apply_collected_correlator_updates_in_place(
     all_debug_functions: list[dict[str, Any]],
-    validated_updates: list[tuple[int, dict[str, Any], dict[str, Any]]],
+    validated_updates: dict[int, tuple[dict[str, Any], dict[str, Any]]]
+    | list[tuple[int, dict[str, Any], dict[str, Any]]],
 ) -> int:
-    for row_idx, func_signature_elems, source_location in validated_updates:
+    update_count = 0
+    if isinstance(validated_updates, dict):
+        update_iterable = ((row_idx, payload[0], payload[1])
+                           for row_idx, payload in validated_updates.items())
+    else:
+        update_iterable = validated_updates
+
+    for row_idx, func_signature_elems, source_location in update_iterable:
         debug_func = all_debug_functions[row_idx]
         debug_func["func_signature_elems"] = func_signature_elems
         debug_func["source"] = source_location
+        update_count += 1
 
-    return len(validated_updates)
+    return update_count
 
 
 def _validate_correlator_native_counters(response: dict[str, Any],

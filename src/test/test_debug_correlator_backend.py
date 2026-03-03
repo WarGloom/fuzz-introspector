@@ -609,7 +609,7 @@ def test_correlator_shards_keep_one_update_per_original_row(tmp_path) -> None:
         require_complete_coverage=True,
     )
 
-    assert [row_idx for row_idx, _sig, _source in updates] == [0, 1, 2]
+    assert list(updates) == [0, 1, 2]
 
 
 def test_correlator_shard_path_outside_expected_output_dir_rejected(tmp_path) -> None:
@@ -699,7 +699,33 @@ def test_correlator_shard_path_within_expected_output_dir_accepted(tmp_path) -> 
         expected_native_output_dir=str(allowed_dir),
     )
 
-    assert [row_idx for row_idx, _sig, _source in updates] == [0]
+    assert list(updates) == [0]
+
+
+def test_apply_collected_correlator_updates_accepts_staged_dict() -> None:
+    debug_functions = [
+        {"name": "a"},
+        {"name": "b"},
+    ]
+    staged_updates = {
+        0: (
+            {"return_type": ["int"], "params": []},
+            {"source_file": "a.c", "source_line": "10"},
+        ),
+        1: (
+            {"return_type": ["void"], "params": []},
+            {"source_file": "b.c", "source_line": "20"},
+        ),
+    }
+
+    updated_count = debug_info._apply_collected_correlator_updates_in_place(
+        debug_functions,
+        staged_updates,
+    )
+
+    assert updated_count == 2
+    assert debug_functions[0]["func_signature_elems"]["return_type"] == ["int"]
+    assert debug_functions[1]["source"]["source_file"] == "b.c"
 
 
 # ---------------------------------------------------------------------------
