@@ -62,6 +62,8 @@ struct FunctionEntry {
     runtime_coverage_percent: f64,
     #[serde(default)]
     source_file: String,
+    #[serde(default)]
+    incoming_references: Vec<String>,
 }
 
 /// Parse `project_data["functions"]` into a `Vec<FunctionEntry>`.
@@ -320,6 +322,500 @@ fn run_calltree_analysis(project_data: &JsonValue) -> PluginResult {
     PluginResult { tables, summary }
 }
 
+// ── Sink coverage analysis ────────────────────────────────────────────────────
+
+/// A single sink entry: CWE name, target language, package, function name.
+struct SinkEntry {
+    cwe: &'static str,
+    lang: &'static str,
+    package: &'static str,
+    func: &'static str,
+}
+
+/// All known sink functions, embedded as static data.
+/// Ported from `src/fuzz_introspector/analyses/data/cwe_data.py`.
+static SINKS: &[SinkEntry] = &[
+    // ── CWE78: Command Injection ─────────────────────────────────────────────
+    SinkEntry { cwe: "CWE78", lang: "c-cpp", package: "", func: "system" },
+    SinkEntry { cwe: "CWE78", lang: "c-cpp", package: "", func: "execl" },
+    SinkEntry { cwe: "CWE78", lang: "c-cpp", package: "", func: "execlp" },
+    SinkEntry { cwe: "CWE78", lang: "c-cpp", package: "", func: "execle" },
+    SinkEntry { cwe: "CWE78", lang: "c-cpp", package: "", func: "execv" },
+    SinkEntry { cwe: "CWE78", lang: "c-cpp", package: "", func: "execvp" },
+    SinkEntry { cwe: "CWE78", lang: "c-cpp", package: "", func: "execve" },
+    SinkEntry { cwe: "CWE78", lang: "c-cpp", package: "", func: "wordexp" },
+    SinkEntry { cwe: "CWE78", lang: "c-cpp", package: "", func: "popen" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "<builtin>", func: "exec" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "<builtin>", func: "eval" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "subprocess", func: "call" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "subprocess", func: "run" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "subprocess", func: "Popen" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "subprocess", func: "check_output" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "system" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "popen" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "spawn" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "spawnl" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "spawnle" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "spawnlp" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "spawnlpe" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "spawnv" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "spawnvp" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "spawnve" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "spawnvpe" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "exec" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "execl" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "execle" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "execlp" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "execlpe" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "execv" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "execve" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "os", func: "execvp" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "asyncio", func: "create_subprocess_shell" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "asyncio", func: "create_subprocess_exec" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "code.InteractiveInterpreter", func: "runsource" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "code.InteractiveInterpreter", func: "runcode" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "code.InteractiveInterpreter", func: "write" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "code.InteractiveConsole", func: "push" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "code.InteractiveConsole", func: "interact" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "code.InteractiveConsole", func: "raw_input" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "code", func: "interact" },
+    SinkEntry { cwe: "CWE78", lang: "python", package: "code", func: "compile_command" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.Runtime", func: "exec" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "javax.xml.xpath.XPath", func: "compile" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "javax.xml.xpath.XPath", func: "evaluate" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.util.concurrent.Executor", func: "execute" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.util.concurrent.Callable", func: "call" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.System", func: "console" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.System", func: "load" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.System", func: "loadLibrary" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.System", func: "mapLibraryName" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.System", func: "runFinalization" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.System", func: "exec" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.ProcessBuilder", func: "directory" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.ProcessBuilder", func: "inheritIO" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.ProcessBuilder", func: "command" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.ProcessBuilder", func: "redirectError" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.ProcessBuilder", func: "redirectErrorStream" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.ProcessBuilder", func: "redirectInput" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.ProcessBuilder", func: "redirectOutput" },
+    SinkEntry { cwe: "CWE78", lang: "jvm", package: "java.lang.ProcessBuilder", func: "start" },
+    // ── CWE79: Cross-site Scripting ──────────────────────────────────────────
+    SinkEntry { cwe: "CWE79", lang: "c-cpp", package: "", func: "put" },
+    SinkEntry { cwe: "CWE79", lang: "c-cpp", package: "", func: "puts" },
+    SinkEntry { cwe: "CWE79", lang: "c-cpp", package: "", func: "getenv" },
+    SinkEntry { cwe: "CWE79", lang: "c-cpp", package: "", func: "putc" },
+    SinkEntry { cwe: "CWE79", lang: "c-cpp", package: "", func: "fputc" },
+    SinkEntry { cwe: "CWE79", lang: "c-cpp", package: "", func: "putchar" },
+    SinkEntry { cwe: "CWE79", lang: "python", package: "jinja2.Environment", func: "get_template" },
+    SinkEntry { cwe: "CWE79", lang: "python", package: "jinja2.Environment", func: "from_string" },
+    SinkEntry { cwe: "CWE79", lang: "python", package: "jinja2.Template", func: "render" },
+    SinkEntry { cwe: "CWE79", lang: "python", package: "jinja2.Template", func: "stream" },
+    SinkEntry { cwe: "CWE79", lang: "python", package: "flask", func: "make_response" },
+    SinkEntry { cwe: "CWE79", lang: "jvm", package: "java.io.PrintWriter", func: "print" },
+    SinkEntry { cwe: "CWE79", lang: "jvm", package: "java.io.PrintWriter", func: "printf" },
+    SinkEntry { cwe: "CWE79", lang: "jvm", package: "java.io.PrintWriter", func: "println" },
+    SinkEntry { cwe: "CWE79", lang: "jvm", package: "java.io.PrintWriter", func: "write" },
+    SinkEntry { cwe: "CWE79", lang: "jvm", package: "java.io.OutputStream", func: "write" },
+    // ── CWE787: Out-of-bounds Write ──────────────────────────────────────────
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "malloc" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "alligned_alloc" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "xmalloc" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "calloc" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "realloc" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "strcpy" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "strcpy_s" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "strncpy" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "strncpy_s" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "strcat" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "strcat_s" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "strncat" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "strncat_s" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "strxfrm" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "strdup" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "strndup" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "memchr" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "memset" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "memset_explicit" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "memset_s" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "memcpy" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "memcpy_s" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "memmove" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "memmove_s" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "memccpy" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "putc" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "fputc" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "putchar" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "puts" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "put" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "fwrite" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "ungetc" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "fputwc" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "putwc" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "fputws" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "putwchar" },
+    SinkEntry { cwe: "CWE787", lang: "c-cpp", package: "", func: "ungetwc" },
+    // ── CWE89: SQL Injection ─────────────────────────────────────────────────
+    SinkEntry { cwe: "CWE89", lang: "c-cpp", package: "", func: "runSql" },
+    SinkEntry { cwe: "CWE89", lang: "c-cpp", package: "", func: "runQuery" },
+    SinkEntry { cwe: "CWE89", lang: "python", package: "cursor.MySQLCursor", func: "execute" },
+    SinkEntry { cwe: "CWE89", lang: "python", package: "cursor.MySQLCursor", func: "executemany" },
+    SinkEntry { cwe: "CWE89", lang: "python", package: "cursor.MySQLCursor", func: "executescript" },
+    SinkEntry { cwe: "CWE89", lang: "python", package: "psycopg2.extensions.cursor", func: "execute" },
+    SinkEntry { cwe: "CWE89", lang: "python", package: "psycopg2.extensions.cursor", func: "executemany" },
+    SinkEntry { cwe: "CWE89", lang: "python", package: "psycopg2.extensions.cursor", func: "executescript" },
+    SinkEntry { cwe: "CWE89", lang: "python", package: "sqlite3.Cursor", func: "execute" },
+    SinkEntry { cwe: "CWE89", lang: "python", package: "sqlite3.Cursor", func: "executemany" },
+    SinkEntry { cwe: "CWE89", lang: "python", package: "sqlite3.Cursor", func: "executescript" },
+    SinkEntry { cwe: "CWE89", lang: "python", package: "sqlite3.dbapi2.Cursor", func: "execute" },
+    SinkEntry { cwe: "CWE89", lang: "python", package: "sqlite3.dbapi2.Cursor", func: "executemany" },
+    SinkEntry { cwe: "CWE89", lang: "python", package: "sqlite3.dbapi2.Cursor", func: "executescript" },
+    SinkEntry { cwe: "CWE89", lang: "jvm", package: "java.sql.Statement", func: "execute" },
+    SinkEntry { cwe: "CWE89", lang: "jvm", package: "java.sql.Statement", func: "executeBatch" },
+    SinkEntry { cwe: "CWE89", lang: "jvm", package: "java.sql.Statement", func: "executeLargeBatch" },
+    SinkEntry { cwe: "CWE89", lang: "jvm", package: "java.sql.Statement", func: "executeLargeUpdate" },
+    SinkEntry { cwe: "CWE89", lang: "jvm", package: "java.sql.Statement", func: "executeQuery" },
+    SinkEntry { cwe: "CWE89", lang: "jvm", package: "java.sql.Statement", func: "executeUpdate" },
+    SinkEntry { cwe: "CWE89", lang: "jvm", package: "java.sql.Statement", func: "addBatch" },
+    SinkEntry { cwe: "CWE89", lang: "jvm", package: "javax.persistence.EntityManager", func: "createNativeQuery" },
+    SinkEntry { cwe: "CWE89", lang: "jvm", package: "javax.persistence.EntityManager", func: "createQuery" },
+    SinkEntry { cwe: "CWE89", lang: "jvm", package: "javax.persistence.EntityManager", func: "createStoredProcedureQuery" },
+    // ── CWE416: Use After Free ───────────────────────────────────────────────
+    SinkEntry { cwe: "CWE416", lang: "c-cpp", package: "", func: "c_str" },
+    SinkEntry { cwe: "CWE416", lang: "c-cpp", package: "", func: "getUniquePointer" },
+    SinkEntry { cwe: "CWE416", lang: "c-cpp", package: "", func: "free" },
+    SinkEntry { cwe: "CWE416", lang: "c-cpp", package: "", func: "get" },
+    // ── CWE20: Improper Input Validation ─────────────────────────────────────
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "fread" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "fgetc" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "getc" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "fgets" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "getchar" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "gets" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "gets_s" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "get" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "fget" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "fgetwc" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "getwc" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "fgetws" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "getwchar" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "scanf" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "fscanf" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "sscanf" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "scanf_s" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "fscanf_s" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "sscanf_s" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "vscanf" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "vfscanf" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "vsscanf" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "vscanf_s" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "vfscanf_s" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "vsscanf_s" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "wscanf" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "fwscanf" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "swscanf" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "wscanf_s" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "fwscanf_s" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "swscanf_s" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "vwscanf" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "vfwscanf" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "vswscanf" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "vwscanf_s" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "vfwscanf_s" },
+    SinkEntry { cwe: "CWE20", lang: "c-cpp", package: "", func: "vswscanf_s" },
+    SinkEntry { cwe: "CWE20", lang: "python", package: "re", func: "compile" },
+    SinkEntry { cwe: "CWE20", lang: "python", package: "re.Pattern", func: "match" },
+    SinkEntry { cwe: "CWE20", lang: "python", package: "flask.Request", func: "get_data" },
+    SinkEntry { cwe: "CWE20", lang: "python", package: "flask.Request", func: "get_json" },
+    SinkEntry { cwe: "CWE20", lang: "python", package: "flask.Request", func: "args" },
+    SinkEntry { cwe: "CWE20", lang: "python", package: "flask.Request", func: "charset" },
+    SinkEntry { cwe: "CWE20", lang: "python", package: "flask.Request", func: "content_encoding" },
+    SinkEntry { cwe: "CWE20", lang: "python", package: "flask.Request", func: "content_length" },
+    SinkEntry { cwe: "CWE20", lang: "python", package: "flask.Request", func: "content_md5" },
+    SinkEntry { cwe: "CWE20", lang: "python", package: "flask.Request", func: "content_type" },
+    SinkEntry { cwe: "CWE20", lang: "python", package: "flask.Request", func: "cookies" },
+    SinkEntry { cwe: "CWE20", lang: "python", package: "flask.Request", func: "files" },
+    SinkEntry { cwe: "CWE20", lang: "python", package: "flask.Request", func: "headers" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getAttribute" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getAttributeNames" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getAuthType" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getCharacterEncoding" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getContentType" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getContextPath" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getCookies" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getDateHeader" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getHeader" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getHeaderNames" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getIntHeader" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getMethod" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getParameter" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getParameterMap" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getParameterNames" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getParameterValues" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getPart" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getParts" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getPathInfo" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getPathTranslated" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getQueryString" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getRemoteUser" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getRequestedSessionId" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getRequestURI" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getRequestURL" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "java.io.InputStream", func: "read" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "java.io.BufferedReader", func: "read" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "java.io.BufferedReader", func: "readLine" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "java.lang.System", func: "getenv" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "java.lang.System", func: "getProperties" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "java.lang.System", func: "getProperty" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "java.lang.System", func: "load" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "java.lang.System", func: "loadLibrary" },
+    SinkEntry { cwe: "CWE20", lang: "jvm", package: "java.lang.System", func: "getSecurityManager" },
+    // ── CWE22: Path Traversal ────────────────────────────────────────────────
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "open" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "write" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "ostrm" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "copy" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "copy_file" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "copy_symlink" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "absolute" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "canonical" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "relative" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "create_directory" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "create_directories" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "creatE_hard_link" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "create_symlink" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "create_directory_symlink" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "remove" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "remove_all" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "rename" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "resize_file" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "opendir" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "readdir" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "readdir_r" },
+    SinkEntry { cwe: "CWE22", lang: "c-cpp", package: "", func: "fopen" },
+    SinkEntry { cwe: "CWE22", lang: "python", package: "tarfile", func: "open" },
+    SinkEntry { cwe: "CWE22", lang: "python", package: "zipfile", func: "open" },
+    SinkEntry { cwe: "CWE22", lang: "python", package: "<builtin>", func: "open" },
+    SinkEntry { cwe: "CWE22", lang: "python", package: "os.path", func: "join" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.io.InputStream", func: "<init>" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.io.File", func: "<init>" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.io.BufferedReader", func: "<init>" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.nio.file.Paths", func: "get" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.nio.file.Files", func: "createDirectories" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.nio.file.Files", func: "createDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.nio.file.Files", func: "createFile" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.nio.file.Files", func: "createLink" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.nio.file.Files", func: "createSymbolicLink" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.nio.file.Files", func: "createTempDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.nio.file.Files", func: "createTempFile" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.nio.file.Files", func: "delete" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.nio.file.Files", func: "deleteIfExists" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.nio.file.Files", func: "find" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.nio.file.Files", func: "move" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.nio.file.Files", func: "write" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.io.File", func: "createNewFile" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.io.File", func: "createTempFile" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.io.File", func: "delete" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.io.File", func: "deleteOnExit" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "java.io.File", func: "renameTo" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "cleanDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "copyDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "copyFile" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "copyFileToDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "copyInputStreamToFile" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "copyToDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "copyToFile" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "copyURLToFile" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "createParentDirectories" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "delete" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "deleteDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "deleteQuitely" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "forceDelete" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "forceDeleteOnExit" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "forceMkdir" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "forceMkdirParent" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "moveDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "moveDirectoryToDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "moveFile" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "moveFileToDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "moveToDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "newOutputStream" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "openOutputStream" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "write" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "writeByteArrayToFile" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "writeLines" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.FileUtils", func: "writeStringToFile" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.file.PathUtils", func: "cleanDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.file.PathUtils", func: "copyDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.file.PathUtils", func: "copyFile" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.file.PathUtils", func: "copyFileToDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.file.PathUtils", func: "delete" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.file.PathUtils", func: "deleteDirectory" },
+    SinkEntry { cwe: "CWE22", lang: "jvm", package: "org.apache.commons.io.file.PathUtils", func: "deleteFile" },
+    // ── CWE352: Cross-site Request Forgery ───────────────────────────────────
+    SinkEntry { cwe: "CWE352", lang: "python", package: "django.middleware.csrf.CsrfViewMiddleware", func: "csrf_trusted_origins_hosts" },
+    SinkEntry { cwe: "CWE352", lang: "python", package: "django.middleware.csrf.CsrfViewMiddleware", func: "allowed_origins_exact" },
+    SinkEntry { cwe: "CWE352", lang: "python", package: "django.middleware.csrf.CsrfViewMiddleware", func: "allowed_origin_subdomains" },
+    SinkEntry { cwe: "CWE352", lang: "python", package: "django.middleware.csrf.CsrfViewMiddleware", func: "_accept" },
+    SinkEntry { cwe: "CWE352", lang: "python", package: "django.middleware.csrf.CsrfViewMiddleware", func: "_reject" },
+    SinkEntry { cwe: "CWE352", lang: "python", package: "django.middleware.csrf.CsrfViewMiddleware", func: "_get_secret" },
+    SinkEntry { cwe: "CWE352", lang: "python", package: "django.middleware.csrf.CsrfViewMiddleware", func: "_set_csrf_cookie" },
+    SinkEntry { cwe: "CWE352", lang: "python", package: "django.middleware.csrf.CsrfViewMiddleware", func: "_origin_verified" },
+    SinkEntry { cwe: "CWE352", lang: "python", package: "django.middleware.csrf.CsrfViewMiddleware", func: "_check_referer" },
+    SinkEntry { cwe: "CWE352", lang: "python", package: "django.middleware.csrf.CsrfViewMiddleware", func: "_check_token" },
+    SinkEntry { cwe: "CWE352", lang: "python", package: "django.middleware.csrf.CsrfViewMiddleware", func: "process_request" },
+    SinkEntry { cwe: "CWE352", lang: "python", package: "django.middleware.csrf.CsrfViewMiddleware", func: "process_view" },
+    SinkEntry { cwe: "CWE352", lang: "python", package: "django.middleware.csrf.CsrfViewMiddleware", func: "process_response" },
+    SinkEntry { cwe: "CWE352", lang: "jvm", package: "org.springframework.security.config.annotation.web.builders.HttpSecurity", func: "csrf" },
+    // ── CWE434: Unrestricted Upload of File ──────────────────────────────────
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getContentType" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getParameter" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getParameterMap" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getParameterNames" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getParameterValues" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getPart" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "javax.servlet.http.HttpServletRequest", func: "getParts" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "java.io.InputStream", func: "read" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "java.io.BufferedReader", func: "read" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "java.io.BufferedReader", func: "readLine" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "java.io.BufferedWriter", func: "write" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "java.io.OutputStream", func: "write" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "java.lang.System", func: "getenv" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "java.lang.System", func: "getProperties" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "java.lang.System", func: "getProperty" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "java.lang.System", func: "load" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "java.lang.System", func: "loadLibrary" },
+    SinkEntry { cwe: "CWE434", lang: "jvm", package: "java.lang.System", func: "getSecurityManager" },
+];
+
+/// Check whether a function name matches a sink entry for the given language.
+///
+/// Matching logic mirrors `_filter_function_list` in `sinks_analyser.py`:
+/// - `c-cpp`: demangle by stripping everything up to the last `::`, then match
+///   on bare function name (package always empty).
+/// - `python`: function name may be `<package>.<func>` or just `<func>`;
+///   source_file is the package for non-`<builtin>` functions.
+/// - `jvm`: function name is `[package].method(sig...)`; strip brackets and
+///   signature, then split on last `.`.
+fn matches_sink(f: &FunctionEntry, sink: &SinkEntry, lang: &str) -> bool {
+    if sink.lang != lang {
+        return false;
+    }
+    match lang {
+        "c-cpp" => {
+            // Demangle: take the segment after the last `::`
+            let bare = if let Some(pos) = f.name.rfind("::") {
+                &f.name[pos + 2..]
+            } else {
+                &f.name
+            };
+            sink.package.is_empty() && bare == sink.func
+        }
+        "python" => {
+            let func_name = &f.name;
+            let package = &f.source_file;
+            // Handle `<builtin>.func` style names
+            if func_name.starts_with("<builtin>.") {
+                let bare = &func_name[10..];
+                return sink.package == "<builtin>" && bare == sink.func;
+            }
+            sink.package == package.as_str() && func_name == sink.func
+        }
+        "jvm" => {
+            // Strip leading `[` and trailing `]`
+            let name = f.name.trim_start_matches('[');
+            let name = if let Some(pos) = name.find(']') { &name[..pos] } else { name };
+            // Strip signature: everything from `(` onward
+            let name = if let Some(pos) = name.find('(') { &name[..pos] } else { name };
+            if let Some(dot) = name.rfind('.') {
+                let pkg = &name[..dot];
+                let meth = &name[dot + 1..];
+                sink.package == pkg && sink.func == meth
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+/// `sink_coverage_analysis`: find sink functions present in the project and
+/// report which callers reach them (via `incoming_references`).
+///
+/// Ports the core identification logic of `SinkCoverageAnalyser` from
+/// `src/fuzz_introspector/analyses/sinks_analyser.py`.
+/// Returns one row per matched sink.  Each row contains:
+///   - `func_name`: the matched function name
+///   - `cwe`: the CWE identifier
+///   - `source_file`: source location
+///   - `reached_by_fuzzers`: list of fuzzers that statically reach this sink
+///   - `callers`: list of `incoming_references` entries for this function
+fn run_sink_coverage_analysis(project_data: &JsonValue) -> PluginResult {
+    log::debug!("[sink_coverage_analysis] running");
+
+    let functions = parse_functions(project_data);
+    let target_lang = project_data
+        .get("target_lang")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("c-cpp");
+
+    // Build a lookup from function name → FunctionEntry for caller discovery.
+    let name_to_func: HashMap<&str, &FunctionEntry> =
+        functions.iter().map(|f| (f.name.as_str(), f)).collect();
+
+    let rows: Vec<JsonValue> = functions
+        .par_iter()
+        .filter_map(|f| {
+            // Find the first matching sink entry for this function.
+            let sink = SINKS.iter().find(|s| matches_sink(f, s, target_lang))?;
+
+            // Collect unique caller names from incoming_references.
+            let mut callers: Vec<&str> = f.incoming_references.iter().map(|s| s.as_str()).collect();
+            callers.sort_unstable();
+            callers.dedup();
+
+            // Determine which callers are themselves reached by fuzzers.
+            let fuzzer_callers: Vec<&str> = callers
+                .iter()
+                .copied()
+                .filter(|caller| {
+                    name_to_func
+                        .get(caller)
+                        .map(|cf| !cf.reached_by_fuzzers.is_empty())
+                        .unwrap_or(false)
+                })
+                .collect();
+
+            Some(serde_json::json!({
+                "func_name": f.name,
+                "cwe": sink.cwe,
+                "source_file": f.source_file,
+                "reached_by_fuzzers": f.reached_by_fuzzers,
+                "callers": callers,
+                "fuzzer_callers": fuzzer_callers,
+            }))
+        })
+        .collect();
+
+    // Collect unique CWEs seen across matched sinks.
+    let mut cwes_seen: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| r.get("cwe").and_then(|v| v.as_str()))
+        .collect();
+    cwes_seen.sort_unstable();
+    cwes_seen.dedup();
+
+    let summary = format!(
+        "sink_coverage_analysis: {} sink(s) found across {} CWE(s)",
+        rows.len(),
+        cwes_seen.len()
+    );
+    log::debug!("[sink_coverage_analysis] {}", summary);
+
+    let mut tables = HashMap::new();
+    tables.insert("sink_coverage".to_string(), rows);
+    PluginResult { tables, summary }
+}
+
 /// Dispatcher: route a plugin name to its handler function.
 ///
 /// Returns `None` for unknown plugin names so the caller can log and skip.
@@ -328,6 +824,7 @@ fn dispatch_plugin(name: &str, project_data: &JsonValue) -> Option<PluginResult>
         "optimal_targets" => Some(run_optimal_targets(project_data)),
         "runtime_coverage_analysis" => Some(run_runtime_coverage_analysis(project_data)),
         "calltree_analysis" => Some(run_calltree_analysis(project_data)),
+        "sink_coverage_analysis" => Some(run_sink_coverage_analysis(project_data)),
         _ => {
             log::warn!("unknown plugin requested: {:?}", name);
             None

@@ -79,6 +79,7 @@ _NATIVE_PLUGIN_NAMES: frozenset[str] = frozenset(
         "OptimalTargets",
         "RuntimeCoverageAnalysis",
         "CalltreeAnalysis",
+        "SinkCoverageAnalyser",
     }
 )
 
@@ -87,6 +88,7 @@ _PYTHON_NAME_TO_NATIVE_KEY: dict[str, str] = {
     "OptimalTargets": "optimal_targets",
     "RuntimeCoverageAnalysis": "runtime_coverage_analysis",
     "CalltreeAnalysis": "calltree_analysis",
+    "SinkCoverageAnalyser": "sink_coverage_analysis",
 }
 
 
@@ -118,6 +120,9 @@ def _serialize_project_for_native(
                     getattr(fp, "cov_init_graph_percentage", 0.0) or 0.0
                 ),
                 "source_file": (getattr(fp, "function_source_file", "") or ""),
+                "incoming_references": list(
+                    getattr(fp, "incoming_references", []) or []
+                ),
             }
         )
 
