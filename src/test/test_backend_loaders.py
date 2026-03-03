@@ -1306,3 +1306,34 @@ def test_fi_llvm_cov_loader_failure_falls_back_to_python(
     cp = code_coverage.load_llvm_coverage(str(tmp_path))
     assert cp.get_type() == "function"
     assert cp.coverage_files == [str(covreport)]
+
+
+# ---------------------------------------------------------------------------
+# parse_correlator_backend_env FI_NATIVE_BACKENDS propagation tests
+# ---------------------------------------------------------------------------
+
+
+def test_parse_correlator_backend_env_fi_native_backends_rust_is_honoured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FI_NATIVE_BACKENDS=rust must propagate to correlator when
+    FI_DEBUG_CORRELATOR_BACKEND is unset."""
+    monkeypatch.setenv("FI_NATIVE_BACKENDS", "rust")
+    monkeypatch.delenv("FI_DEBUG_CORRELATOR_BACKEND", raising=False)
+
+    assert (
+        backend_loaders.parse_correlator_backend_env() == backend_loaders.BACKEND_RUST
+    )
+
+
+def test_parse_correlator_backend_env_both_unset_defaults_to_python(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When both FI_NATIVE_BACKENDS and FI_DEBUG_CORRELATOR_BACKEND are unset,
+    parse_correlator_backend_env() must return BACKEND_PYTHON."""
+    monkeypatch.delenv("FI_NATIVE_BACKENDS", raising=False)
+    monkeypatch.delenv("FI_DEBUG_CORRELATOR_BACKEND", raising=False)
+
+    assert (
+        backend_loaders.parse_correlator_backend_env() == backend_loaders.BACKEND_PYTHON
+    )
