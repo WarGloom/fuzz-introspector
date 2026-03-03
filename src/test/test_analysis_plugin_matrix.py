@@ -14,7 +14,9 @@
 """Plugin matrix tests for analysis registration and selection."""
 
 import json
+import shutil
 import subprocess
+import tempfile
 from typing import Any
 from unittest import mock
 
@@ -581,7 +583,7 @@ def _make_calltree_native_result(total, reached, unreached, pct):
 # ── OptimalTargets plugin wiring ──────────────────────────────────────────────
 
 
-def _call_optimal_targets_analysis_func(proj_profile, profiles=None):
+def _call_optimal_targets_analysis_func(proj_profile, profiles=None, out_dir=None):
     """Drive OptimalTargets.analysis_func with safe HTML-rendering mocks."""
     instance = ot_module.OptimalTargets()
     instance.dump_files = False
@@ -595,34 +597,42 @@ def _call_optimal_targets_analysis_func(proj_profile, profiles=None):
         fake_profile.target_lang = "c-cpp"
         profiles = [fake_profile]
 
-    # Patch the heavy HTML-rendering helpers so we don't need a real profile.
-    with (
-        mock.patch.object(
-            instance,
-            "get_optimal_target_section",
-            return_value="<section/>",
-        ),
-        mock.patch.object(
-            instance,
-            "get_consequential_section",
-            return_value="<consequential/>",
-        ),
-        mock.patch(
-            "fuzz_introspector.analyses.optimal_targets.html_helpers"
-            ".html_add_header_with_link",
-            return_value="",
-        ),
-    ):
-        instance.analysis_func(
-            toc,
-            tables,
-            proj_profile,
-            profiles,
-            basefolder="",
-            coverage_url="",
-            conclusions=conclusions,
-            out_dir="/tmp",
-        )
+    _cleanup = out_dir is None
+    if out_dir is None:
+        out_dir = tempfile.mkdtemp()
+
+    try:
+        # Patch the heavy HTML-rendering helpers so we don't need a real profile.
+        with (
+            mock.patch.object(
+                instance,
+                "get_optimal_target_section",
+                return_value="<section/>",
+            ),
+            mock.patch.object(
+                instance,
+                "get_consequential_section",
+                return_value="<consequential/>",
+            ),
+            mock.patch(
+                "fuzz_introspector.analyses.optimal_targets.html_helpers"
+                ".html_add_header_with_link",
+                return_value="",
+            ),
+        ):
+            instance.analysis_func(
+                toc,
+                tables,
+                proj_profile,
+                profiles,
+                basefolder="",
+                coverage_url="",
+                conclusions=conclusions,
+                out_dir=out_dir,
+            )
+    finally:
+        if _cleanup:
+            shutil.rmtree(out_dir, ignore_errors=True)
 
     return instance
 
@@ -715,40 +725,48 @@ def test_optimal_targets_python_path_when_native_disabled(monkeypatch) -> None:
 # ── RuntimeCoverageAnalysis plugin wiring ─────────────────────────────────────
 
 
-def _call_runtime_cov_analysis_func(proj_profile, profiles=None):
+def _call_runtime_cov_analysis_func(proj_profile, profiles=None, out_dir=None):
     """Drive RuntimeCoverageAnalysis.analysis_func with safe mocks."""
     instance = rca_module.RuntimeCoverageAnalysis()
 
     toc = mock.MagicMock()
     tables = []
 
-    with (
-        mock.patch(
-            "fuzz_introspector.analyses.runtime_coverage_analysis.html_helpers"
-            ".html_add_header_with_link",
-            return_value="",
-        ),
-        mock.patch(
-            "fuzz_introspector.analyses.runtime_coverage_analysis.html_helpers"
-            ".html_create_table_head",
-            return_value="",
-        ),
-        mock.patch(
-            "fuzz_introspector.analyses.runtime_coverage_analysis.html_helpers"
-            ".html_table_add_row",
-            return_value="",
-        ),
-    ):
-        instance.analysis_func(
-            toc,
-            tables,
-            proj_profile,
-            profiles or [],
-            basefolder="",
-            coverage_url="",
-            conclusions=[],
-            out_dir="/tmp",
-        )
+    _cleanup = out_dir is None
+    if out_dir is None:
+        out_dir = tempfile.mkdtemp()
+
+    try:
+        with (
+            mock.patch(
+                "fuzz_introspector.analyses.runtime_coverage_analysis.html_helpers"
+                ".html_add_header_with_link",
+                return_value="",
+            ),
+            mock.patch(
+                "fuzz_introspector.analyses.runtime_coverage_analysis.html_helpers"
+                ".html_create_table_head",
+                return_value="",
+            ),
+            mock.patch(
+                "fuzz_introspector.analyses.runtime_coverage_analysis.html_helpers"
+                ".html_table_add_row",
+                return_value="",
+            ),
+        ):
+            instance.analysis_func(
+                toc,
+                tables,
+                proj_profile,
+                profiles or [],
+                basefolder="",
+                coverage_url="",
+                conclusions=[],
+                out_dir=out_dir,
+            )
+    finally:
+        if _cleanup:
+            shutil.rmtree(out_dir, ignore_errors=True)
 
     return instance
 
@@ -840,27 +858,35 @@ def test_runtime_cov_python_path_when_native_disabled(monkeypatch) -> None:
 # ── FuzzCalltreeAnalysis plugin wiring ────────────────────────────────────────
 
 
-def _call_calltree_analysis_func(proj_profile, profiles=None):
+def _call_calltree_analysis_func(proj_profile, profiles=None, out_dir=None):
     """Drive FuzzCalltreeAnalysis.analysis_func with mocked json_report."""
     instance = ct_module.FuzzCalltreeAnalysis()
     instance.dump_files = False
 
     toc = mock.MagicMock()
 
-    with mock.patch(
-        "fuzz_introspector.analyses.calltree_analysis.json_report"
-        ".add_analysis_json_str_as_dict_to_report"
-    ):
-        result = instance.analysis_func(
-            toc,
-            [],
-            proj_profile,
-            profiles or [],
-            basefolder="",
-            coverage_url="",
-            conclusions=[],
-            out_dir="/tmp",
-        )
+    _cleanup = out_dir is None
+    if out_dir is None:
+        out_dir = tempfile.mkdtemp()
+
+    try:
+        with mock.patch(
+            "fuzz_introspector.analyses.calltree_analysis.json_report"
+            ".add_analysis_json_str_as_dict_to_report"
+        ):
+            result = instance.analysis_func(
+                toc,
+                [],
+                proj_profile,
+                profiles or [],
+                basefolder="",
+                coverage_url="",
+                conclusions=[],
+                out_dir=out_dir,
+            )
+    finally:
+        if _cleanup:
+            shutil.rmtree(out_dir, ignore_errors=True)
 
     return instance, result
 
