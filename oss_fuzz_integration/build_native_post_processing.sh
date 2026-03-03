@@ -1,4 +1,4 @@
-#!/bin/bash -eux
+#!/bin/bash
 # Copyright 2025 Fuzz Introspector Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,6 +14,15 @@
 # limitations under the License.
 #
 ################################################################################
+# Native backend build script for OSS-Fuzz integration.
+# Builds Rust native binaries and sets FI_NATIVE_BACKENDS=rust.
+# See docs/perf/native_migration_plan_2026-03.md for architecture details.
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# 1. OSS-Fuzz clone / reuse (unchanged from build_post_processing.sh)
+# ---------------------------------------------------------------------------
 
 if [ -d "oss-fuzz" ]; then
 	echo "OSS-Fuzz directory exists. Reusing existing one"
@@ -29,6 +38,98 @@ else
 	echo "Pulling latest base-clang OSS-Fuzz image."
 	docker pull gcr.io/oss-fuzz-base/base-clang:latest
 fi
+
+# ---------------------------------------------------------------------------
+# 2. Install Rust toolchain if not already present
+# ---------------------------------------------------------------------------
+
+if command -v cargo >/dev/null 2>&1; then
+	echo "Rust toolchain already present: $(cargo --version)"
+else
+	echo "Installing Rust toolchain via rustup (non-interactive, no PATH modification)"
+	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+		sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable
+fi
+
+# Ensure cargo is on PATH for the remainder of this script.
+export PATH="${HOME}/.cargo/bin:${PATH}"
+
+# ---------------------------------------------------------------------------
+# 3. Build Rust native tools
+#    Binary destination: /opt/fuzz-introspector/bin (on PATH inside the image)
+# ---------------------------------------------------------------------------
+
+NATIVE_BIN_DIR="/opt/fuzz-introspector/bin"
+mkdir -p "${NATIVE_BIN_DIR}"
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TOOLS_DIR="${REPO_ROOT}/tools"
+
+# List of (tool_dir, binary_name) pairs to build and install.
+# The binary name must match the [[bin]] name in Cargo.toml.
+RUST_TOOLS=(
+	"native_yaml_loader_rust:native_yaml_loader_rust"
+	"native_llvm_cov_loader_rust:native_llvm_cov_loader_rust"
+	"native_debug_correlator_rust:native_debug_correlator_rust"
+	"native_overlay_backend_rust:native_overlay_backend_rust"
+	"native_analysis_plugins_rust:native_analysis_plugins_rust"
+)
+
+for entry in "${RUST_TOOLS[@]}"; do
+	tool_dir="${entry%%:*}"
+	bin_name="${entry##*:}"
+	src="${TOOLS_DIR}/${tool_dir}"
+
+	if [ ! -d "${src}" ]; then
+		echo "WARNING: ${src} not found, skipping"
+		continue
+	fi
+
+	echo "Building ${tool_dir} ..."
+	(cd "${src}" && cargo build --release)
+
+	dest="${NATIVE_BIN_DIR}/${bin_name}"
+	src_bin="${src}/target/release/${bin_name}"
+	if [ -f "${src_bin}" ]; then
+		cp "${src_bin}" "${dest}"
+		echo "  Installed ${bin_name} -> ${dest}"
+	else
+		echo "ERROR: expected binary not found at ${src_bin}" >&2
+		exit 1
+	fi
+done
+
+# ---------------------------------------------------------------------------
+# 4. Export environment variables consumed by fuzz-introspector Python code
+#    (mirrors what build_with_fixes.sh injects into Dockerfiles)
+# ---------------------------------------------------------------------------
+
+export FI_NATIVE_BACKENDS=rust
+
+export FI_DEBUG_YAML_LOADER=rust
+export FI_PROFILE_YAML_LOADER=rust
+export FI_LLVM_COV_LOADER=rust
+
+export FI_YAML_LOADER_RUST_BIN="${NATIVE_BIN_DIR}/native_yaml_loader_rust"
+export FI_DEBUG_YAML_LOADER_RUST_BIN="${NATIVE_BIN_DIR}/native_yaml_loader_rust"
+export FI_PROFILE_YAML_LOADER_RUST_BIN="${NATIVE_BIN_DIR}/native_yaml_loader_rust"
+export FI_LLVM_COV_LOADER_RUST_BIN="${NATIVE_BIN_DIR}/native_llvm_cov_loader_rust"
+export FI_DEBUG_CORRELATOR_RUST_BIN="${NATIVE_BIN_DIR}/native_debug_correlator_rust"
+export FI_DEBUG_CORRELATOR_BIN="${NATIVE_BIN_DIR}/native_debug_correlator_rust"
+export FI_OVERLAY_NATIVE_BIN="${NATIVE_BIN_DIR}/native_overlay_backend_rust"
+export FI_OVERLAY_RUST_BIN="${NATIVE_BIN_DIR}/native_overlay_backend_rust"
+
+# native_analysis_plugins_rust is resolved via shutil.which; ensure it is on PATH.
+export PATH="${NATIVE_BIN_DIR}:${PATH}"
+
+echo "Native backends built and environment configured."
+echo "  FI_NATIVE_BACKENDS=${FI_NATIVE_BACKENDS}"
+echo "  NATIVE_BIN_DIR=${NATIVE_BIN_DIR}"
+ls -lh "${NATIVE_BIN_DIR}"
+
+# ---------------------------------------------------------------------------
+# 5. Build and push OSS-Fuzz Docker images with native backend support
+# ---------------------------------------------------------------------------
 
 echo "Building base-build, base-builder-python and base-runner for fuzz introspector"
 # This script should be run from the fuzz-introspector/oss_fuzz_integration folder
