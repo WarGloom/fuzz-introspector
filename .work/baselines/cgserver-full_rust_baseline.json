@@ -2,9 +2,9 @@
   "project": "cgserver-full",
   "backend": "rust",
   "runs": 3,
-  "wall_time_s": 84.82,
-  "peak_rss_mb": 5613.71,
+  "wall_time_s": 125.05,
+  "peak_rss_mb": 6659.68,
   "output_hash": "3e0a44d44abbf1d3968e2d3e2223045618ffeeb3e37776a6b75c1c9853c2061b",
-  "timestamp": "20260303_131332",
+  "timestamp": "20260303_160924",
   "data_dir": "/home/nikita/work/Projects/cg/cgserver/build-introspector-full-2/introspector/"
 }
