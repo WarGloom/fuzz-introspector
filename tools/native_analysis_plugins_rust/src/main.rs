@@ -816,6 +816,60 @@ fn run_sink_coverage_analysis(project_data: &JsonValue) -> PluginResult {
     PluginResult { tables, summary }
 }
 
+/// `function_table` plugin: return all project functions sorted by
+/// `total_cyclomatic_complexity` descending.
+///
+/// Used by `html_report.py` `create_all_function_table()` to avoid the Python
+/// dict-order iteration when building the "all functions" HTML table.
+/// Returns every function with all available fields preserved so the Python
+/// side can look up functions in `proj_profile.all_functions` by name.
+fn run_function_table(project_data: &JsonValue) -> PluginResult {
+    log::debug!("[function_table] running");
+
+    let functions = parse_functions(project_data);
+    let total = functions.len();
+
+    // Sort by total_cyclomatic_complexity descending; stable to keep original
+    // insertion order for ties.
+    let mut sorted: Vec<&FunctionEntry> = functions.iter().collect();
+    sorted.sort_by(|a, b| b.total_cyclomatic_complexity.cmp(&a.total_cyclomatic_complexity));
+
+    let top_complexity = sorted
+        .first()
+        .map(|f| f.total_cyclomatic_complexity)
+        .unwrap_or(0);
+
+    let rows: Vec<JsonValue> = sorted
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "name": f.name,
+                "source_file": f.source_file,
+                "hitcount": f.hitcount,
+                "arg_count": f.arg_count,
+                "cyclomatic_complexity": f.cyclomatic_complexity,
+                "total_cyclomatic_complexity": f.total_cyclomatic_complexity,
+                "bb_count": f.bb_count,
+                "runtime_coverage_percent": f.runtime_coverage_percent,
+                "reached_by_fuzzers": f.reached_by_fuzzers,
+                "functions_reached_count": effective_reached_count(f),
+                "new_unreached_complexity": f.new_unreached_complexity,
+                "incoming_references": f.incoming_references,
+            })
+        })
+        .collect();
+
+    let summary = format!(
+        "function_table: {} function(s), top total_cyclomatic_complexity={}",
+        total, top_complexity
+    );
+    log::debug!("[function_table] {}", summary);
+
+    let mut tables = HashMap::new();
+    tables.insert("all_functions_table".to_string(), rows);
+    PluginResult { tables, summary }
+}
+
 /// Dispatcher: route a plugin name to its handler function.
 ///
 /// Returns `None` for unknown plugin names so the caller can log and skip.
@@ -825,6 +879,7 @@ fn dispatch_plugin(name: &str, project_data: &JsonValue) -> Option<PluginResult>
         "runtime_coverage_analysis" => Some(run_runtime_coverage_analysis(project_data)),
         "calltree_analysis" => Some(run_calltree_analysis(project_data)),
         "sink_coverage_analysis" => Some(run_sink_coverage_analysis(project_data)),
+        "function_table" => Some(run_function_table(project_data)),
         _ => {
             log::warn!("unknown plugin requested: {:?}", name);
             None

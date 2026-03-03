@@ -576,6 +576,36 @@ def create_overview_table(
     return html_string
 
 
+def _get_native_function_table_order(
+    proj_profile: project_profile.MergedProjectProfile,
+) -> Optional[List[str]]:
+    """Return function names sorted by total_cyclomatic_complexity descending.
+
+    Tries the native Rust plugin first.  Returns ``None`` when native is
+    unavailable or returns an empty result so the caller can fall back to
+    default dict order.
+    """
+    if not analysis.NativePluginProxy.is_enabled():
+        return None
+    try:
+        native_result = analysis.NativePluginProxy().run_analysis(
+            proj_profile, [], ["function_table"])
+        rows = native_result["function_table"]["tables"]["all_functions_table"]
+        if rows:
+            ordered = [
+                row["name"] for row in rows
+                if isinstance(row.get("name"), str)
+            ]
+            logger.debug(
+                "[native] function_table: using Rust sort order (%d functions)",
+                len(ordered),
+            )
+            return ordered
+    except (KeyError, IndexError, TypeError):
+        pass
+    return None
+
+
 def create_all_function_table(
     tables: List[str],
     proj_profile: project_profile.MergedProjectProfile,
@@ -586,8 +616,7 @@ def create_all_function_table(
     """Table for all functions in the project. Contains many details about each
     function"""
     random_suffix = "_" + "".join(
-        random.choices(string.ascii_lowercase + string.ascii_uppercase, k=7)
-    )
+        random.choices(string.ascii_lowercase + string.ascii_uppercase, k=7))
     if table_id is None:
         table_id = tables[-1]
 
@@ -604,7 +633,21 @@ def create_all_function_table(
     table_rows_json_html = []
     table_rows_json_report = []
 
-    for fd_k, fd in proj_profile.get_all_functions_with_source().items():
+    all_funcs_with_source = proj_profile.get_all_functions_with_source()
+
+    # Attempt to use the native Rust plugin for a pre-sorted iteration order
+    # (sorted by total_cyclomatic_complexity descending).  Fall back to default
+    # dict order when native is disabled or unavailable.
+    native_order = _get_native_function_table_order(proj_profile)
+    if native_order is not None:
+        # Iterate in native sort order, skipping names absent from the source map.
+        func_items: typing.Iterable[typing.Tuple[str, Any]] = (
+            (name, all_funcs_with_source[name]) for name in native_order
+            if name in all_funcs_with_source)
+    else:
+        func_items = all_funcs_with_source.items()
+
+    for fd_k, fd in func_items:
         if proj_profile.target_lang == "rust":
             demangled_func_name = utils.demangle_rust_func(fd.function_name)
         else:

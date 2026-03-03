@@ -25,6 +25,7 @@ import pytest
 from fuzz_introspector import analysis
 from fuzz_introspector import cli
 from fuzz_introspector import commands
+from fuzz_introspector import html_report
 from fuzz_introspector.analyses import optimal_targets as ot_module
 from fuzz_introspector.analyses import runtime_coverage_analysis as rca_module
 from fuzz_introspector.analyses import calltree_analysis as ct_module
@@ -956,3 +957,119 @@ def test_calltree_returns_empty_string_when_rust_returns_empty(
 
     assert result == ""
     assert instance.json_string_result == "[]"
+
+
+# ── FunctionTable native plugin wiring ───────────────────────────────────────
+
+
+def _make_function_table_native_result(function_names_with_complexity):
+    """Build a valid native result dict for the function_table plugin.
+
+    Args:
+        function_names_with_complexity: list of (name, total_cyclomatic_complexity) tuples,
+            already in the desired sort order.
+    """
+    rows = [
+        {
+            "name": name,
+            "total_cyclomatic_complexity": cc,
+            "cyclomatic_complexity": 5,
+            "source_file": "foo.c",
+            "arg_count": 1,
+            "bb_count": 2,
+        }
+        for name, cc in function_names_with_complexity
+    ]
+    return {"function_table": {"tables": {"all_functions_table": rows}, "summary": ""}}
+
+
+def test_function_table_in_native_plugin_names() -> None:
+    assert "FunctionTable" in analysis._NATIVE_PLUGIN_NAMES
+
+
+def test_function_table_in_python_name_to_native_key() -> None:
+    assert analysis._PYTHON_NAME_TO_NATIVE_KEY.get("FunctionTable") == "function_table"
+
+
+def test_get_native_function_table_order_returns_sorted_names(
+    monkeypatch,
+) -> None:
+    """When native is enabled and returns rows, names are returned in order."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    func_data = [("high_cc", 100), ("mid_cc", 50), ("low_cc", 10)]
+    fake_proc = _make_native_proc(_make_function_table_native_result(func_data))
+    proj_profile = _make_full_fake_proj_profile()
+
+    with (
+        mock.patch.object(
+            analysis.NativePluginProxy,
+            "find_binary",
+            return_value="/usr/bin/native_analysis_plugins_rust",
+        ),
+        mock.patch(
+            "fuzz_introspector.analysis.subprocess.run",
+            return_value=fake_proc,
+        ),
+    ):
+        result = html_report._get_native_function_table_order(proj_profile)
+
+    assert result == ["high_cc", "mid_cc", "low_cc"]
+
+
+def test_get_native_function_table_order_returns_none_when_disabled(
+    monkeypatch,
+) -> None:
+    """When native plugins are disabled, None is returned."""
+    monkeypatch.delenv(analysis.FI_NATIVE_PLUGINS_ENV, raising=False)
+
+    proj_profile = _make_full_fake_proj_profile()
+    result = html_report._get_native_function_table_order(proj_profile)
+
+    assert result is None
+
+
+def test_get_native_function_table_order_returns_none_on_empty_rows(
+    monkeypatch,
+) -> None:
+    """When the native plugin returns an empty table, None is returned."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    # Empty table — no rows
+    fake_proc = _make_native_proc(
+        {"function_table": {"tables": {"all_functions_table": []}, "summary": ""}}
+    )
+    proj_profile = _make_full_fake_proj_profile()
+
+    with (
+        mock.patch.object(
+            analysis.NativePluginProxy,
+            "find_binary",
+            return_value="/usr/bin/native_analysis_plugins_rust",
+        ),
+        mock.patch(
+            "fuzz_introspector.analysis.subprocess.run",
+            return_value=fake_proc,
+        ),
+    ):
+        result = html_report._get_native_function_table_order(proj_profile)
+
+    assert result is None
+
+
+def test_get_native_function_table_order_returns_none_on_missing_binary(
+    monkeypatch,
+) -> None:
+    """When the native binary is not found, None is returned gracefully."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    proj_profile = _make_full_fake_proj_profile()
+
+    with mock.patch.object(
+        analysis.NativePluginProxy,
+        "find_binary",
+        return_value=None,
+    ):
+        result = html_report._get_native_function_table_order(proj_profile)
+
+    assert result is None

@@ -80,6 +80,7 @@ _NATIVE_PLUGIN_NAMES: frozenset[str] = frozenset(
         "RuntimeCoverageAnalysis",
         "CalltreeAnalysis",
         "SinkCoverageAnalyser",
+        "FunctionTable",
     }
 )
 
@@ -89,6 +90,7 @@ _PYTHON_NAME_TO_NATIVE_KEY: dict[str, str] = {
     "RuntimeCoverageAnalysis": "runtime_coverage_analysis",
     "CalltreeAnalysis": "calltree_analysis",
     "SinkCoverageAnalyser": "sink_coverage_analysis",
+    "FunctionTable": "function_table",
 }
 
 
