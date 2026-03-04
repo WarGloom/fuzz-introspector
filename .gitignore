@@ -60,3 +60,5 @@ full_type_defs.json
 .ci-*/
 
 
+.serena/cache/
+.serena/memories/
