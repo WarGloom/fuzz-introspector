@@ -55,6 +55,9 @@ from fuzz_introspector.exceptions import DataLoaderError
 logger = logging.getLogger(name=__name__)
 FI_PROFILE_WORKERS_ENV = "FI_PROFILE_WORKERS"
 FI_PROFILE_WORKERS_DEFAULT_CAP = 0
+FI_REACHABILITY_BACKEND_ENV = "FI_REACHABILITY_BACKEND"
+FI_REACHABILITY_BACKEND_RUST = "rust"
+FI_PROFILE_WORKERS_RUST_DEFAULT = 3
 FI_DEBUG_STAGE_RSS_ENV = "FI_DEBUG_STAGE_RSS"
 FI_DEBUG_PERF_WARN_ENV = "FI_DEBUG_PERF_WARN"
 FI_STAGE_WARN_SECONDS_ENV = "FI_STAGE_WARN_SECONDS"
@@ -491,32 +494,48 @@ def _matches_any_pattern(
 
 def _parse_profile_worker_count() -> int:
     """Returns worker count for profile accumulation."""
+    worker_count, _ = _resolve_profile_worker_count()
+    return worker_count
+
+
+def _resolve_profile_worker_count() -> tuple[int, bool]:
+    """Resolve worker count and whether rust default was applied."""
     cpu_count = os.cpu_count() or 1
     raw_worker_count = os.environ.get(FI_PROFILE_WORKERS_ENV, "")
-    if not raw_worker_count:
-        if FI_PROFILE_WORKERS_DEFAULT_CAP > 0:
-            return max(1, min(cpu_count, FI_PROFILE_WORKERS_DEFAULT_CAP))
-        return cpu_count
+    if raw_worker_count:
+        try:
+            worker_count = int(raw_worker_count)
+        except ValueError:
+            logger.warning(
+                "Invalid %s=%r; defaulting to cpu count",
+                FI_PROFILE_WORKERS_ENV,
+                raw_worker_count,
+            )
+            return cpu_count, False
 
-    try:
-        worker_count = int(raw_worker_count)
-    except ValueError:
-        logger.warning(
-            "Invalid %s=%r; defaulting to cpu count",
-            FI_PROFILE_WORKERS_ENV,
-            raw_worker_count,
-        )
-        return cpu_count
+        if worker_count < 1:
+            logger.warning(
+                "Invalid %s=%r; defaulting to cpu count",
+                FI_PROFILE_WORKERS_ENV,
+                raw_worker_count,
+            )
+            return cpu_count, False
 
-    if worker_count < 1:
-        logger.warning(
-            "Invalid %s=%r; defaulting to cpu count",
-            FI_PROFILE_WORKERS_ENV,
-            raw_worker_count,
-        )
-        return cpu_count
+        return min(worker_count, cpu_count), False
 
-    return min(worker_count, cpu_count)
+    reachability_backend = (
+        os.environ.get(FI_REACHABILITY_BACKEND_ENV, "").strip().lower()
+    )
+    global_backend = backend_loaders.parse_native_backends_env()
+    if (
+        reachability_backend == FI_REACHABILITY_BACKEND_RUST
+        or global_backend == backend_loaders.BACKEND_RUST
+    ):
+        return min(FI_PROFILE_WORKERS_RUST_DEFAULT, cpu_count), True
+
+    if FI_PROFILE_WORKERS_DEFAULT_CAP > 0:
+        return max(1, min(cpu_count, FI_PROFILE_WORKERS_DEFAULT_CAP)), False
+    return cpu_count, False
 
 
 def _parse_bool_env(env_name: str, default: bool) -> bool:
@@ -684,10 +703,13 @@ def _accummulate_single_profile(
     profile_index: int,
     profile_payload: Dict[str, Any],
     base_folder: str,
+    skip_propagation: bool = False,
 ) -> tuple[int, Dict[str, Any]]:
     """Worker entrypoint for profile accumulation."""
     profile = fuzzer_profile.FuzzerProfile.from_worker_payload(profile_payload)
-    profile.accummulate_profile(base_folder, None, None, None)
+    profile.accummulate_profile(
+        base_folder, None, None, None, skip_propagation=skip_propagation
+    )
     return profile_index, profile.to_worker_payload()
 
 
@@ -697,17 +719,40 @@ def _accummulate_profiles(
     parallelise: bool,
 ) -> List[fuzzer_profile.FuzzerProfile]:
     """Accumulate profile metadata with deterministic output ordering."""
+    configured_workers = 1
+    worker_count = 1
+    rust_default_applied = False
+    if parallelise and len(profiles) > 1:
+        configured_workers, rust_default_applied = _resolve_profile_worker_count()
+        worker_count = min(configured_workers, len(profiles))
+
+    logger.info(
+        "Profile accumulation workers configured=%d effective=%d rust_default_cap=%s",
+        configured_workers,
+        worker_count,
+        rust_default_applied,
+    )
+
+    native_done = False
+    # In true multi-worker mode, avoid a parent-side transitive-closure pre-pass
+    # to prevent serializing inflated profile payloads over process IPC.
+    if (not parallelise) or worker_count <= 1:
+        native_done = fuzzer_profile.propagate_reachability_native_batch(profiles)
+
     if not parallelise or len(profiles) <= 1:
         logger.info("Accummulating profiles serially")
         for profile in profiles:
-            profile.accummulate_profile(base_folder, None, None, None)
+            profile.accummulate_profile(
+                base_folder, None, None, None, skip_propagation=native_done
+            )
         return profiles
 
-    worker_count = min(_parse_profile_worker_count(), len(profiles))
     if worker_count <= 1:
         logger.info("Accummulating profiles serially")
         for profile in profiles:
-            profile.accummulate_profile(base_folder, None, None, None)
+            profile.accummulate_profile(
+                base_folder, None, None, None, skip_propagation=native_done
+            )
         return profiles
 
     logger.info(
@@ -727,6 +772,7 @@ def _accummulate_profiles(
                     idx,
                     profile.to_worker_payload(),
                     base_folder,
+                    native_done,
                 )
                 submitted_futures[future] = (idx, profile.get_key())
 
@@ -750,7 +796,9 @@ def _accummulate_profiles(
             err,
         )
         for profile in profiles:
-            profile.accummulate_profile(base_folder, None, None, None)
+            profile.accummulate_profile(
+                base_folder, None, None, None, skip_propagation=native_done
+            )
         return profiles
 
     for idx, indexed_profile in enumerate(indexed_profiles):

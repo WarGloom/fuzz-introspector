@@ -34,6 +34,9 @@ FI_PROFILE_BACKEND_ENV = "FI_PROFILE_BACKEND"
 FI_PROFILE_BACKEND_THREAD = "thread"
 FI_PROFILE_BACKEND_PROCESS = "process"
 FI_PROFILE_WORKERS_ENV = "FI_PROFILE_WORKERS"
+FI_REACHABILITY_BACKEND_ENV = "FI_REACHABILITY_BACKEND"
+FI_REACHABILITY_BACKEND_RUST = "rust"
+FI_PROFILE_WORKERS_RUST_DEFAULT = 3
 
 
 def _get_profile_executor_backend() -> tuple[
@@ -235,13 +238,33 @@ def _load_profiles_yaml_batch(
     return profile_yaml_by_data_file
 
 
-def _resolve_profile_worker_count(data_file_count: int) -> int:
-    """Return worker count for profile loading."""
+def _is_rust_profile_worker_default_mode() -> bool:
+    reachability_backend = (
+        os.environ.get(FI_REACHABILITY_BACKEND_ENV, "").strip().lower()
+    )
+    if reachability_backend == FI_REACHABILITY_BACKEND_RUST:
+        return True
+    return backend_loaders.parse_native_backends_env() == backend_loaders.BACKEND_RUST
+
+
+def _resolve_profile_worker_count(data_file_count: int) -> tuple[int, int, bool]:
+    """Return configured/effective worker counts and rust-default status."""
     if data_file_count <= 1:
-        return 1
+        return 1, 1, False
     cpu_count = os.cpu_count() or 1
-    configured_workers = _parse_int_env(FI_PROFILE_WORKERS_ENV, cpu_count, 1)
-    return max(1, min(configured_workers, data_file_count))
+
+    raw_worker_count = os.environ.get(FI_PROFILE_WORKERS_ENV, "").strip()
+    if raw_worker_count:
+        configured_workers = _parse_int_env(FI_PROFILE_WORKERS_ENV, cpu_count, 1)
+        configured_workers = max(1, min(configured_workers, cpu_count))
+        return configured_workers, min(configured_workers, data_file_count), False
+
+    if _is_rust_profile_worker_default_mode():
+        configured_workers = min(FI_PROFILE_WORKERS_RUST_DEFAULT, cpu_count)
+        return configured_workers, min(configured_workers, data_file_count), True
+
+    configured_workers = cpu_count
+    return configured_workers, min(configured_workers, data_file_count), False
 
 
 def load_all_debug_files(target_folder: str):
@@ -297,12 +320,21 @@ def load_all_profiles(
     logger.info(" - found %d profiles to load", len(data_files))
     preloaded_profile_yaml = _load_profiles_yaml_batch(data_files)
     if parallelise:
-        worker_count = _resolve_profile_worker_count(len(data_files))
+        configured_workers, worker_count, rust_default_cap = (
+            _resolve_profile_worker_count(len(data_files))
+        )
         if worker_count == 1:
             logger.info("Profile loading configured with 1 worker; running serially")
         if language == "jvm":
             worker_count = max(1, min(worker_count, default_worker_count))
         worker_count = max(1, min(worker_count, len(data_files)))
+        logger.info(
+            "Profile loading worker resolution configured=%d effective=%d "
+            "rust_default_cap=%s",
+            configured_workers,
+            worker_count,
+            rust_default_cap,
+        )
         executor_cls, backend = _get_profile_executor_backend()
         logger.info(
             "Loading profiles in parallel using %s backend (%d workers)",

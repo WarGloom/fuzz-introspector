@@ -66,6 +66,70 @@ def _fake_profile_data_files(_root: str, pattern: str):
     return []
 
 
+def test_resolve_profile_worker_count_default_uses_cpu_count(monkeypatch):
+    monkeypatch.delenv(data_loader.FI_PROFILE_WORKERS_ENV, raising=False)
+    monkeypatch.delenv(data_loader.FI_REACHABILITY_BACKEND_ENV, raising=False)
+    monkeypatch.delenv("FI_NATIVE_BACKENDS", raising=False)
+    monkeypatch.setattr(data_loader.os, "cpu_count", lambda: 24)
+
+    configured_workers, effective_workers, rust_default_cap = (
+        data_loader._resolve_profile_worker_count(3)
+    )
+
+    assert configured_workers == 24
+    assert effective_workers == 3
+    assert rust_default_cap is False
+
+
+def test_resolve_profile_worker_count_uses_rust_default_from_reachability_env(
+    monkeypatch,
+):
+    monkeypatch.delenv(data_loader.FI_PROFILE_WORKERS_ENV, raising=False)
+    monkeypatch.setenv(data_loader.FI_REACHABILITY_BACKEND_ENV, "rust")
+    monkeypatch.delenv("FI_NATIVE_BACKENDS", raising=False)
+    monkeypatch.setattr(data_loader.os, "cpu_count", lambda: 24)
+
+    configured_workers, effective_workers, rust_default_cap = (
+        data_loader._resolve_profile_worker_count(20)
+    )
+
+    assert configured_workers == 3
+    assert effective_workers == 3
+    assert rust_default_cap is True
+
+
+def test_resolve_profile_worker_count_uses_rust_default_from_native_backend_env(
+    monkeypatch,
+):
+    monkeypatch.delenv(data_loader.FI_PROFILE_WORKERS_ENV, raising=False)
+    monkeypatch.delenv(data_loader.FI_REACHABILITY_BACKEND_ENV, raising=False)
+    monkeypatch.setenv("FI_NATIVE_BACKENDS", "rust")
+    monkeypatch.setattr(data_loader.os, "cpu_count", lambda: 24)
+
+    configured_workers, effective_workers, rust_default_cap = (
+        data_loader._resolve_profile_worker_count(20)
+    )
+
+    assert configured_workers == 3
+    assert effective_workers == 3
+    assert rust_default_cap is True
+
+
+def test_resolve_profile_worker_count_explicit_override_beats_rust_default(monkeypatch):
+    monkeypatch.setenv(data_loader.FI_PROFILE_WORKERS_ENV, "12")
+    monkeypatch.setenv(data_loader.FI_REACHABILITY_BACKEND_ENV, "rust")
+    monkeypatch.setenv("FI_NATIVE_BACKENDS", "rust")
+    monkeypatch.setattr(data_loader.os, "cpu_count", lambda: 24)
+
+    configured_workers, effective_workers, rust_default_cap = (
+        data_loader._resolve_profile_worker_count(20)
+    )
+
+    assert configured_workers == 12
+    assert effective_workers == 12
+    assert rust_default_cap is False
+
+
 def test_load_all_profiles_parallel_preserves_file_order(monkeypatch):
     monkeypatch.setattr(
         data_loader.utils, "get_all_files_in_tree_with_regex", _fake_profile_data_files

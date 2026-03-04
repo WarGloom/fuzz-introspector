@@ -78,111 +78,240 @@ struct FunctionResult {
 }
 
 // ---------------------------------------------------------------------------
-// Core algorithm: iterative post-order DFS transitive closure
+// Core algorithm: Tarjan SCC + DAG condensation transitive closure
 // ---------------------------------------------------------------------------
 
 /// Compute the full transitive closure and maximum call-chain depth for every
-/// function in `functions`.
+/// function in `functions` using Tarjan's SCC algorithm.
 ///
-/// The algorithm mirrors the Python implementation in
-/// `FuzzerProfile._propagate_functions_reached` exactly:
+/// Algorithm:
+/// 1. Build adjacency map covering both declared functions and any external
+///    callees they reference.
+/// 2. Run Tarjan's iterative SCC algorithm over all nodes.  Tarjan naturally
+///    yields SCCs in reverse topological order (leaves/sinks first), which is
+///    exactly the order needed for the bottom-up union pass.
+/// 3. Condense the call graph into a DAG of SCCs.
+/// 4. Process SCCs in Tarjan output order: each SCC's reachable set = all
+///    members ∪ union of all successor SCCs' reachable sets.
+/// 5. Write back: every function gets
+///    `functions_reached = reachable_set − {self}` and
+///    `function_depth = depth_of_its_scc`.
 ///
-/// - Iterative post-order DFS with an explicit stack to avoid OS stack
-///   overflow on deep graphs.
-/// - Back-edge detection via `on_path` (cycles are silently broken).
-/// - Memoisation so every node is fully resolved exactly once.
-/// - `depth[name]` = max over direct callees of `depth[callee] + 1`; 0 when
-///   the function has no direct callees (leaf).
-/// - `functions_reached` for a node includes all transitively reachable names
-///   *excluding the function itself*, matching the Python semantics.
+/// Correctness for cycles: all functions in the same SCC share the same
+/// reachable set (they can all reach each other), so no function ever gets
+/// a truncated result due to a cycle.
 fn compute_reachability(functions: &[FunctionInput]) -> Vec<FunctionResult> {
-    // Build adjacency map: name -> direct callee slice
-    let adj: HashMap<&str, &[String]> = functions
-        .iter()
-        .map(|f| (f.name.as_str(), f.direct_callees.as_slice()))
-        .collect();
+    // ------------------------------------------------------------------
+    // Step 1 – build full adjacency (declared nodes + external callees).
+    // ------------------------------------------------------------------
+    // adj_owned: name -> list of direct callees (owned strings for external nodes)
+    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
 
-    let mut memo: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut depth: HashMap<String, usize> = HashMap::new();
+    for f in functions {
+        let callees: Vec<&str> = f.direct_callees.iter().map(|s| s.as_str()).collect();
+        adj.insert(f.name.as_str(), callees);
+    }
 
-    for func in functions {
-        if memo.contains_key(&func.name) {
+    // Collect all node names (functions in adj + external callees not in adj).
+    let mut all_nodes: Vec<&str> = Vec::new();
+    let mut seen_nodes: HashSet<&str> = HashSet::new();
+    for f in functions {
+        if seen_nodes.insert(f.name.as_str()) {
+            all_nodes.push(f.name.as_str());
+        }
+        for callee in &f.direct_callees {
+            if seen_nodes.insert(callee.as_str()) {
+                all_nodes.push(callee.as_str());
+            }
+        }
+    }
+    // Ensure external nodes have an entry (empty adjacency list).
+    for &node in &all_nodes {
+        adj.entry(node).or_insert_with(Vec::new);
+    }
+
+    // ------------------------------------------------------------------
+    // Step 2 – iterative Tarjan's SCC.
+    // Yields SCCs in reverse topological order (sinks first).
+    // ------------------------------------------------------------------
+    let mut index_map: HashMap<&str, usize> = HashMap::new();
+    let mut lowlink: HashMap<&str, usize> = HashMap::new();
+    let mut on_stack: HashSet<&str> = HashSet::new();
+    let mut tarjan_stack: Vec<&str> = Vec::new();
+    let mut index_counter: usize = 0;
+    let mut sccs: Vec<Vec<String>> = Vec::new();
+
+    // Explicit DFS call-stack entry: (node, iterator_position_over_children)
+    // We store the children as a Vec and keep a cursor index.
+    struct Frame<'a> {
+        node: &'a str,
+        children: Vec<&'a str>,
+        child_idx: usize,
+    }
+
+    for &start in &all_nodes {
+        if index_map.contains_key(start) {
             continue;
         }
 
-        debug!("DFS root: {}", func.name);
+        // Push the start node.
+        index_map.insert(start, index_counter);
+        lowlink.insert(start, index_counter);
+        index_counter += 1;
+        tarjan_stack.push(start);
+        on_stack.insert(start);
 
-        // Stack entries: (function_name, returning).
-        //   returning = false  → first visit: push callees, then flip to true
-        //   returning = true   → post-order: all children resolved, compute own result
-        let mut stack: Vec<(String, bool)> = vec![(func.name.clone(), false)];
-        // Tracks the current DFS path for cycle detection.
-        let mut on_path: HashSet<String> = HashSet::new();
+        let children = adj.get(start).cloned().unwrap_or_default();
+        let mut call_stack: Vec<Frame> = vec![Frame {
+            node: start,
+            children,
+            child_idx: 0,
+        }];
 
-        while let Some((name, returning)) = stack.last().cloned() {
-            if returning {
-                stack.pop();
-                on_path.remove(&name);
+        while let Some(frame) = call_stack.last_mut() {
+            let v = frame.node;
+            if frame.child_idx < frame.children.len() {
+                let w = frame.children[frame.child_idx];
+                frame.child_idx += 1;
 
-                // Union transitive closures of all direct callees.
-                let direct = adj.get(name.as_str()).copied().unwrap_or(&[]);
-                let mut reachable: HashSet<String> = HashSet::new();
-                let mut max_d: usize = 0;
+                if !index_map.contains_key(w) {
+                    // Tree edge: recurse.
+                    index_map.insert(w, index_counter);
+                    lowlink.insert(w, index_counter);
+                    index_counter += 1;
+                    tarjan_stack.push(w);
+                    on_stack.insert(w);
+                    let children_w = adj.get(w).cloned().unwrap_or_default();
+                    call_stack.push(Frame {
+                        node: w,
+                        children: children_w,
+                        child_idx: 0,
+                    });
+                } else if on_stack.contains(w) {
+                    // Back edge: update lowlink.
+                    let w_idx = *index_map.get(w).unwrap();
+                    let v_ll = lowlink.get_mut(v).unwrap();
+                    if w_idx < *v_ll {
+                        *v_ll = w_idx;
+                    }
+                }
+                // Cross/forward edges (w already fully processed): ignored.
+            } else {
+                // All children processed: pop this frame.
+                let v = frame.node;
+                call_stack.pop();
 
-                for callee in direct {
-                    reachable.insert(callee.clone());
-                    if let Some(callee_set) = memo.get(callee.as_str()) {
-                        reachable.extend(callee_set.iter().cloned());
-                        let callee_d = depth.get(callee.as_str()).copied().unwrap_or(0) + 1;
-                        if callee_d > max_d {
-                            max_d = callee_d;
-                        }
+                // Propagate lowlink to parent.
+                if let Some(parent_frame) = call_stack.last() {
+                    let p = parent_frame.node;
+                    let v_ll = *lowlink.get(v).unwrap();
+                    let p_ll = lowlink.get_mut(p).unwrap();
+                    if v_ll < *p_ll {
+                        *p_ll = v_ll;
                     }
                 }
 
-                memo.insert(name.clone(), reachable);
-                depth.insert(name.clone(), max_d);
-            } else {
-                // First visit.
-                if memo.contains_key(&name) {
-                    stack.pop();
-                    continue;
-                }
-
-                on_path.insert(name.clone());
-                // Flip the top-of-stack entry to returning=true.
-                *stack.last_mut().unwrap() = (name.clone(), true);
-
-                // Push unresolved, non-cyclic callees.
-                if let Some(callees) = adj.get(name.as_str()) {
-                    for callee in callees.iter() {
-                        if !memo.contains_key(callee.as_str())
-                            && !on_path.contains(callee.as_str())
-                        {
-                            stack.push((callee.clone(), false));
+                // If v is an SCC root, pop the SCC from tarjan_stack.
+                if lowlink[v] == index_map[v] {
+                    let mut scc: Vec<String> = Vec::new();
+                    loop {
+                        let w = tarjan_stack.pop().unwrap();
+                        on_stack.remove(w);
+                        scc.push(w.to_string());
+                        if w == v {
+                            break;
                         }
+                    }
+                    sccs.push(scc);
+                }
+            }
+        }
+    }
+
+    debug!("Tarjan found {} SCCs over {} nodes", sccs.len(), all_nodes.len());
+
+    // ------------------------------------------------------------------
+    // Step 3 – build scc_id map: node name -> index in sccs.
+    // ------------------------------------------------------------------
+    let mut scc_id: HashMap<&str, usize> = HashMap::new();
+    for (i, scc) in sccs.iter().enumerate() {
+        for name in scc {
+            scc_id.insert(name.as_str(), i);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Step 4 – build condensed DAG: scc_successors[i] = set of successor SCCs.
+    // ------------------------------------------------------------------
+    let mut scc_successors: Vec<HashSet<usize>> = vec![HashSet::new(); sccs.len()];
+    for &node in &all_nodes {
+        let my_scc = scc_id[node];
+        if let Some(callees) = adj.get(node) {
+            for &callee in callees {
+                if let Some(&callee_scc) = scc_id.get(callee) {
+                    if callee_scc != my_scc {
+                        scc_successors[my_scc].insert(callee_scc);
                     }
                 }
             }
         }
     }
 
-    // Build the ordered output list, preserving input order.
+    // ------------------------------------------------------------------
+    // Step 5 – process SCCs in Tarjan output order (reverse topological =
+    // sinks first).  Each SCC is guaranteed to be processed before any SCC
+    // that can reach it.
+    // ------------------------------------------------------------------
+    let mut scc_reachable: Vec<HashSet<String>> = vec![HashSet::new(); sccs.len()];
+    let mut scc_depth: Vec<usize> = vec![0usize; sccs.len()];
+
+    for (i, scc) in sccs.iter().enumerate() {
+        // Own members.
+        let mut reachable: HashSet<String> = scc.iter().cloned().collect();
+        let mut max_d: usize = 0;
+
+        for &j in &scc_successors[i] {
+            // j was already processed because Tarjan emits sinks first.
+            reachable.extend(scc_reachable[j].iter().cloned());
+            let d = scc_depth[j] + 1;
+            if d > max_d {
+                max_d = d;
+            }
+        }
+
+        scc_reachable[i] = reachable;
+        scc_depth[i] = max_d;
+    }
+
+    // ------------------------------------------------------------------
+    // Step 6 – write results for every function in the original input.
+    // ------------------------------------------------------------------
     functions
         .iter()
         .map(|f| {
-            let mut reached: Vec<String> = memo
-                .get(&f.name)
-                .map(|s| s.iter().cloned().collect())
-                .unwrap_or_default();
-            // Sort for deterministic output (the Python set→list is non-deterministic,
-            // but callers only care about set membership, not order).
+            let name = f.name.as_str();
+            let (reached_set, depth) = match scc_id.get(name) {
+                Some(&sid) => (&scc_reachable[sid], scc_depth[sid]),
+                None => {
+                    // Should not happen: every node was added to all_nodes.
+                    debug!("Missing SCC for node {}", name);
+                    return FunctionResult {
+                        name: f.name.clone(),
+                        functions_reached: vec![],
+                        function_depth: 0,
+                    };
+                }
+            };
+            let mut reached: Vec<String> = reached_set
+                .iter()
+                .filter(|n| n.as_str() != name)
+                .cloned()
+                .collect();
             reached.sort_unstable();
-            let d = depth.get(&f.name).copied().unwrap_or(0);
             FunctionResult {
                 name: f.name.clone(),
                 functions_reached: reached,
-                function_depth: d,
+                function_depth: depth,
             }
         })
         .collect()
@@ -309,6 +438,10 @@ mod tests {
         results.iter().find(|r| r.name == name).unwrap()
     }
 
+    fn reached_set(r: &FunctionResult) -> HashSet<&str> {
+        r.functions_reached.iter().map(|s| s.as_str()).collect()
+    }
+
     #[test]
     fn test_leaf_node() {
         let funcs = vec![mk("bar", &[])];
@@ -357,34 +490,46 @@ mod tests {
 
     #[test]
     fn test_cycle_broken() {
-        // a -> b -> a (cycle); both should be resolvable without panic
+        // a -> b -> a (cycle); both should be resolvable without panic.
+        // With SCC: {a, b} form one SCC; each reaches the other.
         let funcs = vec![mk("a", &["b"]), mk("b", &["a"])];
         let results = compute_reachability(&funcs);
-        // Neither should panic; exactly what gets reached depends on DFS entry point
-        // but both results must be present.
         assert_eq!(results.len(), 2);
+        let a = result_for(&results, "a");
+        let b = result_for(&results, "b");
+        // Both must see each other in their reachable sets.
+        assert!(
+            reached_set(a).contains("b"),
+            "a should reach b; got {:?}",
+            a.functions_reached
+        );
+        assert!(
+            reached_set(b).contains("a"),
+            "b should reach a; got {:?}",
+            b.functions_reached
+        );
     }
 
     #[test]
     fn test_self_loop() {
-        // a -> a
+        // a -> a: trivial SCC containing just a.
         let funcs = vec![mk("a", &["a"])];
         let results = compute_reachability(&funcs);
-        let a = result_for(&results, "a");
-        // 'a' is on_path when we try to push 'a' again, so it is not pushed.
-        // direct callees list still contains "a", so it IS inserted into reachable.
-        // This matches Python: reachable.add(callee) runs before the memo union.
         assert_eq!(results.len(), 1);
-        let _ = a; // just assert no panic
+        let a = result_for(&results, "a");
+        // Self is excluded from functions_reached.
+        assert!(
+            a.functions_reached.is_empty(),
+            "self loop should produce empty reached set; got {:?}",
+            a.functions_reached
+        );
     }
 
     #[test]
     fn test_unknown_callee() {
         // foo calls "external" which has no entry in the function list.
-        // The DFS still visits "external" (as an unresolved node), memoises it
-        // with an empty reached-set and depth 0, and then foo's depth picks up
-        // the +1 contribution: depth["foo"] = depth["external"] + 1 = 1.
-        // This matches the Python algorithm exactly.
+        // external is a leaf SCC; foo's SCC successor is external's SCC.
+        // depth[foo] = depth[external] + 1 = 1.
         let funcs = vec![mk("foo", &["external"])];
         let results = compute_reachability(&funcs);
         let foo = result_for(&results, "foo");
@@ -412,5 +557,106 @@ mod tests {
         assert_eq!(r2_reached, vec!["leaf", "shared"]);
         assert_eq!(r1.function_depth, 2);
         assert_eq!(r2.function_depth, 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // New SCC-specific tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_scc_two_node_cycle() {
+        // a -> b, b -> a: both should reach each other.
+        let funcs = vec![mk("a", &["b"]), mk("b", &["a"])];
+        let results = compute_reachability(&funcs);
+        let a = result_for(&results, "a");
+        let b = result_for(&results, "b");
+        assert_eq!(reached_set(a), HashSet::from(["b"]));
+        assert_eq!(reached_set(b), HashSet::from(["a"]));
+        // Depth: SCC {a,b} has no external successors, so depth = 0.
+        assert_eq!(a.function_depth, 0);
+        assert_eq!(b.function_depth, 0);
+    }
+
+    #[test]
+    fn test_scc_three_node_cycle() {
+        // a -> b -> c -> a: all three form one SCC and each reaches the others.
+        let funcs = vec![mk("a", &["b"]), mk("b", &["c"]), mk("c", &["a"])];
+        let results = compute_reachability(&funcs);
+        let a = result_for(&results, "a");
+        let b = result_for(&results, "b");
+        let c = result_for(&results, "c");
+        assert_eq!(reached_set(a), HashSet::from(["b", "c"]));
+        assert_eq!(reached_set(b), HashSet::from(["a", "c"]));
+        assert_eq!(reached_set(c), HashSet::from(["a", "b"]));
+        // Pure cycle, no external successors: depth = 0.
+        assert_eq!(a.function_depth, 0);
+        assert_eq!(b.function_depth, 0);
+        assert_eq!(c.function_depth, 0);
+    }
+
+    #[test]
+    fn test_scc_with_external_callee() {
+        // a -> b -> a (cycle SCC), a -> ext (ext not in functions list).
+        // Both a and b reach ext; ext is a separate leaf SCC.
+        let funcs = vec![mk("a", &["b", "ext"]), mk("b", &["a"])];
+        let results = compute_reachability(&funcs);
+        let a = result_for(&results, "a");
+        let b = result_for(&results, "b");
+        // Both should reach ext (and each other).
+        assert!(
+            reached_set(a).contains("ext"),
+            "a should reach ext; got {:?}",
+            a.functions_reached
+        );
+        assert!(
+            reached_set(a).contains("b"),
+            "a should reach b; got {:?}",
+            a.functions_reached
+        );
+        assert!(
+            reached_set(b).contains("ext"),
+            "b should reach ext; got {:?}",
+            b.functions_reached
+        );
+        assert!(
+            reached_set(b).contains("a"),
+            "b should reach a; got {:?}",
+            b.functions_reached
+        );
+        // SCC {a,b} has successor SCC {ext}: depth = depth[ext] + 1 = 1.
+        assert_eq!(a.function_depth, 1);
+        assert_eq!(b.function_depth, 1);
+    }
+
+    #[test]
+    fn test_scc_dag_with_cycle() {
+        // Graph: a->b, b->c, c->a (SCC1={a,b,c}), a->d, d->e (d,e are DAG sinks).
+        // Expected: reachable[a] = {b,c,d,e}, reachable[d] = {e}, reachable[e] = {}
+        let funcs = vec![
+            mk("a", &["b", "d"]),
+            mk("b", &["c"]),
+            mk("c", &["a"]),
+            mk("d", &["e"]),
+            mk("e", &[]),
+        ];
+        let results = compute_reachability(&funcs);
+        let a = result_for(&results, "a");
+        let b = result_for(&results, "b");
+        let c = result_for(&results, "c");
+        let d = result_for(&results, "d");
+        let e = result_for(&results, "e");
+
+        assert_eq!(reached_set(a), HashSet::from(["b", "c", "d", "e"]));
+        assert_eq!(reached_set(b), HashSet::from(["a", "c", "d", "e"]));
+        assert_eq!(reached_set(c), HashSet::from(["a", "b", "d", "e"]));
+        assert_eq!(reached_set(d), HashSet::from(["e"]));
+        assert!(e.functions_reached.is_empty());
+
+        // Depth: e=0, d=1, SCC{a,b,c}->d->e so depth = 2.
+        assert_eq!(e.function_depth, 0);
+        assert_eq!(d.function_depth, 1);
+        assert_eq!(a.function_depth, 2);
+        assert_eq!(b.function_depth, 2);
+        assert_eq!(c.function_depth, 2);
     }
 }

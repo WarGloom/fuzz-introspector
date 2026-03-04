@@ -14,11 +14,12 @@
 """Fuzzer profile"""
 
 import json
+import logging
 import os
 import re
-import logging
 import shutil
 import subprocess
+import sys
 
 from typing import (
     Any,
@@ -35,6 +36,14 @@ from fuzz_introspector.datatypes import branch_profile, function_profile
 from fuzz_introspector.exceptions import DataLoaderError
 
 logger = logging.getLogger(name=__name__)
+
+
+def _intern_function_name_list(function_names: list[Any]) -> list[Any]:
+    """Intern string entries in a reachability list."""
+    return [
+        sys.intern(function_name) if isinstance(function_name, str) else function_name
+        for function_name in function_names
+    ]
 
 
 class FuzzerProfile:
@@ -442,6 +451,9 @@ class FuzzerProfile:
             branch_key: cls._deserialize_branch_profile(branch_value)
             for branch_key, branch_value in payload.get("branch_profiles", {}).items()
         }
+        profile.functions_reached = _intern_function_name_list(
+            list(payload.get("functions_reached", []))
+        )
         return profile
 
     @staticmethod
@@ -741,7 +753,9 @@ class FuzzerProfile:
         for func_result in profiles[0].get("results", []):
             name = func_result.get("name")
             if name in acf:
-                acf[name].functions_reached = func_result.get("functions_reached", [])
+                acf[name].functions_reached = _intern_function_name_list(
+                    list(func_result.get("functions_reached", []))
+                )
                 acf[name].function_depth = func_result.get("function_depth", 0)
 
         logger.debug(
@@ -752,74 +766,152 @@ class FuzzerProfile:
     def _propagate_functions_reached(self) -> None:
         """Accumulates all functions transitively reached by each function.
 
-        Replaces the previous per-function BFS with a single-pass iterative
-        DFS that computes the full transitive closure in post-order.  Each
-        function is fully resolved exactly once; results are memoised so that
-        callers can union them in O(1) lookup instead of re-traversing.
+        Uses Tarjan's SCC algorithm + DAG condensation to compute the full
+        transitive closure correctly even when the call graph contains cycles
+        (strongly connected components).
 
-        Semantics preserved from the original implementation:
-        - ``fd.functions_reached`` is set to the full transitive closure
-          (list of unique names, excluding the function itself).
-        - ``fd.function_depth`` is set to the maximum call-chain depth from
-          this function to any leaf it can reach.
+        Algorithm:
+        1. Build a full adjacency map covering both declared functions and any
+           external callees they reference.
+        2. Run iterative Tarjan's SCC.  Tarjan naturally yields SCCs in reverse
+           topological order (sinks/leaves first), which is the correct order for
+           the bottom-up union pass that follows.
+        3. Condense the call graph into a DAG of SCCs.
+        4. For each SCC (processed in Tarjan output order = sinks first):
+           ``reachable[scc] = members(scc) ∪ ⋃ reachable[successor_sccs]``
+           ``depth[scc]     = max over successor SCCs of (depth[succ] + 1)``
+        5. Write back: every function gets
+           ``fd.functions_reached = list(reachable[scc] − {name})``
+           ``fd.function_depth    = depth[scc]``
+
+        Correctness guarantee: all members of an SCC share the same reachable
+        set, so no function ever receives a truncated transitive closure due to
+        a cycle in the call graph.
         """
         acf = self.all_class_functions
 
-        # memo[name]  = frozenset of all transitively reachable names
-        # depth[name] = max call-chain depth from name to any leaf
-        memo: Dict[str, Set[str]] = {}
-        depth: Dict[str, int] = {}
+        # ------------------------------------------------------------------
+        # Step 1 – build full adjacency (declared nodes + external callees).
+        # ------------------------------------------------------------------
+        adj: Dict[str, List[str]] = {}
+        all_nodes: Set[str] = set()
 
-        # Iterative post-order DFS using an explicit stack.
-        # Stack entries: (func_name, iterator_over_its_direct_callees, phase)
-        #   phase == False  → first visit (push callees)
-        #   phase == True   → returning (all children resolved; compute own result)
-        for root in acf:
-            if root in memo:
+        for name, fd in acf.items():
+            direct = list(fd.functions_reached)  # direct callees at this point
+            adj[name] = direct
+            all_nodes.add(name)
+            all_nodes.update(direct)
+
+        # Ensure every node has an adjacency entry (external callees have none).
+        for node in all_nodes:
+            if node not in adj:
+                adj[node] = []
+
+        # ------------------------------------------------------------------
+        # Step 2 – iterative Tarjan's SCC.
+        # Emits SCCs in reverse topological order (sinks first).
+        # ------------------------------------------------------------------
+        index: Dict[str, int] = {}
+        lowlink: Dict[str, int] = {}
+        on_stack: Set[str] = set()
+        tarjan_stack: List[str] = []
+        index_counter: List[int] = [0]
+        sccs: List[List[str]] = []
+
+        # call_stack entries: (node_name, iterator_over_its_children)
+        call_stack: List[Any] = []
+
+        for start in all_nodes:
+            if start in index:
                 continue
 
-            stack: List[Any] = [(root, False)]
-            # Track the path to detect back-edges (cycles).
-            on_path: Set[str] = set()
+            index[start] = lowlink[start] = index_counter[0]
+            index_counter[0] += 1
+            tarjan_stack.append(start)
+            on_stack.add(start)
+            call_stack.append((start, iter(adj.get(start, []))))
 
-            while stack:
-                name, returning = stack[-1]
+            while call_stack:
+                v, children = call_stack[-1]
+                try:
+                    w = next(children)
+                    if w not in index:
+                        # Tree edge: recurse into w.
+                        index[w] = lowlink[w] = index_counter[0]
+                        index_counter[0] += 1
+                        tarjan_stack.append(w)
+                        on_stack.add(w)
+                        call_stack.append((w, iter(adj.get(w, []))))
+                    elif w in on_stack:
+                        # Back edge: update lowlink.
+                        if index[w] < lowlink[v]:
+                            lowlink[v] = index[w]
+                except StopIteration:
+                    # All children of v processed: pop and propagate lowlink.
+                    call_stack.pop()
+                    if call_stack:
+                        parent = call_stack[-1][0]
+                        if lowlink[v] < lowlink[parent]:
+                            lowlink[parent] = lowlink[v]
+                    # If v is an SCC root, pop the component from tarjan_stack.
+                    if lowlink[v] == index[v]:
+                        scc: List[str] = []
+                        while True:
+                            w = tarjan_stack.pop()
+                            on_stack.discard(w)
+                            scc.append(w)
+                            if w == v:
+                                break
+                        sccs.append(scc)
 
-                if returning:
-                    stack.pop()
-                    on_path.discard(name)
+        # ------------------------------------------------------------------
+        # Step 3 – map every node to its SCC index.
+        # ------------------------------------------------------------------
+        scc_id: Dict[str, int] = {}
+        for i, scc in enumerate(sccs):
+            for name in scc:
+                scc_id[name] = i
 
-                    # Union transitive closures of all direct callees.
-                    own_direct = acf[name].functions_reached if name in acf else []
-                    reachable: Set[str] = set()
-                    max_d = 0
-                    for callee in own_direct:
-                        reachable.add(callee)
-                        if callee in memo:
-                            reachable.update(memo[callee])
-                            callee_d = depth.get(callee, 0) + 1
-                            if callee_d > max_d:
-                                max_d = callee_d
-                    memo[name] = reachable
-                    depth[name] = max_d
-                else:
-                    # First visit.
-                    if name in memo:
-                        stack.pop()
-                        continue
-                    on_path.add(name)
-                    stack[-1] = (name, True)
+        # ------------------------------------------------------------------
+        # Step 4 – condensed DAG: scc_successors[i] = set of successor SCC ids.
+        # ------------------------------------------------------------------
+        scc_successors: Dict[int, Set[int]] = {i: set() for i in range(len(sccs))}
+        for node in all_nodes:
+            my_scc = scc_id[node]
+            for callee in adj[node]:
+                callee_scc = scc_id.get(callee)
+                if callee_scc is not None and callee_scc != my_scc:
+                    scc_successors[my_scc].add(callee_scc)
 
-                    # Push unresolved, non-cyclic callees.
-                    if name in acf:
-                        for callee in acf[name].functions_reached:
-                            if callee not in memo and callee not in on_path:
-                                stack.append((callee, False))
+        # ------------------------------------------------------------------
+        # Step 5 – bottom-up union pass (Tarjan order = sinks first).
+        # ------------------------------------------------------------------
+        scc_reachable: Dict[int, Set[str]] = {}
+        scc_depth: Dict[int, int] = {}
 
-        # Write results back into the FunctionProfile objects.
+        for i, scc in enumerate(sccs):
+            members: Set[str] = set(scc)
+            reachable: Set[str] = set(members)
+            max_d = 0
+            for j in scc_successors[i]:
+                reachable.update(scc_reachable[j])
+                d = scc_depth[j] + 1
+                if d > max_d:
+                    max_d = d
+            scc_reachable[i] = reachable
+            scc_depth[i] = max_d
+
+        # ------------------------------------------------------------------
+        # Step 6 – write results back into FunctionProfile objects.
+        # ------------------------------------------------------------------
         for name, fp in acf.items():
-            fp.functions_reached = list(memo.get(name, set()))
-            fp.function_depth = depth.get(name, 0)
+            my_scc = scc_id.get(name)
+            if my_scc is None:
+                fp.functions_reached = []
+                fp.function_depth = 0
+            else:
+                fp.functions_reached = list(scc_reachable[my_scc] - {name})
+                fp.function_depth = scc_depth[my_scc]
 
     def _set_fd_cache(self):
         for _, fd in self.all_class_functions.items():
@@ -829,17 +921,27 @@ class FuzzerProfile:
             self.dst_to_fd_cache[utils.normalise_str(fd.function_name)] = fd
 
     def accummulate_profile(
-        self, target_folder: str, return_dict: None, uniq_id: None, semaphore: None
+        self,
+        target_folder: str,
+        return_dict: None,
+        uniq_id: None,
+        semaphore: None,
+        skip_propagation: bool = False,
     ) -> None:
         """Triggers various analyses on the data of the fuzzer. This is used
         after a profile has been initialised to generate more interesting data.
+
+        When *skip_propagation* is ``True`` the transitive-reachability pass is
+        skipped (because the caller already ran it, e.g. via
+        :func:`propagate_reachability_native_batch`).
         """
         if semaphore is not None:
             semaphore.acquire()
 
-        logger.info("%s: propagating functions reached", self.identifier)
-        if not self._propagate_functions_reached_native():
-            self._propagate_functions_reached()
+        if not skip_propagation:
+            logger.info("%s: propagating functions reached", self.identifier)
+            if not self._propagate_functions_reached_native():
+                self._propagate_functions_reached()
         logger.info("%s: setting reached funcs", self.identifier)
         self._set_all_reached_functions()
         logger.info("%s: setting unreached funcs", self.identifier)
@@ -1285,3 +1387,109 @@ class FuzzerProfile:
             if split_name[-1].isnumeric():
                 return True
         return False
+
+
+def propagate_reachability_native_batch(profiles: list["FuzzerProfile"]) -> bool:
+    """Call the native Rust binary once for all profiles in a batch.
+
+    Only activated when ``FI_REACHABILITY_BACKEND=rust``.  The binary is
+    located via ``FI_REACHABILITY_RUST_BIN`` (if set) or via
+    :func:`shutil.which`.
+
+    Returns ``True`` if the binary ran successfully and results were applied to
+    all profiles.  Returns ``False`` on any failure so the caller can fall back
+    to per-profile Python DFS.
+    """
+    if os.environ.get("FI_REACHABILITY_BACKEND", "") != "rust":
+        return False
+
+    bin_path = os.environ.get("FI_REACHABILITY_RUST_BIN", "")
+    if not bin_path:
+        bin_path = shutil.which("native_reachability_rust") or ""
+    if not bin_path:
+        logger.debug(
+            "native_reachability_rust binary not found; falling back to Python"
+        )
+        return False
+
+    # Build batch payload: one entry per profile.
+    # At this point fd.functions_reached still holds direct callees (not yet
+    # expanded), which is exactly what the Rust binary expects as
+    # "direct_callees".
+    payload: Dict[str, Any] = {
+        "schema_version": 1,
+        "profiles": [
+            {
+                "profile_id": p.identifier,
+                "functions": [
+                    {
+                        "name": name,
+                        "direct_callees": list(fd.functions_reached),
+                    }
+                    for name, fd in p.all_class_functions.items()
+                ],
+            }
+            for p in profiles
+        ],
+    }
+
+    try:
+        result = subprocess.run(
+            [bin_path],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning(
+            "native_reachability_rust batch failed (%s); falling back to Python", exc
+        )
+        return False
+
+    if result.returncode != 0:
+        logger.warning(
+            "native_reachability_rust batch exited %d; falling back to Python",
+            result.returncode,
+        )
+        return False
+
+    try:
+        output = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "native_reachability_rust batch produced invalid JSON (%s); falling back to Python",
+            exc,
+        )
+        return False
+
+    if output.get("status") != "success":
+        logger.warning(
+            "native_reachability_rust batch returned status=%r reason=%r; "
+            "falling back to Python",
+            output.get("status"),
+            output.get("reason"),
+        )
+        return False
+
+    # Build a lookup: profile_id -> FuzzerProfile
+    profile_map = {p.identifier: p for p in profiles}
+
+    for prof_result in output.get("profiles", []):
+        pid = prof_result.get("profile_id")
+        fp = profile_map.get(pid)
+        if fp is None:
+            continue
+        acf = fp.all_class_functions
+        for func_result in prof_result.get("results", []):
+            name = func_result.get("name")
+            if name in acf:
+                acf[name].functions_reached = _intern_function_name_list(
+                    list(func_result.get("functions_reached", []))
+                )
+                acf[name].function_depth = func_result.get("function_depth", 0)
+
+    logger.debug(
+        "Batch reachability computed for %d profiles via native binary", len(profiles)
+    )
+    return True

@@ -76,6 +76,9 @@ rust)
 	export FI_DEBUG_YAML_LOADER_RUST_BIN="${REPO_ROOT}/tools/native_yaml_loader_rust/target/release/native_yaml_loader_rust"
 	export FI_LLVM_COV_LOADER_RUST_BIN="${REPO_ROOT}/tools/native_llvm_cov_loader_rust/target/release/native_llvm_cov_loader_rust"
 	export FI_DEBUG_CORRELATOR_RUST_BIN="${REPO_ROOT}/tools/native_debug_correlator_rust/target/release/native_debug_correlator_rust"
+	# Reachability transitive-closure binary
+	export FI_REACHABILITY_BACKEND=rust
+	export FI_REACHABILITY_RUST_BIN="${REPO_ROOT}/tools/native_reachability_rust/target/release/native_reachability_rust"
 	;;
 go)
 	export FI_NATIVE_BACKENDS=go
