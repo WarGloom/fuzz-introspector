@@ -249,9 +249,10 @@ fn load_records_from_paths(paths: &[String]) -> Result<Vec<JsonValue>, AppError>
         return Ok(Vec::new());
     }
 
-    // Parse all files in parallel; collect in original order to preserve determinism.
+    // Parse files sequentially to prevent massive memory spikes and thread starvation
+    // which occurs when concurrently parsing dozens of huge YAML files.
     let per_file: Vec<Result<Vec<JsonValue>, AppError>> = paths
-        .par_iter()
+        .iter()
         .map(|path| parse_records_from_file(path))
         .collect();
 
@@ -645,6 +646,8 @@ fn write_all_friendly_debug_types(index: &TypeIndex, out_dir: &Path) -> Result<S
 
 fn correlate_and_write_shards(
     functions: &[FunctionEntry],
+    unique_row_indices: &[usize],
+    row_to_unique_idx: &[usize],
     type_map: &HashMap<i128, TypeEntry>,
     output_dir: &Path,
     shard_size: usize,
@@ -658,14 +661,14 @@ fn correlate_and_write_shards(
 
     let mut result = CorrelationWriteResult::default();
 
-    for (shard_idx, function_chunk) in functions.chunks(shard_size).enumerate() {
-        if function_chunk.is_empty() {
+    let correlate_started = Instant::now();
+    let unique_records = correlate_chunk_parallel_by_index(functions, unique_row_indices, type_map);
+    result.correlate_ms += to_ms(correlate_started.elapsed());
+
+    for (shard_idx, chunk_indices) in row_to_unique_idx.chunks(shard_size).enumerate() {
+        if chunk_indices.is_empty() {
             continue;
         }
-
-        let correlate_started = Instant::now();
-        let correlated_chunk = correlate_chunk_with_cache(function_chunk, type_map);
-        result.correlate_ms += to_ms(correlate_started.elapsed());
 
         let shard_path = output_dir.join(format!("correlated-debug-{:05}.ndjson", shard_idx));
         let shard_file = File::create(&shard_path).map_err(|err| {
@@ -677,7 +680,16 @@ fn correlate_and_write_shards(
 
         let write_started = Instant::now();
         let mut writer = BufWriter::new(shard_file);
-        for record in correlated_chunk {
+        for (i, &unique_idx) in chunk_indices.iter().enumerate() {
+            let func_idx = shard_idx * shard_size + i;
+            let function = &functions[func_idx];
+            let cached_record = &unique_records[unique_idx];
+            let record = CorrelatedRecord {
+                row_idx: function.original_row_idx,
+                func_signature_elems: cached_record.func_signature_elems.clone(),
+                source: cached_record.source.clone(),
+            };
+            
             serde_json::to_writer(&mut writer, &record).map_err(|err| {
                 AppError::new(
                     "io_error",
@@ -707,28 +719,7 @@ fn correlate_and_write_shards(
     Ok(result)
 }
 
-fn correlate_chunk_with_cache(
-    function_chunk: &[FunctionEntry],
-    type_map: &HashMap<i128, TypeEntry>,
-) -> Vec<CorrelatedRecord> {
-    if function_chunk.is_empty() {
-        return Vec::new();
-    }
 
-    let (unique_row_indices, row_to_unique_idx) = build_correlation_plan(function_chunk);
-    let unique_records = correlate_chunk_parallel_by_index(function_chunk, &unique_row_indices, type_map);
-
-    let mut records: Vec<CorrelatedRecord> = Vec::with_capacity(function_chunk.len());
-    for (function, &unique_idx) in function_chunk.iter().zip(row_to_unique_idx.iter()) {
-        let cached_record = &unique_records[unique_idx];
-        records.push(CorrelatedRecord {
-            row_idx: function.original_row_idx,
-            func_signature_elems: cached_record.func_signature_elems.clone(),
-            source: cached_record.source.clone(),
-        });
-    }
-    records
-}
 
 fn correlate_chunk_parallel_by_index(
     function_chunk: &[FunctionEntry],
@@ -831,7 +822,7 @@ fn run_request(request: Request) -> Result<Response, AppError> {
     timings.parse_ms = to_ms(parse_started.elapsed());
 
     let dedupe_started = Instant::now();
-    let (unique_row_indices, _) = build_correlation_plan(&parsed_functions);
+    let (unique_row_indices, row_to_unique_idx) = build_correlation_plan(&parsed_functions);
     counters.deduped_functions = unique_row_indices.len();
     timings.dedupe_ms = to_ms(dedupe_started.elapsed());
 
@@ -850,7 +841,7 @@ fn run_request(request: Request) -> Result<Response, AppError> {
     }
 
     let correlation_result =
-        correlate_and_write_shards(&parsed_functions, &type_index.entries, &output_dir, shard_size)?;
+        correlate_and_write_shards(&parsed_functions, &unique_row_indices, &row_to_unique_idx, &type_index.entries, &output_dir, shard_size)?;
 
     counters.written_records = correlation_result.written_records;
     counters.updated_functions = correlation_result.written_records;
@@ -880,6 +871,22 @@ fn emit_response(response: &Response) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_correlate(functions: &[FunctionEntry], type_map: &HashMap<i128, TypeEntry>) -> Vec<CorrelatedRecord> {
+        let (unique_row_indices, row_to_unique_idx) = build_correlation_plan(functions);
+        let unique_records = correlate_chunk_parallel_by_index(functions, &unique_row_indices, type_map);
+
+        let mut records: Vec<CorrelatedRecord> = Vec::with_capacity(functions.len());
+        for (function, &unique_idx) in functions.iter().zip(row_to_unique_idx.iter()) {
+            let cached_record = &unique_records[unique_idx];
+            records.push(CorrelatedRecord {
+                row_idx: function.original_row_idx,
+                func_signature_elems: cached_record.func_signature_elems.clone(),
+                source: cached_record.source.clone(),
+            });
+        }
+        records
+    }
 
     fn function_entry(row_idx: usize, file_location: &str) -> FunctionEntry {
         FunctionEntry {
@@ -924,7 +931,7 @@ mod tests {
             function_entry(2, "/src/a.c:10"),
         ];
 
-        let records = correlate_chunk_with_cache(&functions, &HashMap::new());
+        let records = test_correlate(&functions, &HashMap::new());
         let row_indexes: Vec<usize> = records.into_iter().map(|record| record.row_idx).collect();
 
         assert_eq!(row_indexes, vec![0, 1, 2]);
@@ -981,11 +988,11 @@ mod tests {
             function_entry_with_types(50, "/src/c.c:50", vec![4, 5]),
         ];
 
-        let baseline = serde_json::to_string(&correlate_chunk_with_cache(&functions, &HashMap::new()))
+        let baseline = serde_json::to_string(&test_correlate(&functions, &HashMap::new()))
             .expect("failed to serialize baseline records");
 
         for _ in 0..10 {
-            let current = serde_json::to_string(&correlate_chunk_with_cache(&functions, &HashMap::new()))
+            let current = serde_json::to_string(&test_correlate(&functions, &HashMap::new()))
                 .expect("failed to serialize correlated records");
             assert_eq!(current, baseline);
         }
