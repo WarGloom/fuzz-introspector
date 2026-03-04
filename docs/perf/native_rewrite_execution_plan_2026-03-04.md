@@ -45,17 +45,23 @@
 - Targeted tests passing (serial compatibility and merge safety).
 - Code review verdict: pass/approve with minor follow-up suggestions for additional parity integration tests.
 
+### Optional hardening (Completed)
+
+- Cross-mode parity integration hardening tests added in `src/test/test_html_serial_compatibility.py`.
+- Coverage includes multi-analysis `PARALLEL_SAFE` path behavior and a parallel-path invocation assertion.
+- Targeted test file passing: `python -m pytest -vv src/test/test_html_serial_compatibility.py` (7 passed).
+- Code review status: no blockers.
+
 ### FINAL-GATE (Validation status: feasible checks passed)
 
 - Python regression tests passing for stage-marker coverage, serial compatibility, merge safety, and function-table matrix subset.
 - Rust crate tests passing for `native_analysis_plugins_rust` and `native_debug_correlator_rust`.
 - `./code_checks.sh` passing after formatting fixes.
 - Stage-marker gate smoke passing across default stages, including `type_correlation`.
-- Optional hardening remains: add cross-mode parity integration test.
+- Optional hardening completed: cross-mode parity integration tests now included.
 
 ### Next up
 
-- Optional hardening: add cross-mode parity integration test.
 - Optional confidence pass: rerun benchmark/parity checks before merge if desired.
 
 ## DIAG-00 Procedure

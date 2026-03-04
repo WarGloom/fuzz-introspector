@@ -13,6 +13,7 @@
 # limitations under the License.
 """Tests for serial compatibility adapter in HTML report generation."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from fuzz_introspector import analyses as analyses_registry
@@ -63,6 +64,73 @@ def _make_project_stub():
         proj_profile=SimpleNamespace(basefolder="/tmp", coverage_url=""),
         profiles=[],
     )
+
+
+def _run_optional_analyses_fixture(monkeypatch, tmp_path: Path, worker_count: int):
+    calls = []
+    analysis_hidden = _make_dummy_analysis(
+        "AnalysisHidden",
+        "<div>hidden</div>",
+        calls,
+        include_ui_fields=True,
+    )
+    analysis_visible = _make_dummy_analysis(
+        "AnalysisVisible",
+        "<div>visible</div>",
+        calls,
+        include_ui_fields=True,
+    )
+
+    monkeypatch.setattr(
+        html_report.analysis,
+        "get_all_analyses",
+        lambda: [analysis_hidden, analysis_visible],
+    )
+    monkeypatch.setattr(
+        analyses_registry,
+        "all_analyses",
+        [analysis_hidden, analysis_visible],
+    )
+    monkeypatch.setattr(
+        analyses_registry,
+        "analysis_parallel_compatibility",
+        {
+            analysis_hidden: analyses_registry.PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+            analysis_visible: analyses_registry.PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+        },
+    )
+    monkeypatch.setattr(
+        html_report,
+        "_parse_parallel_worker_count",
+        lambda: worker_count,
+    )
+
+    table_of_contents = html_helpers.HtmlTableOfContents()
+    tables = []
+    conclusions = []
+    out_dir = tmp_path / f"workers-{worker_count}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    html = html_report.create_section_optional_analyses(
+        table_of_contents=table_of_contents,
+        analyses_to_run=["AnalysisVisible"],
+        output_json=["AnalysisHidden"],
+        tables=tables,
+        introspection_proj=_make_project_stub(),
+        basefolder="/tmp",
+        coverage_url="",
+        conclusions=conclusions,
+        dump_files=False,
+        out_dir=str(out_dir),
+    )
+
+    return {
+        "html": html,
+        "calls": calls,
+        "toc_titles": [entry.entry_title for entry in table_of_contents.entries],
+        "table_ids": tables,
+        "conclusion_titles": [conclusion.title for conclusion in conclusions],
+    }
 
 
 def test_serial_adapter_filters_display_html(monkeypatch):
@@ -243,3 +311,280 @@ def test_serial_single_worker_keeps_hidden_ui_local(monkeypatch):
     assert tables == ["AnalysisVisible-table"]
     assert len(conclusions) == 1
     assert conclusions[0].title == "AnalysisVisible conclusion"
+
+
+def test_optional_analyses_hidden_visible_parity_across_worker_modes(
+    monkeypatch,
+    tmp_path: Path,
+):
+    serial_result = _run_optional_analyses_fixture(monkeypatch, tmp_path, 1)
+    parallel_result = _run_optional_analyses_fixture(monkeypatch, tmp_path, 2)
+
+    assert serial_result["calls"] == ["AnalysisHidden", "AnalysisVisible"]
+    assert parallel_result["calls"] == ["AnalysisHidden", "AnalysisVisible"]
+
+    # Hidden analysis must not leak UI artifacts in either mode.
+    for mode_result in [serial_result, parallel_result]:
+        assert "<div>hidden</div>" not in mode_result["html"]
+        assert "AnalysisHidden heading" not in mode_result["toc_titles"]
+        assert "AnalysisHidden-table" not in mode_result["table_ids"]
+        assert "AnalysisHidden conclusion" not in mode_result["conclusion_titles"]
+
+    # Visible outputs should remain consistent between worker_count=1 and >1.
+    assert serial_result["html"].count("<div>visible</div>") == 1
+    assert parallel_result["html"].count("<div>visible</div>") == 1
+
+    serial_toc_titles = [
+        title
+        for title in serial_result["toc_titles"]
+        if title != "Analyses and suggestions"
+    ]
+    parallel_toc_titles = [
+        title
+        for title in parallel_result["toc_titles"]
+        if title != "Analyses and suggestions"
+    ]
+    assert serial_toc_titles == parallel_toc_titles == ["AnalysisVisible heading"]
+    assert (
+        serial_result["table_ids"]
+        == parallel_result["table_ids"]
+        == ["AnalysisVisible-table"]
+    )
+    assert (
+        serial_result["conclusion_titles"]
+        == parallel_result["conclusion_titles"]
+        == ["AnalysisVisible conclusion"]
+    )
+
+
+def test_parallel_safe_visible_analysis_parity_across_worker_modes(
+    monkeypatch,
+    tmp_path: Path,
+):
+    def run_fixture(worker_count: int):
+        calls = []
+        parallel_safe_visible = _make_dummy_analysis(
+            "ParallelSafeVisible",
+            "<div>parallel-visible</div>",
+            calls,
+            include_ui_fields=True,
+        )
+
+        monkeypatch.setattr(
+            html_report.analysis,
+            "get_all_analyses",
+            lambda: [parallel_safe_visible],
+        )
+        monkeypatch.setattr(analyses_registry, "all_analyses", [parallel_safe_visible])
+        monkeypatch.setattr(
+            analyses_registry,
+            "analysis_parallel_compatibility",
+            {
+                parallel_safe_visible: analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+            },
+        )
+        monkeypatch.setattr(
+            html_report,
+            "_parse_parallel_worker_count",
+            lambda: worker_count,
+        )
+        monkeypatch.setattr(
+            html_report,
+            "_parse_parallel_backend",
+            lambda: "thread",
+        )
+
+        table_of_contents = html_helpers.HtmlTableOfContents()
+        tables = []
+        conclusions = []
+        out_dir = tmp_path / f"parallel-safe-workers-{worker_count}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        html = html_report.create_section_optional_analyses(
+            table_of_contents=table_of_contents,
+            analyses_to_run=["ParallelSafeVisible"],
+            output_json=[],
+            tables=tables,
+            introspection_proj=_make_project_stub(),
+            basefolder="/tmp",
+            coverage_url="",
+            conclusions=conclusions,
+            dump_files=False,
+            out_dir=str(out_dir),
+        )
+
+        visible_toc_titles = [
+            entry.entry_title
+            for entry in table_of_contents.entries
+            if entry.entry_title.startswith("ParallelSafeVisible")
+        ]
+
+        return {
+            "calls": calls,
+            "html": html,
+            "visible_toc_titles": visible_toc_titles,
+            "visible_table_ids": [
+                table_id
+                for table_id in tables
+                if table_id.startswith("ParallelSafeVisible")
+            ],
+            "visible_conclusion_titles": [
+                conclusion.title
+                for conclusion in conclusions
+                if conclusion.title.startswith("ParallelSafeVisible")
+            ],
+        }
+
+    single_worker_result = run_fixture(1)
+    two_worker_result = run_fixture(2)
+
+    assert single_worker_result["calls"] == ["ParallelSafeVisible"]
+    assert two_worker_result["calls"] == ["ParallelSafeVisible"]
+    assert single_worker_result["html"].count("<div>parallel-visible</div>") == 1
+    assert two_worker_result["html"].count("<div>parallel-visible</div>") == 1
+    assert (
+        single_worker_result["visible_toc_titles"]
+        == two_worker_result["visible_toc_titles"]
+        == ["ParallelSafeVisible heading"]
+    )
+    assert (
+        single_worker_result["visible_table_ids"]
+        == two_worker_result["visible_table_ids"]
+        == ["ParallelSafeVisible-table"]
+    )
+    assert (
+        single_worker_result["visible_conclusion_titles"]
+        == two_worker_result["visible_conclusion_titles"]
+        == ["ParallelSafeVisible conclusion"]
+    )
+
+
+def test_parallel_safe_multiple_analyses_merge_and_parallel_path(
+    monkeypatch,
+    tmp_path: Path,
+):
+    calls = []
+    parallel_safe_a = _make_dummy_analysis(
+        "ParallelSafeA",
+        "<div>parallel-a</div>",
+        calls,
+        include_ui_fields=True,
+    )
+    parallel_safe_b = _make_dummy_analysis(
+        "ParallelSafeB",
+        "<div>parallel-b</div>",
+        calls,
+        include_ui_fields=True,
+    )
+
+    monkeypatch.setattr(
+        html_report.analysis,
+        "get_all_analyses",
+        lambda: [parallel_safe_a, parallel_safe_b],
+    )
+    monkeypatch.setattr(
+        analyses_registry,
+        "all_analyses",
+        [parallel_safe_a, parallel_safe_b],
+    )
+    monkeypatch.setattr(
+        analyses_registry,
+        "analysis_parallel_compatibility",
+        {
+            parallel_safe_a: analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+            parallel_safe_b: analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+        },
+    )
+    monkeypatch.setattr(html_report, "_parse_parallel_worker_count", lambda: 2)
+    monkeypatch.setattr(html_report, "_parse_parallel_backend", lambda: "thread")
+
+    original_run_parallel_analyses = html_report._run_parallel_analyses
+    parallel_call_spy = {}
+
+    def _spy_run_parallel_analyses(
+        analysis_interfaces,
+        analyses_to_run,
+        introspection_proj,
+        basefolder,
+        coverage_url,
+        out_dir,
+        dump_files,
+        worker_count,
+        table_id_offsets,
+        backend,
+    ):
+        parallel_call_spy["called"] = True
+        parallel_call_spy["analysis_names"] = [
+            analysis_interface.get_name() for analysis_interface in analysis_interfaces
+        ]
+        parallel_call_spy["worker_count"] = worker_count
+        parallel_call_spy["backend"] = backend
+        return original_run_parallel_analyses(
+            analysis_interfaces,
+            analyses_to_run,
+            introspection_proj,
+            basefolder,
+            coverage_url,
+            out_dir,
+            dump_files,
+            worker_count,
+            table_id_offsets,
+            backend,
+        )
+
+    monkeypatch.setattr(
+        html_report,
+        "_run_parallel_analyses",
+        _spy_run_parallel_analyses,
+    )
+
+    table_of_contents = html_helpers.HtmlTableOfContents()
+    tables = []
+    conclusions = []
+    out_dir = tmp_path / "parallel-safe-multi"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    html = html_report.create_section_optional_analyses(
+        table_of_contents=table_of_contents,
+        analyses_to_run=["ParallelSafeA", "ParallelSafeB"],
+        output_json=[],
+        tables=tables,
+        introspection_proj=_make_project_stub(),
+        basefolder="/tmp",
+        coverage_url="",
+        conclusions=conclusions,
+        dump_files=False,
+        out_dir=str(out_dir),
+    )
+
+    assert parallel_call_spy == {
+        "called": True,
+        "analysis_names": ["ParallelSafeA", "ParallelSafeB"],
+        "worker_count": 2,
+        "backend": "thread",
+    }
+    assert sorted(calls) == ["ParallelSafeA", "ParallelSafeB"]
+    assert html.count("<div>parallel-a</div>") == 1
+    assert html.count("<div>parallel-b</div>") == 1
+
+    visible_toc_titles = {
+        entry.entry_title
+        for entry in table_of_contents.entries
+        if entry.entry_title.startswith("ParallelSafe")
+    }
+    assert visible_toc_titles == {"ParallelSafeA heading", "ParallelSafeB heading"}
+
+    visible_table_ids = {
+        table_id for table_id in tables if table_id.startswith("ParallelSafe")
+    }
+    assert visible_table_ids == {"ParallelSafeA-table", "ParallelSafeB-table"}
+
+    visible_conclusion_titles = {
+        conclusion.title
+        for conclusion in conclusions
+        if conclusion.title.startswith("ParallelSafe")
+    }
+    assert visible_conclusion_titles == {
+        "ParallelSafeA conclusion",
+        "ParallelSafeB conclusion",
+    }
