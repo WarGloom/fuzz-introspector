@@ -113,12 +113,6 @@ struct FunctionEntry {
     type_arguments: Vec<i128>,
 }
 
-#[derive(Hash, Eq, PartialEq)]
-struct CorrelationKey {
-    file_location: String,
-    type_arguments: Vec<i128>,
-}
-
 #[derive(Clone, Serialize)]
 struct FunctionSignatureElems {
     return_type: JsonValue,
@@ -144,6 +138,11 @@ struct CorrelationWriteResult {
     written_records: usize,
     correlate_ms: u64,
     write_ms: u64,
+}
+
+struct CachedCorrelationResult {
+    func_signature_elems: FunctionSignatureElems,
+    source: SourceLocation,
 }
 
 fn to_ms(duration: std::time::Duration) -> u64 {
@@ -361,13 +360,13 @@ fn build_type_index(records: &[JsonValue]) -> TypeIndex {
 fn build_correlation_plan(functions: &[FunctionEntry]) -> (Vec<FunctionEntry>, Vec<usize>) {
     let mut unique_functions: Vec<FunctionEntry> = Vec::new();
     let mut row_to_unique_idx: Vec<usize> = Vec::with_capacity(functions.len());
-    let mut key_to_unique_idx: HashMap<CorrelationKey, usize> = HashMap::new();
+    let mut key_to_unique_idx: HashMap<(&str, &[i128]), usize> = HashMap::with_capacity(functions.len());
 
     for function in functions {
-        let key = CorrelationKey {
-            file_location: function.file_location.clone(),
-            type_arguments: function.type_arguments.clone(),
-        };
+        let key = (
+            function.file_location.as_str(),
+            function.type_arguments.as_slice(),
+        );
         let unique_idx = if let Some(existing_idx) = key_to_unique_idx.get(&key) {
             *existing_idx
         } else {
@@ -720,8 +719,8 @@ fn correlate_chunk_with_cache(
     let unique_records = correlate_chunk_parallel(&unique_functions, type_map);
 
     let mut records: Vec<CorrelatedRecord> = Vec::with_capacity(function_chunk.len());
-    for (chunk_offset, function) in function_chunk.iter().enumerate() {
-        let cached_record = &unique_records[row_to_unique_idx[chunk_offset]];
+    for (function, &unique_idx) in function_chunk.iter().zip(row_to_unique_idx.iter()) {
+        let cached_record = &unique_records[unique_idx];
         records.push(CorrelatedRecord {
             row_idx: function.original_row_idx,
             func_signature_elems: cached_record.func_signature_elems.clone(),
@@ -734,12 +733,11 @@ fn correlate_chunk_with_cache(
 fn correlate_chunk_parallel(
     function_chunk: &[FunctionEntry],
     type_map: &HashMap<i128, TypeEntry>,
-) -> Vec<CorrelatedRecord> {
+) -> Vec<CachedCorrelationResult> {
     // rayon par_iter preserves order, so no post-sort or fallback path needed.
     function_chunk
         .par_iter()
-        .map(|function| CorrelatedRecord {
-            row_idx: function.original_row_idx,
+        .map(|function| CachedCorrelationResult {
             func_signature_elems: extract_debugged_function_signature(function, type_map),
             source: extract_source_location(&function.file_location),
         })
@@ -887,6 +885,18 @@ mod tests {
         }
     }
 
+    fn function_entry_with_types(
+        row_idx: usize,
+        file_location: &str,
+        type_arguments: Vec<i128>,
+    ) -> FunctionEntry {
+        FunctionEntry {
+            original_row_idx: row_idx,
+            file_location: file_location.to_string(),
+            type_arguments,
+        }
+    }
+
     #[test]
     fn correlation_plan_keeps_all_rows_with_duplicate_keys() {
         let functions = vec![
@@ -914,6 +924,20 @@ mod tests {
         let row_indexes: Vec<usize> = records.into_iter().map(|record| record.row_idx).collect();
 
         assert_eq!(row_indexes, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn correlation_plan_considers_type_arguments_in_key() {
+        let functions = vec![
+            function_entry_with_types(0, "/src/a.c:10", vec![1, 2]),
+            function_entry_with_types(1, "/src/a.c:10", vec![1, 3]),
+            function_entry_with_types(2, "/src/a.c:10", vec![1, 2]),
+        ];
+
+        let (unique_functions, row_to_unique_idx) = build_correlation_plan(&functions);
+
+        assert_eq!(unique_functions.len(), 2);
+        assert_eq!(row_to_unique_idx, vec![0, 1, 0]);
     }
 }
 
