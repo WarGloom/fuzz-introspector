@@ -72,12 +72,10 @@ def add_func_to_reached_and_clone(
 
         if merged_profile.target_lang == "rust":
             f.reached_by_fuzzers.append(
-                utils.demangle_rust_func(func_to_add.function_name)
-            )
+                utils.demangle_rust_func(func_to_add.function_name))
         else:
             f.reached_by_fuzzers.append(
-                utils.demangle_cpp_func(func_to_add.function_name)
-            )
+                utils.demangle_cpp_func(func_to_add.function_name))
 
     # Recompute all analysis that is based on hitcounts in all functions as
     # hitcount has changed for elements in the dictionary.
@@ -88,9 +86,11 @@ def add_func_to_reached_and_clone(
         for reached_func_name in f_profile.functions_reached:
             if reached_func_name not in all_functions:
                 if target_lang == "jvm":
-                    logger.debug("%s not provided within classpath", reached_func_name)
+                    logger.debug("%s not provided within classpath",
+                                 reached_func_name)
                 else:
-                    logger.debug("Mismatched function name: %s", reached_func_name)
+                    logger.debug("Mismatched function name: %s",
+                                 reached_func_name)
                 continue
             f_reached = all_functions[reached_func_name]
             cc += f_reached.cyclomatic_complexity
@@ -162,28 +162,26 @@ class OptimalTargets(analysis.AnalysisInterface):
 
         html_string = ""
         html_string += html_helpers.html_add_header_with_link(
-            "Optimal target analysis", html_helpers.HTML_HEADING.H2, table_of_contents
-        )
+            "Optimal target analysis", html_helpers.HTML_HEADING.H2,
+            table_of_contents)
 
         # Try the native (Rust) path first.
         new_profile: Optional[project_profile.MergedProjectProfile] = None
-        optimal_target_functions: Optional[List[function_profile.FunctionProfile]] = (
-            None
-        )
+        optimal_target_functions: Optional[List[
+            function_profile.FunctionProfile]] = (None)
         if analysis.NativePluginProxy.is_enabled():
             try:
-                native_result = analysis.get_native_plugin_proxy().run_analysis(
-                    proj_profile, profiles, ["optimal_targets"]
-                )
-                rows = native_result["optimal_targets"]["tables"]["optimal_targets"]
+                native_result = analysis.get_native_plugin_proxy(
+                ).run_analysis(proj_profile, profiles, ["optimal_targets"])
+                rows = native_result["optimal_targets"]["tables"][
+                    "optimal_targets"]
                 if rows:
                     optimal_target_functions = []
                     for row in rows:
                         fname = row["function_name"]
                         if fname in proj_profile.all_functions:
                             optimal_target_functions.append(
-                                proj_profile.all_functions[fname]
-                            )
+                                proj_profile.all_functions[fname])
                     new_profile = proj_profile
                     logger.info(
                         "[native] OptimalTargets: used Rust result (%d functions)",
@@ -196,8 +194,7 @@ class OptimalTargets(analysis.AnalysisInterface):
         # Fall back to the Python computation when native result is absent.
         if optimal_target_functions is None:
             new_profile, optimal_target_functions = (
-                self.iteratively_get_optimal_targets(proj_profile)
-            )
+                self.iteratively_get_optimal_targets(proj_profile))
         assert new_profile is not None
         html_string += self.get_optimal_target_section(
             optimal_target_functions,
@@ -225,7 +222,8 @@ class OptimalTargets(analysis.AnalysisInterface):
 
         return html_string
 
-    def qualifies_as_optimal_target(self, fd: function_profile.FunctionProfile) -> bool:
+    def qualifies_as_optimal_target(
+            self, fd: function_profile.FunctionProfile) -> bool:
         """
         Hard conditions for whether a target qualifies as a potential
         optimal target. These are minimum conditions, i.e. the analysis
@@ -290,16 +288,16 @@ class OptimalTargets(analysis.AnalysisInterface):
         cloned_functions = {}
         for func_name, func_profile in merged_profile.all_functions.items():
             cloned_function = copy.copy(func_profile)
-            cloned_function.reached_by_fuzzers = list(func_profile.reached_by_fuzzers)
+            cloned_function.reached_by_fuzzers = list(
+                func_profile.reached_by_fuzzers)
             cloned_functions[func_name] = cloned_function
         cloned_profile.all_functions = cloned_functions
         return cloned_profile
 
     def iteratively_get_optimal_targets(
         self, merged_profile: project_profile.MergedProjectProfile
-    ) -> Tuple[
-        project_profile.MergedProjectProfile, List[function_profile.FunctionProfile]
-    ]:
+    ) -> Tuple[project_profile.MergedProjectProfile,
+               List[function_profile.FunctionProfile]]:
         """
         Function for synthesizing fuzz targets. The way this one works is by
         finding optimal targets that don't overlap too much with each other.
@@ -309,7 +307,8 @@ class OptimalTargets(analysis.AnalysisInterface):
         data we have. It is likely that we could do something much better.
         """
         logger.info("  - in iteratively_get_optimal_targets")
-        new_merged_profile = self._clone_profile_for_optimal_targets(merged_profile)
+        new_merged_profile = self._clone_profile_for_optimal_targets(
+            merged_profile)
         optimal_functions_targeted: List[function_profile.FunctionProfile] = []
 
         # Extract all candidates
@@ -333,20 +332,21 @@ class OptimalTargets(analysis.AnalysisInterface):
                 break
             optimal_target_fd = max(
                 target_fds,
-                key=lambda potential_target: int(
-                    potential_target.new_unreached_complexity
-                ),
+                key=lambda potential_target: int(potential_target.
+                                                 new_unreached_complexity),
             )
 
             # Add function to optimal targets
             optimal_functions_targeted.append(optimal_target_fd)
 
-            add_func_to_reached_and_clone(new_merged_profile, optimal_target_fd)
+            add_func_to_reached_and_clone(new_merged_profile,
+                                          optimal_target_fd)
 
             # Update the optimal targets. We only need to do this
             # if more drivers need to be created.
             if len(optimal_functions_targeted) < drivers_to_create:
-                target_fds = self.analysis_get_optimal_targets(new_merged_profile)
+                target_fds = self.analysis_get_optimal_targets(
+                    new_merged_profile)
 
         logger.info(
             "Found the following optimal functions: { %s }",
@@ -371,12 +371,10 @@ class OptimalTargets(analysis.AnalysisInterface):
             html_helpers.HTML_HEADING.H3,
             table_of_contents,
         )
-        html_string += (
-            "<p> The following table shows a list of functions "
-            "that are optimal targets. Optimal targets are "
-            "identified by finding the functions that in "
-            "combination, yield a high code coverage. </p>"
-        )
+        html_string += ("<p> The following table shows a list of functions "
+                        "that are optimal targets. Optimal targets are "
+                        "identified by finding the functions that in "
+                        "combination, yield a high code coverage. </p>")
         table_id = "remaining_optimal_interesting_functions"
         tables.append(table_id)
         html_string += html_helpers.html_create_table_head(
@@ -409,50 +407,50 @@ class OptimalTargets(analysis.AnalysisInterface):
             demangled = utils.demangle_rust_func(demangled)
             html_func_row = (
                 f"<a href=\"{func_cov_url}\"><code class='language-clike'>"
-                f"{demangled}</code></a>"
-            )
-            html_string += html_helpers.html_table_add_row(
-                [
-                    html_func_row,
-                    fd.function_source_file,
-                    fd.arg_count,
-                    fd.arg_types,
-                    fd.function_depth,
-                    fd.hitcount,
-                    fd.i_count,
-                    fd.bb_count,
-                    fd.cyclomatic_complexity,
-                    len(fd.functions_reached),
-                    len(fd.incoming_references),
-                    fd.total_cyclomatic_complexity,
-                    fd.new_unreached_complexity,
-                ]
-            )
+                f"{demangled}</code></a>")
+            html_string += html_helpers.html_table_add_row([
+                html_func_row,
+                fd.function_source_file,
+                fd.arg_count,
+                fd.arg_types,
+                fd.function_depth,
+                fd.hitcount,
+                fd.i_count,
+                fd.bb_count,
+                fd.cyclomatic_complexity,
+                len(fd.functions_reached),
+                len(fd.incoming_references),
+                fd.total_cyclomatic_complexity,
+                fd.new_unreached_complexity,
+            ])
 
         json_dict = []
         for fd in optimal_target_functions:
-            json_dict.append(
-                {
-                    "name": fd.function_name,
-                    "source_file": fd.function_source_file,
-                    "new-unreached-complexity": fd.new_unreached_complexity,
-                    "cyclomatic_complexity": fd.cyclomatic_complexity,
-                    "function_depth": fd.function_depth,
-                    "total_cyclomatic_complexity": fd.total_cyclomatic_complexity,
-                }
-            )
+            json_dict.append({
+                "name":
+                fd.function_name,
+                "source_file":
+                fd.function_source_file,
+                "new-unreached-complexity":
+                fd.new_unreached_complexity,
+                "cyclomatic_complexity":
+                fd.cyclomatic_complexity,
+                "function_depth":
+                fd.function_depth,
+                "total_cyclomatic_complexity":
+                fd.total_cyclomatic_complexity,
+            })
 
         self.set_json_string_result(json.dumps(json_dict))
 
         json_report.add_analysis_json_str_as_dict_to_report(
-            self.get_name(), self.get_json_string_result(), out_dir
-        )
+            self.get_name(), self.get_json_string_result(), out_dir)
         html_string += "</table>\n"
         return html_string
 
     def create_top_summary_info(
-        self, tables: List[str], proj_profile: project_profile.MergedProjectProfile
-    ) -> str:
+            self, tables: List[str],
+            proj_profile: project_profile.MergedProjectProfile) -> str:
         """Create summary info in html report."""
         # pylint: disable=unused-argument
         html_string = ""
@@ -490,35 +488,32 @@ class OptimalTargets(analysis.AnalysisInterface):
         # pylint: disable=unused-argument
         html_string = (
             "<p>Implementing fuzzers that target the above functions "
-            "will improve reachability such that it becomes:</p>"
-        )
+            "will improve reachability such that it becomes:</p>")
         tables.append(f"myTable{len(tables)}")
         html_string += self.create_top_summary_info(tables, new_profile)
 
         # Table with details about all functions in the project in case the
         # suggested fuzzers are implemented.
         html_string += html_helpers.html_add_header_with_link(
-            "All functions overview", html_helpers.HTML_HEADING.H4, table_of_contents
-        )
-        html_string += (
-            "<p> If you implement fuzzers for these functions, the"
-            " status of all functions in the project will be:</p>"
-        )
+            "All functions overview", html_helpers.HTML_HEADING.H4,
+            table_of_contents)
+        html_string += ("<p> If you implement fuzzers for these functions, the"
+                        " status of all functions in the project will be:</p>")
         table_id = "all_functions_overview_table"
         tables.append(table_id)
         all_function_table, all_functions_json, _ = (
-            html_report.create_all_function_table(
-                tables, new_profile, coverage_url, basefolder, table_id
-            )
-        )
+            html_report.create_all_function_table(tables, new_profile,
+                                                  coverage_url, basefolder,
+                                                  table_id))
         html_string += all_function_table
         html_string += "</div>"  # close report-box
 
         # Write all functions to the .js file
         if self.dump_files:
             with open(
-                os.path.join(out_dir, constants.OPTIMAL_TARGETS_ALL_FUNCTIONS), "w"
-            ) as func_file:
+                    os.path.join(out_dir,
+                                 constants.OPTIMAL_TARGETS_ALL_FUNCTIONS),
+                    "w") as func_file:
                 func_file.write("var analysis_1_data = ")
                 func_file.write(json.dumps(all_functions_json))
         return html_string

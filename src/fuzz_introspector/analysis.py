@@ -77,15 +77,13 @@ FI_NATIVE_PLUGINS_ENV = "FI_NATIVE_PLUGINS"
 _NATIVE_PLUGINS_RUST_VALUE = "rust"
 
 # Plugin names handled by the Rust binary.
-_NATIVE_PLUGIN_NAMES: frozenset[str] = frozenset(
-    {
-        "OptimalTargets",
-        "RuntimeCoverageAnalysis",
-        "CalltreeAnalysis",
-        "SinkCoverageAnalyser",
-        "FunctionTable",
-    }
-)
+_NATIVE_PLUGIN_NAMES: frozenset[str] = frozenset({
+    "OptimalTargets",
+    "RuntimeCoverageAnalysis",
+    "CalltreeAnalysis",
+    "SinkCoverageAnalyser",
+    "FunctionTable",
+})
 
 # Mapping from Python plugin class .get_name() → Rust dispatcher key.
 _PYTHON_NAME_TO_NATIVE_KEY: dict[str, str] = {
@@ -110,52 +108,57 @@ def _serialize_project_for_native(
     """
     functions = []
     for fname, fp in proj_profile_obj.all_functions.items():
-        functions.append(
-            {
-                "name": fname,
-                "hitcount": fp.hitcount,
-                "arg_count": fp.arg_count,
-                "cyclomatic_complexity": fp.cyclomatic_complexity,
-                "total_cyclomatic_complexity": fp.total_cyclomatic_complexity,
-                "new_unreached_complexity": fp.new_unreached_complexity,
-                "bb_count": fp.bb_count,
-                "functions_reached_count": len(fp.functions_reached),
-                "reached_by_fuzzers": list(fp.reached_by_fuzzers),
-                "runtime_coverage_percent": (
-                    getattr(fp, "cov_init_graph_percentage", 0.0) or 0.0
-                ),
-                "source_file": (getattr(fp, "function_source_file", "") or ""),
-                "incoming_references": list(
-                    getattr(fp, "incoming_references", []) or []
-                ),
-            }
-        )
+        functions.append({
+            "name":
+            fname,
+            "hitcount":
+            fp.hitcount,
+            "arg_count":
+            fp.arg_count,
+            "cyclomatic_complexity":
+            fp.cyclomatic_complexity,
+            "total_cyclomatic_complexity":
+            fp.total_cyclomatic_complexity,
+            "new_unreached_complexity":
+            fp.new_unreached_complexity,
+            "bb_count":
+            fp.bb_count,
+            "functions_reached_count":
+            len(fp.functions_reached),
+            "reached_by_fuzzers":
+            list(fp.reached_by_fuzzers),
+            "runtime_coverage_percent":
+            (getattr(fp, "cov_init_graph_percentage", 0.0) or 0.0),
+            "source_file": (getattr(fp, "function_source_file", "") or ""),
+            "incoming_references":
+            list(getattr(fp, "incoming_references", []) or []),
+        })
 
     return {
-        "function_count": len(proj_profile_obj.all_functions),
-        "fuzzer_count": len(profiles_list),
-        "target_lang": proj_profile_obj.target_lang,
-        "has_coverage_data": (
-            proj_profile_obj.has_coverage_data()
-            if callable(getattr(proj_profile_obj, "has_coverage_data", None))
-            else False
-        ),
-        "functions": functions,
+        "function_count":
+        len(proj_profile_obj.all_functions),
+        "fuzzer_count":
+        len(profiles_list),
+        "target_lang":
+        proj_profile_obj.target_lang,
+        "has_coverage_data": (proj_profile_obj.has_coverage_data() if callable(
+            getattr(proj_profile_obj, "has_coverage_data", None)) else False),
+        "functions":
+        functions,
     }
 
 
 def _serialize_project_for_native_function_table(
-    proj_profile_obj: "project_profile.MergedProjectProfile",
-) -> dict:
+    proj_profile_obj: "project_profile.MergedProjectProfile", ) -> dict:
     """Build a slim payload for function-table ordering-only requests."""
     functions = []
     for fname, fp in proj_profile_obj.all_functions.items():
-        functions.append(
-            {
-                "name": fname,
-                "total_cyclomatic_complexity": fp.total_cyclomatic_complexity,
-            }
-        )
+        functions.append({
+            "name":
+            fname,
+            "total_cyclomatic_complexity":
+            fp.total_cyclomatic_complexity,
+        })
 
     return {
         "function_count": len(proj_profile_obj.all_functions),
@@ -184,12 +187,15 @@ class NativePluginProxy:
     )
 
     def __init__(self) -> None:
-        self._serialized_payload_cache: dict[tuple[str, int, int], bytes] = {}
-        self._result_cache_by_plugin_set: dict[
-            tuple[int, int, tuple[str, ...]], dict[str, dict[str, Any]]
-        ] = {}
-        self._result_cache_by_plugin: dict[tuple[int, int, str], dict[str, Any]] = {}
-        self._prefetch_done_for_project: set[tuple[int, int]] = set()
+        self._serialized_payload_cache: dict[tuple[str, int, tuple[int, ...]],
+                                             bytes] = {}
+        self._result_cache_by_plugin_set: dict[tuple[int, tuple[int, ...],
+                                                     tuple[str, ...]],
+                                               dict[str, dict[str, Any]]] = {}
+        self._result_cache_by_plugin: dict[tuple[int, tuple[int, ...], str],
+                                           dict[str, Any]] = {}
+        self._prefetch_done_for_project: set[tuple[int, tuple[int,
+                                                              ...]]] = set()
 
     @staticmethod
     def is_enabled() -> bool:
@@ -203,7 +209,8 @@ class NativePluginProxy:
            when set to 'rust'.
         """
         # Per-component var takes precedence: explicit opt-in or opt-out.
-        fi_plugins_raw = os.environ.get(FI_NATIVE_PLUGINS_ENV, "").strip().lower()
+        fi_plugins_raw = os.environ.get(FI_NATIVE_PLUGINS_ENV,
+                                        "").strip().lower()
         if fi_plugins_raw:
             return fi_plugins_raw == _NATIVE_PLUGINS_RUST_VALUE
 
@@ -220,8 +227,10 @@ class NativePluginProxy:
         self,
         proj_profile_obj: "project_profile.MergedProjectProfile",
         profiles_list: "List[fuzzer_profile.FuzzerProfile]",
-    ) -> tuple[int, int]:
-        return (id(proj_profile_obj), id(profiles_list))
+    ) -> tuple[int, tuple[int, ...]]:
+        # Use tuple of profile ids for content-based caching, not list object id
+        profiles_key = tuple(id(p) for p in profiles_list)
+        return (id(proj_profile_obj), profiles_key)
 
     def _build_payload_bytes(
         self,
@@ -229,7 +238,7 @@ class NativePluginProxy:
         profiles_list: "List[fuzzer_profile.FuzzerProfile]",
         plugin_names: tuple[str, ...],
     ) -> bytes:
-        use_function_table_slim_payload = plugin_names == ("function_table",)
+        use_function_table_slim_payload = plugin_names == ("function_table", )
         project_key = self._project_cache_key(proj_profile_obj, profiles_list)
         payload_key = (
             "function_table" if use_function_table_slim_payload else "full",
@@ -240,26 +249,22 @@ class NativePluginProxy:
         if project_data_bytes is None:
             if use_function_table_slim_payload:
                 project_data = _serialize_project_for_native_function_table(
-                    proj_profile_obj
-                )
+                    proj_profile_obj)
             else:
                 project_data = _serialize_project_for_native(
-                    proj_profile_obj, profiles_list
-                )
+                    proj_profile_obj, profiles_list)
             project_data_bytes = json.dumps(project_data).encode()
             self._serialized_payload_cache[payload_key] = project_data_bytes
 
-        payload = b"".join(
-            [
-                b'{"schema_version":',
-                str(self.SCHEMA_VERSION).encode(),
-                b',"plugins":',
-                json.dumps(list(plugin_names)).encode(),
-                b',"project_data":',
-                project_data_bytes,
-                b"}",
-            ]
-        )
+        payload = b"".join([
+            b'{"schema_version":',
+            str(self.SCHEMA_VERSION).encode(),
+            b',"plugins":',
+            json.dumps(list(plugin_names)).encode(),
+            b',"project_data":',
+            project_data_bytes,
+            b"}",
+        ])
         return payload
 
     def _dispatch_to_native(
@@ -269,9 +274,8 @@ class NativePluginProxy:
         profiles_list: "List[fuzzer_profile.FuzzerProfile]",
         plugin_names: tuple[str, ...],
     ) -> dict[str, dict[str, Any]]:
-        payload = self._build_payload_bytes(
-            proj_profile_obj, profiles_list, plugin_names
-        )
+        payload = self._build_payload_bytes(proj_profile_obj, profiles_list,
+                                            plugin_names)
 
         try:
             proc = subprocess.run(
@@ -330,7 +334,8 @@ class NativePluginProxy:
 
         results: dict[str, dict[str, Any]] = {}
         for plugin_name, plugin_result in raw_results.items():
-            if isinstance(plugin_name, str) and isinstance(plugin_result, dict):
+            if isinstance(plugin_name, str) and isinstance(
+                    plugin_result, dict):
                 results[plugin_name] = plugin_result
         return results
 
@@ -342,13 +347,11 @@ class NativePluginProxy:
         results: dict[str, dict[str, Any]],
     ) -> None:
         project_key = self._project_cache_key(proj_profile_obj, profiles_list)
-        self._result_cache_by_plugin_set[
-            (project_key[0], project_key[1], plugin_names)
-        ] = results
+        self._result_cache_by_plugin_set[(project_key[0], project_key[1],
+                                          plugin_names)] = results
         for plugin_name, plugin_result in results.items():
-            self._result_cache_by_plugin[
-                (project_key[0], project_key[1], plugin_name)
-            ] = plugin_result
+            self._result_cache_by_plugin[(project_key[0], project_key[1],
+                                          plugin_name)] = plugin_result
 
     def _get_cached_plugin_results(
         self,
@@ -358,16 +361,14 @@ class NativePluginProxy:
     ) -> Optional[dict[str, dict[str, Any]]]:
         project_key = self._project_cache_key(proj_profile_obj, profiles_list)
         by_set = self._result_cache_by_plugin_set.get(
-            (project_key[0], project_key[1], plugin_names)
-        )
+            (project_key[0], project_key[1], plugin_names))
         if by_set is not None:
             return by_set
 
         collected: dict[str, dict[str, Any]] = {}
         for plugin_name in plugin_names:
             plugin_result = self._result_cache_by_plugin.get(
-                (project_key[0], project_key[1], plugin_name)
-            )
+                (project_key[0], project_key[1], plugin_name))
             if plugin_result is None:
                 return None
             collected[plugin_name] = plugin_result
@@ -384,7 +385,8 @@ class NativePluginProxy:
         if project_key in self._prefetch_done_for_project:
             return
 
-        requires_full_payload = any(name != "function_table" for name in plugin_names)
+        requires_full_payload = any(name != "function_table"
+                                    for name in plugin_names)
         if not requires_full_payload:
             return
 
@@ -419,8 +421,7 @@ class NativePluginProxy:
 
         normalized_plugin_names = tuple(plugin_names)
         cached_results = self._get_cached_plugin_results(
-            proj_profile_obj, profiles_list, normalized_plugin_names
-        )
+            proj_profile_obj, profiles_list, normalized_plugin_names)
         if cached_results is not None:
             return cached_results
 
@@ -433,13 +434,12 @@ class NativePluginProxy:
             )
             return {}
 
-        self._maybe_prefetch_full_payload_plugins(
-            native_bin, proj_profile_obj, profiles_list, normalized_plugin_names
-        )
+        self._maybe_prefetch_full_payload_plugins(native_bin, proj_profile_obj,
+                                                  profiles_list,
+                                                  normalized_plugin_names)
 
         cached_results = self._get_cached_plugin_results(
-            proj_profile_obj, profiles_list, normalized_plugin_names
-        )
+            proj_profile_obj, profiles_list, normalized_plugin_names)
         if cached_results is not None:
             return cached_results
 
@@ -460,8 +460,7 @@ class NativePluginProxy:
         )
 
         cached_results = self._get_cached_plugin_results(
-            proj_profile_obj, profiles_list, normalized_plugin_names
-        )
+            proj_profile_obj, profiles_list, normalized_plugin_names)
         if cached_results is not None:
             return cached_results
 
@@ -479,7 +478,8 @@ def get_native_plugin_proxy() -> NativePluginProxy:
     return _NATIVE_PLUGIN_PROXY
 
 
-_SOURCES_SCAN_CACHE: dict[tuple[str, tuple[str, ...], str, str], frozenset[str]] = {}
+_SOURCES_SCAN_CACHE: dict[tuple[str, tuple[str, ...], str, str],
+                          frozenset[str]] = {}
 _OVERLAY_AUTHORITATIVE_LANGS = {"c-cpp"}
 
 
@@ -523,14 +523,11 @@ def _resolve_profile_worker_count() -> tuple[int, bool]:
 
         return min(worker_count, cpu_count), False
 
-    reachability_backend = (
-        os.environ.get(FI_REACHABILITY_BACKEND_ENV, "").strip().lower()
-    )
+    reachability_backend = (os.environ.get(FI_REACHABILITY_BACKEND_ENV,
+                                           "").strip().lower())
     global_backend = backend_loaders.parse_native_backends_env()
-    if (
-        reachability_backend == FI_REACHABILITY_BACKEND_RUST
-        or global_backend == backend_loaders.BACKEND_RUST
-    ):
+    if (reachability_backend == FI_REACHABILITY_BACKEND_RUST
+            or global_backend == backend_loaders.BACKEND_RUST):
         return min(FI_PROFILE_WORKERS_RUST_DEFAULT, cpu_count), True
 
     if FI_PROFILE_WORKERS_DEFAULT_CAP > 0:
@@ -546,7 +543,8 @@ def _parse_bool_env(env_name: str, default: bool) -> bool:
         return True
     if raw_value in _BOOL_FALSE_VALUES:
         return False
-    logger.warning("Invalid %s=%r; defaulting to %s", env_name, raw_value, default)
+    logger.warning("Invalid %s=%r; defaulting to %s", env_name, raw_value,
+                   default)
     return default
 
 
@@ -625,16 +623,15 @@ def _get_stage_rss_mb() -> float | None:
 
 def _get_debug_stage_tuning_hint(stage_name: str) -> str:
     stage_hints = {
-        "debug_report": "FI_DEBUG_REPORT_PARALLEL and FI_DEBUG_REPORT_WORKERS",
-        "debug_types_yaml": (
-            "FI_DEBUG_MAX_WORKERS, FI_DEBUG_SHARD_FILES, "
-            "FI_DEBUG_SPILL_MB, and FI_DEBUG_MAX_INMEM_MB"
-        ),
-        "debug_functions_yaml": (
-            "FI_DEBUG_MAX_WORKERS, FI_DEBUG_SHARD_FILES, "
-            "FI_DEBUG_SPILL_MB, and FI_DEBUG_MAX_INMEM_MB"
-        ),
-        "type_correlation": "FI_DEBUG_CORRELATE_PARALLEL and FI_DEBUG_CORRELATE_WORKERS",
+        "debug_report":
+        "FI_DEBUG_REPORT_PARALLEL and FI_DEBUG_REPORT_WORKERS",
+        "debug_types_yaml": ("FI_DEBUG_MAX_WORKERS, FI_DEBUG_SHARD_FILES, "
+                             "FI_DEBUG_SPILL_MB, and FI_DEBUG_MAX_INMEM_MB"),
+        "debug_functions_yaml":
+        ("FI_DEBUG_MAX_WORKERS, FI_DEBUG_SHARD_FILES, "
+         "FI_DEBUG_SPILL_MB, and FI_DEBUG_MAX_INMEM_MB"),
+        "type_correlation":
+        "FI_DEBUG_CORRELATE_PARALLEL and FI_DEBUG_CORRELATE_WORKERS",
     }
     return stage_hints.get(stage_name, "debug loader worker and shard knobs")
 
@@ -648,7 +645,9 @@ def _log_debug_load_stage(
     warn_after_seconds: int,
     warn_rss_mb: int,
 ) -> None:
-    stage_fields: list[str] = [f"stage={stage_name}", f"elapsed={elapsed_seconds:.3f}s"]
+    stage_fields: list[str] = [
+        f"stage={stage_name}", f"elapsed={elapsed_seconds:.3f}s"
+    ]
     for metric_name, metric_value in metrics.items():
         stage_fields.append(f"{metric_name}={metric_value}")
 
@@ -665,33 +664,22 @@ def _log_debug_load_stage(
 
     logger.info("[debug-load] %s", " ".join(stage_fields))
 
-    if (
-        perf_warn_enabled
-        and warn_after_seconds > 0
-        and elapsed_seconds > warn_after_seconds
-    ):
+    if (perf_warn_enabled and warn_after_seconds > 0
+            and elapsed_seconds > warn_after_seconds):
         logger.warning(
-            (
-                "[debug-load] stage=%s exceeded threshold=%ds with elapsed=%.3fs. "
-                "Tune %s."
-            ),
+            ("[debug-load] stage=%s exceeded threshold=%ds with elapsed=%.3fs. "
+             "Tune %s."),
             stage_name,
             warn_after_seconds,
             elapsed_seconds,
             _get_debug_stage_tuning_hint(stage_name),
         )
 
-    if (
-        perf_warn_enabled
-        and warn_rss_mb > 0
-        and stage_rss_mb is not None
-        and stage_rss_mb > warn_rss_mb
-    ):
+    if (perf_warn_enabled and warn_rss_mb > 0 and stage_rss_mb is not None
+            and stage_rss_mb > warn_rss_mb):
         logger.warning(
-            (
-                "[debug-load] stage=%s exceeded rss threshold=%dMB with rss=%.2fMB. "
-                "Tune %s."
-            ),
+            ("[debug-load] stage=%s exceeded rss threshold=%dMB with rss=%.2fMB. "
+             "Tune %s."),
             stage_name,
             warn_rss_mb,
             stage_rss_mb,
@@ -707,9 +695,11 @@ def _accummulate_single_profile(
 ) -> tuple[int, Dict[str, Any]]:
     """Worker entrypoint for profile accumulation."""
     profile = fuzzer_profile.FuzzerProfile.from_worker_payload(profile_payload)
-    profile.accummulate_profile(
-        base_folder, None, None, None, skip_propagation=skip_propagation
-    )
+    profile.accummulate_profile(base_folder,
+                                None,
+                                None,
+                                None,
+                                skip_propagation=skip_propagation)
     return profile_index, profile.to_worker_payload()
 
 
@@ -723,7 +713,8 @@ def _accummulate_profiles(
     worker_count = 1
     rust_default_applied = False
     if parallelise and len(profiles) > 1:
-        configured_workers, rust_default_applied = _resolve_profile_worker_count()
+        configured_workers, rust_default_applied = _resolve_profile_worker_count(
+        )
         worker_count = min(configured_workers, len(profiles))
 
     logger.info(
@@ -737,34 +728,38 @@ def _accummulate_profiles(
     # In true multi-worker mode, avoid a parent-side transitive-closure pre-pass
     # to prevent serializing inflated profile payloads over process IPC.
     if (not parallelise) or worker_count <= 1:
-        native_done = fuzzer_profile.propagate_reachability_native_batch(profiles)
+        native_done = fuzzer_profile.propagate_reachability_native_batch(
+            profiles)
 
     if not parallelise or len(profiles) <= 1:
         logger.info("Accummulating profiles serially")
         for profile in profiles:
-            profile.accummulate_profile(
-                base_folder, None, None, None, skip_propagation=native_done
-            )
+            profile.accummulate_profile(base_folder,
+                                        None,
+                                        None,
+                                        None,
+                                        skip_propagation=native_done)
         return profiles
 
     if worker_count <= 1:
         logger.info("Accummulating profiles serially")
         for profile in profiles:
-            profile.accummulate_profile(
-                base_folder, None, None, None, skip_propagation=native_done
-            )
+            profile.accummulate_profile(base_folder,
+                                        None,
+                                        None,
+                                        None,
+                                        skip_propagation=native_done)
         return profiles
 
     logger.info(
-        "Accummulating profiles using ProcessPoolExecutor (%d workers)", worker_count
-    )
+        "Accummulating profiles using ProcessPoolExecutor (%d workers)",
+        worker_count)
     indexed_profiles: List[Optional[fuzzer_profile.FuzzerProfile]] = [
         None for _ in profiles
     ]
     try:
         with concurrent.futures.ProcessPoolExecutor(
-            max_workers=worker_count
-        ) as executor:
+                max_workers=worker_count) as executor:
             submitted_futures = {}
             for idx, profile in enumerate(profiles):
                 future = executor.submit(
@@ -782,23 +777,22 @@ def _accummulate_profiles(
                     profile_idx, updated_profile_payload = future.result()
                 except Exception as err:
                     raise DataLoaderError(
-                        "Failed accumulating profile %s at index %d: %s"
-                        % (profile_key, expected_idx, err)
-                    ) from err
+                        "Failed accumulating profile %s at index %d: %s" %
+                        (profile_key, expected_idx, err)) from err
                 indexed_profiles[profile_idx] = (
                     fuzzer_profile.FuzzerProfile.from_worker_payload(
-                        updated_profile_payload
-                    )
-                )
+                        updated_profile_payload))
     except (OSError, RuntimeError) as err:
         logger.warning(
             "Falling back to serial profile accumulation after executor setup failure: %s",
             err,
         )
         for profile in profiles:
-            profile.accummulate_profile(
-                base_folder, None, None, None, skip_propagation=native_done
-            )
+            profile.accummulate_profile(base_folder,
+                                        None,
+                                        None,
+                                        None,
+                                        skip_propagation=native_done)
         return profiles
 
     for idx, indexed_profile in enumerate(indexed_profiles):
@@ -843,9 +837,8 @@ class IntrospectionProject:
         before any real use of `IntrospectionProject` can happen.
         """
         self.exclude_patterns = exclude_patterns if exclude_patterns else []
-        self.exclude_function_patterns = (
-            exclude_function_patterns if exclude_function_patterns else []
-        )
+        self.exclude_function_patterns = (exclude_function_patterns
+                                          if exclude_function_patterns else [])
 
         if harness_lists:
             logger.info("Loading profiles using harness list")
@@ -858,14 +851,13 @@ class IntrospectionProject:
                         self.language,
                         cfg_content=calltree_text,
                         exclude_patterns=self.exclude_patterns,
-                        exclude_function_patterns=self.exclude_function_patterns,
-                    )
-                )
+                        exclude_function_patterns=self.
+                        exclude_function_patterns,
+                    ))
         else:
             logger.info("Loading profiles using files")
             self.profiles = data_loader.load_all_profiles(
-                self.base_folder, self.language, parallelise
-            )
+                self.base_folder, self.language, parallelise)
 
         # Apply exclude patterns to filter out entire profiles and their functions.
         # Always propagate the (possibly empty) pattern lists so every profile
@@ -888,7 +880,8 @@ class IntrospectionProject:
             filtered_profiles = []
             for profile in self.profiles:
                 # Drop the entire profile if the fuzzer itself matches an exclude pattern.
-                if profile._matches_exclude_pattern(profile.fuzzer_source_file):
+                if profile._matches_exclude_pattern(
+                        profile.fuzzer_source_file):
                     logger.info(
                         "Skipping profile for excluded fuzzer source: %s",
                         profile.fuzzer_source_file,
@@ -896,11 +889,9 @@ class IntrospectionProject:
                     continue
 
                 profile.all_class_functions = _filter_func_dict(
-                    profile, profile.all_class_functions
-                )
+                    profile, profile.all_class_functions)
                 profile.all_class_constructors = _filter_func_dict(
-                    profile, profile.all_class_constructors
-                )
+                    profile, profile.all_class_constructors)
                 filtered_profiles.append(profile)
 
             self.profiles = filtered_profiles
@@ -917,14 +908,12 @@ class IntrospectionProject:
                 profile.correlate_executable_name(correlation_dict)
 
         logger.info("[+] Accummulating profiles")
-        self.profiles = _accummulate_profiles(
-            self.profiles, self.base_folder, parallelise
-        )
+        self.profiles = _accummulate_profiles(self.profiles, self.base_folder,
+                                              parallelise)
 
         logger.info("[+] Creating project profile")
         self.proj_profile = project_profile.MergedProjectProfile(
-            self.profiles, self.language
-        )
+            self.profiles, self.language)
         self.proj_profile.coverage_url = self.coverage_url
 
         logger.info("[+] Refining profiles")
@@ -932,19 +921,17 @@ class IntrospectionProject:
             profile.refine_paths(self.proj_profile.basefolder)
 
         for profile in self.profiles:
-            overlay_calltree_with_coverage(
-                profile, self.proj_profile, self.coverage_url, self.base_folder, out_dir
-            )
+            overlay_calltree_with_coverage(profile, self.proj_profile,
+                                           self.coverage_url, self.base_folder,
+                                           out_dir)
         # Load all debug files
         self.debug_files = data_loader.load_all_debug_files(self.base_folder)
 
         # Find all relevant debug information yaml files.
         self.debug_type_files = data_loader.find_all_debug_all_types_files(
-            self.base_folder
-        )
+            self.base_folder)
         self.debug_function_files = data_loader.find_all_debug_function_files(
-            self.base_folder
-        )
+            self.base_folder)
 
     def load_debug_report(self, out_dir, dump_files=True):
         """Load and digest debug information."""
@@ -987,8 +974,7 @@ class IntrospectionProject:
             )
         else:
             self.debug_all_types = debug_info.load_debug_all_yaml_files(
-                self.debug_type_files
-            )
+                self.debug_type_files)
             _log_debug_load_stage(
                 "debug_types_yaml",
                 time.perf_counter() - type_load_started,
@@ -1010,8 +996,7 @@ class IntrospectionProject:
             files=len(self.debug_function_files),
         )
         self.debug_all_functions = debug_info.load_debug_all_yaml_files(
-            self.debug_function_files
-        )
+            self.debug_function_files)
         stage_markers.emit(
             out_dir,
             "debug_functions_yaml",
@@ -1052,8 +1037,7 @@ class IntrospectionProject:
                 debug_type["name"] = "bool"
 
         self.debug_all_functions = no_path_debug_funcs + list(
-            tmp_debug_functions.values()
-        )
+            tmp_debug_functions.values())
         _log_debug_load_stage(
             "dedupe_rewrite",
             time.perf_counter() - dedupe_rewrite_started,
@@ -1077,9 +1061,8 @@ class IntrospectionProject:
             self.debug_all_functions,
             out_dir,
             dump_files=dump_files,
-            all_debug_types_files=(
-                self.debug_type_files if _native_correlator_active else None
-            ),
+            all_debug_types_files=(self.debug_type_files
+                                   if _native_correlator_active else None),
         )
         stage_markers.emit(out_dir, "type_correlation", "end")
         _log_debug_load_stage(
@@ -1107,7 +1090,8 @@ class AnalysisInterface(abc.ABC):
     json_string_result: str = ""
     display_html: bool = False
 
-    def set_additional_properties(self, properties: dict[str, Union[str, int]]):
+    def set_additional_properties(self, properties: dict[str, Union[str,
+                                                                    int]]):
         """Allow setting additional properties for this analysis."""
         self.properties = properties
 
@@ -1201,6 +1185,7 @@ def instantiate_analysis_interface(cls: Type[AnalysisInterface]):
 
 
 class FuzzBranchBlocker:
+
     def __init__(
         self,
         side,
@@ -1242,17 +1227,18 @@ def get_all_standalone_analyses() -> List[Type[AnalysisInterface]]:
     return analyses.standalone_analyses
 
 
-def callstack_get_parent(n: cfg_load.CalltreeCallsite, c: Dict[int, str]) -> str:
+def callstack_get_parent(n: cfg_load.CalltreeCallsite, c: Dict[int,
+                                                               str]) -> str:
     return c[int(n.depth) - 1]
 
 
-def callstack_has_parent(n: cfg_load.CalltreeCallsite, c: Dict[int, str]) -> bool:
+def callstack_has_parent(n: cfg_load.CalltreeCallsite, c: Dict[int,
+                                                               str]) -> bool:
     return int(n.depth) - 1 in c
 
 
-def callstack_set_curr_node(
-    n: cfg_load.CalltreeCallsite, name: str, c: Dict[int, str]
-) -> None:
+def callstack_set_curr_node(n: cfg_load.CalltreeCallsite, name: str,
+                            c: Dict[int, str]) -> None:
     c[int(n.depth)] = name
 
 
@@ -1292,10 +1278,8 @@ def get_node_coverage_hitcount(
     elif callstack_has_parent(node, callstack):
         # Find the parent function and check coverage of the node
         logger.debug("Extracting data")
-        logger.debug(
-            f"Getting hit details {node.dst_function_name} -- "
-            f"{node.cov_ct_idx} -- {node.src_linenumber}"
-        )
+        logger.debug(f"Getting hit details {node.dst_function_name} -- "
+                     f"{node.cov_ct_idx} -- {node.src_linenumber}")
 
         if profile.target_lang == "c-cpp":
             if profile.coverage.get_type() == "kernel":
@@ -1303,29 +1287,30 @@ def get_node_coverage_hitcount(
                 return profile.coverage.get_kernel_hitcount(node)
             else:
                 coverage_data = profile.coverage.get_hit_details(
-                    callstack_get_parent(node, callstack)
-                )
+                    callstack_get_parent(node, callstack))
                 for n_line_number, hit_count_cov in coverage_data:
-                    logger.debug("  - iterating %d : %d", n_line_number, hit_count_cov)
+                    logger.debug("  - iterating %d : %d", n_line_number,
+                                 hit_count_cov)
                     if n_line_number == node.src_linenumber and hit_count_cov > 0:
                         node_hitcount = hit_count_cov
         elif profile.target_lang == "python":
             ih = profile.coverage.is_file_lineno_hit(
-                callstack_get_parent(node, callstack), node.src_linenumber, True
-            )
+                callstack_get_parent(node, callstack), node.src_linenumber,
+                True)
             if ih:
                 node_hitcount = 200
         elif profile.target_lang in ("jvm", "rust", "go"):
             coverage_data = profile.coverage.get_hit_details(
-                callstack_get_parent(node, callstack)
-            )
+                callstack_get_parent(node, callstack))
             for n_line_number, hit_count_cov in coverage_data:
-                logger.debug("  - iterating %d : %d", n_line_number, hit_count_cov)
+                logger.debug("  - iterating %d : %d", n_line_number,
+                             hit_count_cov)
                 if n_line_number == node.src_linenumber and hit_count_cov > 0:
                     node_hitcount = hit_count_cov
         node.cov_parent = callstack_get_parent(node, callstack)
     else:
-        logger.error("A node should either be the first or it must have a parent")
+        logger.error(
+            "A node should either be the first or it must have a parent")
         return 0
 
     return node_hitcount
@@ -1345,7 +1330,8 @@ def get_url_to_cov_report(profile, node, target_coverage_url):
         node.dst_function_name,
         utils.demangle_cpp_func(node.dst_function_name),
         utils.demangle_rust_func(node.dst_function_name),
-        utils.demangle_jvm_func(node.dst_function_source_file, node.dst_function_name),
+        utils.demangle_jvm_func(node.dst_function_source_file,
+                                node.dst_function_name),
     ]
     for dst in dst_options:
         try:
@@ -1411,27 +1397,33 @@ def get_parent_callsite_link(node, callstack, profile, target_coverage_url):
 
 
 def _serialize_branch_blockers(
-    blockers: List[FuzzBranchBlocker],
-) -> List[Dict[str, Any]]:
+    blockers: List[FuzzBranchBlocker], ) -> List[Dict[str, Any]]:
     serialized: List[Dict[str, Any]] = []
     for blocker in blockers:
-        serialized.append(
-            {
-                "blocked_side": repr(blocker.blocked_side),
-                "blocked_unique_not_covered_complexity": (
-                    blocker.blocked_unique_not_covered_complexity
-                ),
-                "blocked_unique_reachable_complexity": blocker.blocked_unique_reachable_complexity,
-                "blocked_unique_functions": blocker.blocked_unique_funcs,
-                "blocked_not_covered_complexity": blocker.blocked_not_covered_complexity,
-                "blocked_reachable_complexity": blocker.blocked_reachable_complexity,
-                "sides_hitcount_diff": blocker.sides_hitcount_diff,
-                "source_file": blocker.source_file,
-                "branch_line_number": blocker.branch_line_number,
-                "blocked_side_line_numder": blocker.blocked_side_line_numder,
-                "function_name": blocker.function_name,
-            }
-        )
+        serialized.append({
+            "blocked_side":
+            repr(blocker.blocked_side),
+            "blocked_unique_not_covered_complexity":
+            (blocker.blocked_unique_not_covered_complexity),
+            "blocked_unique_reachable_complexity":
+            blocker.blocked_unique_reachable_complexity,
+            "blocked_unique_functions":
+            blocker.blocked_unique_funcs,
+            "blocked_not_covered_complexity":
+            blocker.blocked_not_covered_complexity,
+            "blocked_reachable_complexity":
+            blocker.blocked_reachable_complexity,
+            "sides_hitcount_diff":
+            blocker.sides_hitcount_diff,
+            "source_file":
+            blocker.source_file,
+            "branch_line_number":
+            blocker.branch_line_number,
+            "blocked_side_line_numder":
+            blocker.blocked_side_line_numder,
+            "function_name":
+            blocker.function_name,
+        })
     return serialized
 
 
@@ -1448,36 +1440,41 @@ def _build_overlay_native_payload(
         profile.target_lang,
     )
     if profile.fuzzer_callsite_calltree is not None:
-        all_callsites = cfg_load.extract_all_callsites(profile.fuzzer_callsite_calltree)
+        all_callsites = cfg_load.extract_all_callsites(
+            profile.fuzzer_callsite_calltree)
         callstack: Dict[int, str] = {}
         for ct_idx, node in enumerate(all_callsites):
             if profile.target_lang == "jvm":
                 demangled_name = utils.demangle_jvm_func(
-                    node.dst_function_source_file, node.dst_function_name
-                )
+                    node.dst_function_source_file, node.dst_function_name)
             elif profile.target_lang == "rust":
-                demangled_name = utils.demangle_rust_func(node.dst_function_name)
+                demangled_name = utils.demangle_rust_func(
+                    node.dst_function_name)
             else:
-                demangled_name = utils.demangle_cpp_func(node.dst_function_name)
+                demangled_name = utils.demangle_cpp_func(
+                    node.dst_function_name)
             callstack_set_curr_node(node, demangled_name, callstack)
-            callsites.append(
-                {
-                    "cov_ct_idx": ct_idx,
-                    "depth": int(node.depth),
-                    "dst_function_name": node.dst_function_name,
-                    "dst_function_source_file": node.dst_function_source_file,
-                    "src_linenumber": node.src_linenumber,
-                    "cov_link": get_url_to_cov_report(
-                        profile, node, target_coverage_url
-                    ),
-                    "cov_callsite_link": get_parent_callsite_link(
-                        node,
-                        callstack,
-                        profile,
-                        target_coverage_url,
-                    ),
-                }
-            )
+            callsites.append({
+                "cov_ct_idx":
+                ct_idx,
+                "depth":
+                int(node.depth),
+                "dst_function_name":
+                node.dst_function_name,
+                "dst_function_source_file":
+                node.dst_function_source_file,
+                "src_linenumber":
+                node.src_linenumber,
+                "cov_link":
+                get_url_to_cov_report(profile, node, target_coverage_url),
+                "cov_callsite_link":
+                get_parent_callsite_link(
+                    node,
+                    callstack,
+                    profile,
+                    target_coverage_url,
+                ),
+            })
 
     coverage_payload: Dict[str, Any] = {
         "type": "",
@@ -1487,16 +1484,21 @@ def _build_overlay_native_payload(
     }
     if profile.coverage is not None:
         coverage_payload = {
-            "type": profile.coverage.get_type(),
+            "type":
+            profile.coverage.get_type(),
             "covmap": {
-                func_name: [[line_no, hit_count] for line_no, hit_count in hits]
+                func_name: [[line_no, hit_count]
+                            for line_no, hit_count in hits]
                 for func_name, hits in sorted(profile.coverage.covmap.items())
             },
             "file_map": {
-                file_name: [[line_no, hit_count] for line_no, hit_count in hits]
-                for file_name, hits in sorted(profile.coverage.file_map.items())
+                file_name: [[line_no, hit_count]
+                            for line_no, hit_count in hits]
+                for file_name, hits in sorted(
+                    profile.coverage.file_map.items())
             },
-            "branch_cov_map": dict(sorted(profile.coverage.branch_cov_map.items())),
+            "branch_cov_map":
+            dict(sorted(profile.coverage.branch_cov_map.items())),
         }
 
     function_complexities: Dict[str, Any] = {}
@@ -1506,14 +1508,15 @@ def _build_overlay_native_payload(
         for branch_name in sorted(function_data.branch_profiles):
             branch = function_data.branch_profiles[branch_name]
             branch_profiles[branch_name] = {
-                "sides": [
-                    {"pos": side.pos, "funcs": list(side.funcs)}
-                    for side in branch.sides
-                ]
+                "sides": [{
+                    "pos": side.pos,
+                    "funcs": list(side.funcs)
+                } for side in branch.sides]
             }
         function_complexities[function_name] = {
             "function_source_file": function_data.function_source_file,
-            "total_cyclomatic_complexity": function_data.total_cyclomatic_complexity,
+            "total_cyclomatic_complexity":
+            function_data.total_cyclomatic_complexity,
             "branch_profiles": branch_profiles,
         }
 
@@ -1528,9 +1531,8 @@ def _build_overlay_native_payload(
     }
 
 
-def _resolve_overlay_artifact_path(
-    artifacts: Dict[str, Any], key: str, out_dir: str
-) -> Path:
+def _resolve_overlay_artifact_path(artifacts: Dict[str, Any], key: str,
+                                   out_dir: str) -> Path:
     artifact_path = artifacts.get(key)
     if not isinstance(artifact_path, str) or not artifact_path.strip():
         raise ValueError(f"Missing overlay artifact path for {key}")
@@ -1551,94 +1553,94 @@ def _resolve_overlay_artifact_path(
     return resolved_path
 
 
-def _load_overlay_artifact_json(
-    artifacts: Dict[str, Any], key: str, out_dir: str
-) -> Any:
+def _load_overlay_artifact_json(artifacts: Dict[str, Any], key: str,
+                                out_dir: str) -> Any:
     artifact_path = _resolve_overlay_artifact_path(artifacts, key, out_dir)
     with open(artifact_path, "r", encoding="utf-8") as artifact_fd:
         return json.load(artifact_fd)
 
 
-def _normalize_overlay_nodes(nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _normalize_overlay_nodes(
+        nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     normalized = []
     for node in nodes:
-        normalized.append(
-            {
-                "cov_ct_idx": int(node.get("cov_ct_idx", -1)),
-                "cov_hitcount": int(node.get("cov_hitcount", -1)),
-                "cov_color": str(node.get("cov_color", "")),
-                "cov_link": str(node.get("cov_link", "")),
-                "cov_callsite_link": str(node.get("cov_callsite_link", "")),
-                "cov_forward_reds": int(node.get("cov_forward_reds", -1)),
-                "cov_largest_blocked_func": str(
-                    node.get("cov_largest_blocked_func", "")
-                ),
-            }
-        )
+        normalized.append({
+            "cov_ct_idx":
+            int(node.get("cov_ct_idx", -1)),
+            "cov_hitcount":
+            int(node.get("cov_hitcount", -1)),
+            "cov_color":
+            str(node.get("cov_color", "")),
+            "cov_link":
+            str(node.get("cov_link", "")),
+            "cov_callsite_link":
+            str(node.get("cov_callsite_link", "")),
+            "cov_forward_reds":
+            int(node.get("cov_forward_reds", -1)),
+            "cov_largest_blocked_func":
+            str(node.get("cov_largest_blocked_func", "")),
+        })
     return sorted(normalized, key=lambda node: node["cov_ct_idx"])
 
 
 def _normalize_branch_complexities(
-    branch_complexities: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    branch_complexities: List[Dict[str, Any]], ) -> List[Dict[str, Any]]:
     normalized: List[Dict[str, Any]] = []
     for entry in branch_complexities:
-        normalized.append(
-            {
-                "function_name": str(entry.get("function_name", "")),
-                "branch": str(entry.get("branch", "")),
-                "side_idx": int(entry.get("side_idx", -1)),
-                "reachable_complexity": int(entry.get("reachable_complexity", 0)),
-                "not_covered_complexity": int(entry.get("not_covered_complexity", 0)),
-                "unique_reachable_complexity": int(
-                    entry.get("unique_reachable_complexity", 0)
-                ),
-                "unique_not_covered_complexity": int(
-                    entry.get("unique_not_covered_complexity", 0)
-                ),
-            }
-        )
+        normalized.append({
+            "function_name":
+            str(entry.get("function_name", "")),
+            "branch":
+            str(entry.get("branch", "")),
+            "side_idx":
+            int(entry.get("side_idx", -1)),
+            "reachable_complexity":
+            int(entry.get("reachable_complexity", 0)),
+            "not_covered_complexity":
+            int(entry.get("not_covered_complexity", 0)),
+            "unique_reachable_complexity":
+            int(entry.get("unique_reachable_complexity", 0)),
+            "unique_not_covered_complexity":
+            int(entry.get("unique_not_covered_complexity", 0)),
+        })
     return sorted(
         normalized,
-        key=lambda entry: (entry["function_name"], entry["branch"], entry["side_idx"]),
+        key=lambda entry:
+        (entry["function_name"], entry["branch"], entry["side_idx"]),
     )
 
 
 def _normalize_branch_blockers(
-    blockers: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    blockers: List[Dict[str, Any]], ) -> List[Dict[str, Any]]:
     normalized = []
     for blocker in blockers:
-        normalized.append(
-            {
-                "blocked_side": str(blocker.get("blocked_side", "")),
-                "blocked_unique_not_covered_complexity": int(
-                    blocker.get("blocked_unique_not_covered_complexity", 0)
-                ),
-                "blocked_unique_reachable_complexity": int(
-                    blocker.get("blocked_unique_reachable_complexity", 0)
-                ),
-                "blocked_unique_functions": sorted(
-                    [
-                        str(func_name)
-                        for func_name in blocker.get("blocked_unique_functions", [])
-                    ]
-                ),
-                "blocked_not_covered_complexity": int(
-                    blocker.get("blocked_not_covered_complexity", 0)
-                ),
-                "blocked_reachable_complexity": int(
-                    blocker.get("blocked_reachable_complexity", 0)
-                ),
-                "sides_hitcount_diff": int(blocker.get("sides_hitcount_diff", 0)),
-                "source_file": str(blocker.get("source_file", "")),
-                "branch_line_number": str(blocker.get("branch_line_number", "")),
-                "blocked_side_line_numder": str(
-                    blocker.get("blocked_side_line_numder", "")
-                ),
-                "function_name": str(blocker.get("function_name", "")),
-            }
-        )
+        normalized.append({
+            "blocked_side":
+            str(blocker.get("blocked_side", "")),
+            "blocked_unique_not_covered_complexity":
+            int(blocker.get("blocked_unique_not_covered_complexity", 0)),
+            "blocked_unique_reachable_complexity":
+            int(blocker.get("blocked_unique_reachable_complexity", 0)),
+            "blocked_unique_functions":
+            sorted([
+                str(func_name)
+                for func_name in blocker.get("blocked_unique_functions", [])
+            ]),
+            "blocked_not_covered_complexity":
+            int(blocker.get("blocked_not_covered_complexity", 0)),
+            "blocked_reachable_complexity":
+            int(blocker.get("blocked_reachable_complexity", 0)),
+            "sides_hitcount_diff":
+            int(blocker.get("sides_hitcount_diff", 0)),
+            "source_file":
+            str(blocker.get("source_file", "")),
+            "branch_line_number":
+            str(blocker.get("branch_line_number", "")),
+            "blocked_side_line_numder":
+            str(blocker.get("blocked_side_line_numder", "")),
+            "function_name":
+            str(blocker.get("function_name", "")),
+        })
     return sorted(
         normalized,
         key=lambda entry: (
@@ -1657,21 +1659,27 @@ def _capture_python_overlay_outputs(
 ) -> Dict[str, Any]:
     all_callsites = []
     if profile.fuzzer_callsite_calltree is not None:
-        all_callsites = cfg_load.extract_all_callsites(profile.fuzzer_callsite_calltree)
+        all_callsites = cfg_load.extract_all_callsites(
+            profile.fuzzer_callsite_calltree)
 
     overlay_nodes = []
     for node in all_callsites:
-        overlay_nodes.append(
-            {
-                "cov_ct_idx": node.cov_ct_idx,
-                "cov_hitcount": node.cov_hitcount,
-                "cov_color": node.cov_color,
-                "cov_link": node.cov_link,
-                "cov_callsite_link": node.cov_callsite_link,
-                "cov_forward_reds": node.cov_forward_reds,
-                "cov_largest_blocked_func": node.cov_largest_blocked_func,
-            }
-        )
+        overlay_nodes.append({
+            "cov_ct_idx":
+            node.cov_ct_idx,
+            "cov_hitcount":
+            node.cov_hitcount,
+            "cov_color":
+            node.cov_color,
+            "cov_link":
+            node.cov_link,
+            "cov_callsite_link":
+            node.cov_callsite_link,
+            "cov_forward_reds":
+            node.cov_forward_reds,
+            "cov_largest_blocked_func":
+            node.cov_largest_blocked_func,
+        })
 
     branch_complexities = []
     for function_name in sorted(proj_profile.all_functions):
@@ -1679,24 +1687,31 @@ def _capture_python_overlay_outputs(
         for branch_name in sorted(function_data.branch_profiles):
             branch = function_data.branch_profiles[branch_name]
             for side_idx, side in enumerate(branch.sides):
-                branch_complexities.append(
-                    {
-                        "function_name": function_name,
-                        "branch": branch_name,
-                        "side_idx": side_idx,
-                        "reachable_complexity": side.reachable_complexity,
-                        "not_covered_complexity": side.not_covered_complexity,
-                        "unique_reachable_complexity": side.unique_reachable_complexity,
-                        "unique_not_covered_complexity": side.unique_not_covered_complexity,
-                    }
-                )
+                branch_complexities.append({
+                    "function_name":
+                    function_name,
+                    "branch":
+                    branch_name,
+                    "side_idx":
+                    side_idx,
+                    "reachable_complexity":
+                    side.reachable_complexity,
+                    "not_covered_complexity":
+                    side.not_covered_complexity,
+                    "unique_reachable_complexity":
+                    side.unique_reachable_complexity,
+                    "unique_not_covered_complexity":
+                    side.unique_not_covered_complexity,
+                })
 
     return {
-        "overlay_nodes": _normalize_overlay_nodes(overlay_nodes),
-        "branch_complexities": _normalize_branch_complexities(branch_complexities),
-        "branch_blockers": _normalize_branch_blockers(
-            _serialize_branch_blockers(profile.branch_blockers)
-        ),
+        "overlay_nodes":
+        _normalize_overlay_nodes(overlay_nodes),
+        "branch_complexities":
+        _normalize_branch_complexities(branch_complexities),
+        "branch_blockers":
+        _normalize_branch_blockers(
+            _serialize_branch_blockers(profile.branch_blockers)),
     }
 
 
@@ -1714,16 +1729,15 @@ def _compare_overlay_outputs(
     }
 
     for key in (
-        "overlay_nodes",
-        "branch_complexities",
-        "branch_blockers",
+            "overlay_nodes",
+            "branch_complexities",
+            "branch_blockers",
     ):
         native_items = native_outputs.get(key, [])
         python_items = python_outputs.get(key, [])
         if len(native_items) != len(python_items):
             mismatch_counts[f"{key}_count"] += abs(
-                len(native_items) - len(python_items)
-            )
+                len(native_items) - len(python_items))
             continue
         for native_item, python_item in zip(native_items, python_items):
             if native_item != python_item:
@@ -1740,11 +1754,9 @@ def _apply_native_branch_complexities(
         function_name = entry.get("function_name", "")
         branch_name = entry.get("branch", "")
         side_idx = entry.get("side_idx", -1)
-        if (
-            function_name not in all_functions
-            or branch_name not in all_functions[function_name].branch_profiles
-            or not isinstance(side_idx, int)
-        ):
+        if (function_name not in all_functions or branch_name
+                not in all_functions[function_name].branch_profiles
+                or not isinstance(side_idx, int)):
             continue
 
         branch = all_functions[function_name].branch_profiles[branch_name]
@@ -1753,13 +1765,12 @@ def _apply_native_branch_complexities(
 
         side = branch.sides[side_idx]
         side.reachable_complexity = int(entry.get("reachable_complexity", 0))
-        side.not_covered_complexity = int(entry.get("not_covered_complexity", 0))
+        side.not_covered_complexity = int(
+            entry.get("not_covered_complexity", 0))
         side.unique_reachable_complexity = int(
-            entry.get("unique_reachable_complexity", 0)
-        )
+            entry.get("unique_reachable_complexity", 0))
         side.unique_not_covered_complexity = int(
-            entry.get("unique_not_covered_complexity", 0)
-        )
+            entry.get("unique_not_covered_complexity", 0))
 
 
 def _apply_native_overlay_outputs(
@@ -1771,7 +1782,8 @@ def _apply_native_overlay_outputs(
 ) -> None:
     all_callsites = []
     if profile.fuzzer_callsite_calltree is not None:
-        all_callsites = cfg_load.extract_all_callsites(profile.fuzzer_callsite_calltree)
+        all_callsites = cfg_load.extract_all_callsites(
+            profile.fuzzer_callsite_calltree)
     for ct_idx, node in enumerate(all_callsites):
         node.cov_ct_idx = ct_idx
 
@@ -1784,18 +1796,17 @@ def _apply_native_overlay_outputs(
         node_update = updates_by_idx.get(node.cov_ct_idx)
         if node_update is None:
             continue
-        node.cov_hitcount = int(node_update.get("cov_hitcount", node.cov_hitcount))
+        node.cov_hitcount = int(
+            node_update.get("cov_hitcount", node.cov_hitcount))
         node.cov_color = str(node_update.get("cov_color", node.cov_color))
         node.cov_link = str(node_update.get("cov_link", node.cov_link))
         node.cov_callsite_link = str(
-            node_update.get("cov_callsite_link", node.cov_callsite_link)
-        )
+            node_update.get("cov_callsite_link", node.cov_callsite_link))
         node.cov_forward_reds = int(
-            node_update.get("cov_forward_reds", node.cov_forward_reds)
-        )
+            node_update.get("cov_forward_reds", node.cov_forward_reds))
         node.cov_largest_blocked_func = str(
-            node_update.get("cov_largest_blocked_func", node.cov_largest_blocked_func)
-        )
+            node_update.get("cov_largest_blocked_func",
+                            node.cov_largest_blocked_func))
 
     _apply_native_branch_complexities(
         proj_profile.all_functions,
@@ -1805,7 +1816,8 @@ def _apply_native_overlay_outputs(
     branch_blockers: List[FuzzBranchBlocker] = []
     for blocker in native_outputs.get("branch_blockers", []):
         try:
-            blocked_side = int(str(blocker.get("blocked_side", "0")).strip("'\""))
+            blocked_side = int(
+                str(blocker.get("blocked_side", "0")).strip("'\""))
         except ValueError:
             blocked_side = blocker.get("blocked_side", 0)
 
@@ -1840,8 +1852,7 @@ def _apply_native_overlay_outputs(
                 str(blocker.get("blocked_side_line_numder", "0")),
                 function_name,
                 coverage_link,
-            )
-        )
+            ))
 
     profile.branch_blockers = branch_blockers
     json_report.add_branch_blocker_key_value_to_report(
@@ -1865,26 +1876,22 @@ def overlay_calltree_with_coverage(
     if selected_backend == backend_loaders.BACKEND_GO and not shadow_mode:
         logger.warning(
             "FI_OVERLAY_BACKEND=go currently runs in probe/shadow-only mode; "
-            "forcing Python authoritative output"
-        )
+            "forcing Python authoritative output")
         shadow_mode = True
 
-    language_supports_authoritative = (
-        profile.target_lang in _OVERLAY_AUTHORITATIVE_LANGS
-    )
-    if (
-        selected_backend != backend_loaders.BACKEND_PYTHON
-        and not language_supports_authoritative
-    ):
+    language_supports_authoritative = (profile.target_lang
+                                       in _OVERLAY_AUTHORITATIVE_LANGS)
+    if (selected_backend != backend_loaders.BACKEND_PYTHON
+            and not language_supports_authoritative):
         if not shadow_mode:
             logger.warning(
                 "Native overlay authoritative mode is disabled for language %s; "
                 "using Python overlay path",
                 profile.target_lang,
             )
-            _overlay_calltree_with_coverage_python(
-                profile, proj_profile, coverage_url, basefolder, out_dir
-            )
+            _overlay_calltree_with_coverage_python(profile, proj_profile,
+                                                   coverage_url, basefolder,
+                                                   out_dir)
             return
         logger.warning(
             "Native overlay diagnostics running in shadow mode for unsupported "
@@ -1897,31 +1904,34 @@ def overlay_calltree_with_coverage(
             backend_loaders.resolve_overlay_backend_command_with_details(
                 selected_backend,
                 command_env_prefix="FI_OVERLAY",
-            )
-        )
+            ))
         if not command:
             if strict_mode:
                 logger.warning(
                     "%s: Native overlay binary not found; falling back to Python "
                     "(strict mode does not apply to binary absence) | details=%s",
                     backend_loaders.FI_OVERLAY_COMMAND_MISSING,
-                    json.dumps(missing_command_details, sort_keys=True, default=str),
+                    json.dumps(missing_command_details,
+                               sort_keys=True,
+                               default=str),
                 )
             else:
                 logger.warning(
                     "%s: No overlay command configured; falling back to Python | details=%s",
                     backend_loaders.FI_OVERLAY_COMMAND_MISSING,
-                    json.dumps(missing_command_details, sort_keys=True, default=str),
+                    json.dumps(missing_command_details,
+                               sort_keys=True,
+                               default=str),
                 )
-            _overlay_calltree_with_coverage_python(
-                profile, proj_profile, coverage_url, basefolder, out_dir
-            )
+            _overlay_calltree_with_coverage_python(profile, proj_profile,
+                                                   coverage_url, basefolder,
+                                                   out_dir)
             return
 
-        logger.info("[overlay] using %s backend (%s)", selected_backend, command[0])
+        logger.info("[overlay] using %s backend (%s)", selected_backend,
+                    command[0])
         request_payload = _build_overlay_native_payload(
-            profile, proj_profile, coverage_url, str(out_dir)
-        )
+            profile, proj_profile, coverage_url, str(out_dir))
         backend_result = backend_loaders.run_overlay_backend(
             payload=request_payload,
             selected_backend=selected_backend,
@@ -1932,30 +1942,27 @@ def overlay_calltree_with_coverage(
             artifacts = backend_result.response.get("artifacts", {})
             try:
                 native_outputs = {
-                    "overlay_nodes": _normalize_overlay_nodes(
+                    "overlay_nodes":
+                    _normalize_overlay_nodes(
                         _load_overlay_artifact_json(
                             artifacts,
                             "overlay_nodes",
                             str(out_dir),
-                        )
-                        or []
-                    ),
-                    "branch_complexities": _normalize_branch_complexities(
+                        ) or []),
+                    "branch_complexities":
+                    _normalize_branch_complexities(
                         _load_overlay_artifact_json(
                             artifacts,
                             "branch_complexities",
                             str(out_dir),
-                        )
-                        or []
-                    ),
-                    "branch_blockers": _normalize_branch_blockers(
+                        ) or []),
+                    "branch_blockers":
+                    _normalize_branch_blockers(
                         _load_overlay_artifact_json(
                             artifacts,
                             "branch_blockers",
                             str(out_dir),
-                        )
-                        or []
-                    ),
+                        ) or []),
                 }
             except (OSError, ValueError, json.JSONDecodeError) as err:
                 reason_details = {
@@ -1975,19 +1982,19 @@ def overlay_calltree_with_coverage(
                     backend_loaders.FI_OVERLAY_SCHEMA_ERROR,
                     json.dumps(reason_details),
                 )
-                _overlay_calltree_with_coverage_python(
-                    profile, proj_profile, coverage_url, basefolder, out_dir
-                )
+                _overlay_calltree_with_coverage_python(profile, proj_profile,
+                                                       coverage_url,
+                                                       basefolder, out_dir)
                 return
 
             if shadow_mode:
-                _overlay_calltree_with_coverage_python(
-                    profile, proj_profile, coverage_url, basefolder, out_dir
-                )
-                python_outputs = _capture_python_overlay_outputs(profile, proj_profile)
+                _overlay_calltree_with_coverage_python(profile, proj_profile,
+                                                       coverage_url,
+                                                       basefolder, out_dir)
+                python_outputs = _capture_python_overlay_outputs(
+                    profile, proj_profile)
                 mismatch_counts = _compare_overlay_outputs(
-                    native_outputs, python_outputs
-                )
+                    native_outputs, python_outputs)
                 mismatch_total = sum(mismatch_counts.values())
                 logger.info(
                     "Overlay shadow parity diagnostics: %s",
@@ -2020,9 +2027,8 @@ def overlay_calltree_with_coverage(
             )
             return
 
-    _overlay_calltree_with_coverage_python(
-        profile, proj_profile, coverage_url, basefolder, out_dir
-    )
+    _overlay_calltree_with_coverage_python(profile, proj_profile, coverage_url,
+                                           basefolder, out_dir)
 
 
 def _overlay_calltree_with_coverage_python(
@@ -2048,18 +2054,17 @@ def _overlay_calltree_with_coverage_python(
 
     target_name = profile.identifier
     target_coverage_url = utils.get_target_coverage_url(
-        coverage_url, target_name, profile.target_lang
-    )
+        coverage_url, target_name, profile.target_lang)
     logger.info("Using coverage url: %s", target_coverage_url)
-    all_callsites = cfg_load.extract_all_callsites(profile.fuzzer_callsite_calltree)
+    all_callsites = cfg_load.extract_all_callsites(
+        profile.fuzzer_callsite_calltree)
     for node in all_callsites:
         node.cov_ct_idx = ct_idx
         ct_idx += 1
 
         if profile.target_lang == "jvm":
             demangled_name = utils.demangle_jvm_func(
-                node.dst_function_source_file, node.dst_function_name
-            )
+                node.dst_function_source_file, node.dst_function_name)
         elif profile.target_lang == "rust":
             demangled_name = utils.demangle_rust_func(node.dst_function_name)
         else:
@@ -2071,16 +2076,16 @@ def _overlay_calltree_with_coverage_python(
         logger.debug("Checking callsite: %s", demangled_name)
 
         # Get hitcount for this node
-        node.cov_hitcount = get_node_coverage_hitcount(
-            demangled_name, callstack, node, profile, is_first
-        )
+        node.cov_hitcount = get_node_coverage_hitcount(demangled_name,
+                                                       callstack, node,
+                                                       profile, is_first)
         is_first = False
 
         node.cov_color = get_hit_count_color(node.cov_hitcount)
-        node.cov_link = get_url_to_cov_report(profile, node, target_coverage_url)
+        node.cov_link = get_url_to_cov_report(profile, node,
+                                              target_coverage_url)
         node.cov_callsite_link = get_parent_callsite_link(
-            node, callstack, profile, target_coverage_url
-        )
+            node, callstack, profile, target_coverage_url)
     # For python, do a hack where we check if any node is covered, and, if so,
     # ensure the entrypoint is covered.
     logger.info("Overlaying 2")
@@ -2101,8 +2106,7 @@ def _overlay_calltree_with_coverage_python(
         if idx1 > 0:
             prev = all_callsites[idx1 - 1]
         if n1.cov_hitcount == 0 and (
-            (prev is not None and prev.depth <= n1.depth) or idx1 < prev_end
-        ):
+            (prev is not None and prev.depth <= n1.depth) or idx1 < prev_end):
             n1.cov_forward_reds = 0
             n1.cov_largest_blocked_func = "none"
             continue
@@ -2141,8 +2145,7 @@ def _overlay_calltree_with_coverage_python(
     logger.info("Updating branch complexities")
     update_branch_complexities(proj_profile.all_functions, profile.coverage)
     profile.branch_blockers = detect_branch_level_blockers(
-        proj_profile.all_functions, profile, target_coverage_url
-    )
+        proj_profile.all_functions, profile, target_coverage_url)
     logger.info("[+] found %d branch blockers.", len(profile.branch_blockers))
     json_report.add_branch_blocker_key_value_to_report(
         profile.identifier,
@@ -2168,7 +2171,8 @@ def update_branch_complexities(
                 branch.sides[side_idx].unique_reachable_complexity = 0
                 branch.sides[side_idx].reachable_complexity = 0
                 branch.sides[side_idx].not_covered_complexity = 0
-                side_unique_funcs = branch.get_side_unique_reachable_funcnames(side_idx)
+                side_unique_funcs = branch.get_side_unique_reachable_funcnames(
+                    side_idx)
 
                 # Iterate over the list of funcs instead of set, because we want to account
                 # for the complexity of repeating functions.
@@ -2178,13 +2182,14 @@ def update_branch_complexities(
                     new_comp = all_functions[fn].total_cyclomatic_complexity
                     branch.sides[side_idx].reachable_complexity += new_comp
                     if fn in side_unique_funcs:
-                        branch.sides[side_idx].unique_reachable_complexity += new_comp
+                        branch.sides[
+                            side_idx].unique_reachable_complexity += new_comp
                     if coverage.is_func_hit(fn) is False:
-                        branch.sides[side_idx].not_covered_complexity += new_comp
+                        branch.sides[
+                            side_idx].not_covered_complexity += new_comp
                         if fn in side_unique_funcs:
                             branch.sides[
-                                side_idx
-                            ].unique_not_covered_complexity += new_comp
+                                side_idx].unique_not_covered_complexity += new_comp
 
 
 def detect_branch_level_blockers(
@@ -2207,7 +2212,8 @@ def detect_branch_level_blockers(
         branch_hitcount = -1
         sides_hitcount = coverage.branch_cov_map[branch_string]
         if len(sides_hitcount) > 2:
-            logger.debug(f"SPECIAL: switch statement {branch_string} {sides_hitcount}")
+            logger.debug(
+                f"SPECIAL: switch statement {branch_string} {sides_hitcount}")
             # The first two elements are associated with the switch statement
             # line coverage. Here to update sides_hitcount and set branch_hitcount.
             branch_hitcount = max(sides_hitcount[:2])
@@ -2219,18 +2225,19 @@ def detect_branch_level_blockers(
             line_number, column_number = rest_string.split(",")
         except ValueError:
             logger.debug(
-                "branch-profiling: error getting function name from %s", branch_string
-            )
+                "branch-profiling: error getting function name from %s",
+                branch_string)
             continue
 
         if function_name not in functions_profile:
             logger.debug(
-                "branch-profiling: func name not in functions_profile %s", function_name
-            )
+                "branch-profiling: func name not in functions_profile %s",
+                function_name)
             continue
 
         llvm_branch_profile = functions_profile[function_name].branch_profiles
-        source_file_path = functions_profile[function_name].function_source_file
+        source_file_path = functions_profile[
+            function_name].function_source_file
         # Just extract the file name and skip the path
         source_file_name = os.path.basename(source_file_path)
         llvm_branch_string = f"{source_file_name}:{line_number},{column_number}"
@@ -2238,9 +2245,8 @@ def detect_branch_level_blockers(
         if llvm_branch_string not in llvm_branch_profile:
             # TODO: there are cases that the column number of the branch is not consistent between
             # llvm and coverage debug info. For now we skip those cases.
-            logger.debug(
-                "branch-profiling: failed to find branch profile %s", llvm_branch_string
-            )
+            logger.debug("branch-profiling: failed to find branch profile %s",
+                         llvm_branch_string)
             continue
 
         llvm_branch = llvm_branch_profile[llvm_branch_string]
@@ -2272,20 +2278,17 @@ def detect_branch_level_blockers(
         for blocked_idx in not_taken_sides:
             blocked_side = blocked_idx
             blocked_unique_not_covered_com = llvm_branch.sides[
-                blocked_idx
-            ].unique_not_covered_complexity
+                blocked_idx].unique_not_covered_complexity
             blocked_unique_reachable_com = llvm_branch.sides[
-                blocked_idx
-            ].unique_reachable_complexity
-            blocked_reachable_com = llvm_branch.sides[blocked_idx].reachable_complexity
+                blocked_idx].unique_reachable_complexity
+            blocked_reachable_com = llvm_branch.sides[
+                blocked_idx].reachable_complexity
             blocked_not_covered_com = llvm_branch.sides[
-                blocked_idx
-            ].not_covered_complexity
+                blocked_idx].not_covered_complexity
             side_line = llvm_branch.sides[blocked_idx].pos
             side_line_number = side_line.split(":")[1].split(",")[0]
             blocked_unique_funcs = list(
-                llvm_branch.get_side_unique_reachable_funcnames(blocked_idx)
-            )
+                llvm_branch.get_side_unique_reachable_funcnames(blocked_idx))
 
             # Sanity check on line numbers: anomaly can happen because of debug info inaccuracy
             if int(line_number) > int(side_line_number):
@@ -2299,14 +2302,16 @@ def detect_branch_level_blockers(
 
             # Sanity check for fall through cases: checks if the branch side has coverage or not
             if coverage.get_type() == "file":
-                if coverage.is_file_lineno_hit(source_file_path, int(side_line_number)):
+                if coverage.is_file_lineno_hit(source_file_path,
+                                               int(side_line_number)):
                     logger.debug(
                         "Branch-blocker: fall through branch side is not blocked: %s",
                         side_line,
                     )
                     continue
             else:
-                if coverage.is_func_lineno_hit(function_name, int(side_line_number)):
+                if coverage.is_func_lineno_hit(function_name,
+                                               int(side_line_number)):
                     logger.debug(
                         "Branch-blocker: fall through branch side is not blocked: %s",
                         side_line,
@@ -2314,9 +2319,10 @@ def detect_branch_level_blockers(
                     continue
 
             hitcount_diff = max(sides_hitcount + [branch_hitcount])
-            link = fuzz_profile.resolve_coverage_link(
-                target_coverage_url, source_file_path, int(line_number), function_name
-            )
+            link = fuzz_profile.resolve_coverage_link(target_coverage_url,
+                                                      source_file_path,
+                                                      int(line_number),
+                                                      function_name)
             new_blk = FuzzBranchBlocker(
                 blocked_side,
                 blocked_unique_not_covered_com,
@@ -2348,9 +2354,9 @@ def detect_branch_level_blockers(
 
 def extract_namespace(mangled_function_name, return_type=None):
     demangled_func_name = utils.demangle_rust_func(
-        utils.demangle_cpp_func(mangled_function_name)
-    )
-    if return_type is not None and demangled_func_name.startswith(f"{return_type} "):
+        utils.demangle_cpp_func(mangled_function_name))
+    if return_type is not None and demangled_func_name.startswith(
+            f"{return_type} "):
         return_type_offset = len(return_type) + 1
         demangled_func_name = demangled_func_name[return_type_offset:]
     if "::" not in demangled_func_name:
@@ -2378,8 +2384,7 @@ def convert_debug_info_to_signature_v2(function, introspector_func):
     function["args"] = []
     try:
         return_type = convert_param_list_to_str_v2(
-            function["func_signature_elems"]["return_type"]
-        )
+            function["func_signature_elems"]["return_type"])
         function["return_type"] = return_type
         func_signature = return_type + " "
     except KeyError:
@@ -2395,7 +2400,8 @@ def convert_debug_info_to_signature_v2(function, introspector_func):
     # 2) identify namespace
     # 3) identify if namespace last part matches first argument
     # 4) assemble
-    namespace = extract_namespace(introspector_func["raw-function-name"], return_type)
+    namespace = extract_namespace(introspector_func["raw-function-name"],
+                                  return_type)
 
     func_name = ""
     param_idx = 0
@@ -2404,30 +2410,25 @@ def convert_debug_info_to_signature_v2(function, introspector_func):
         if len(namespace) > 1:
             # Constructor handling
             if namespace[-1] == convert_param_list_to_str_v2(
-                function["func_signature_elems"]["params"][0]
-            ).replace(" *", ""):
+                    function["func_signature_elems"]["params"][0]).replace(
+                        " *", ""):
                 func_name = "::".join(namespace[0:-1]) + "::"
                 param_idx += 1
             # Destructor handling
             elif "~" in namespace[-1] and namespace[-1].replace(
-                "~", ""
-            ) == convert_param_list_to_str_v2(
-                function["func_signature_elems"]["params"][0]
-            ).replace(" *", ""):
+                    "~", "") == convert_param_list_to_str_v2(
+                        function["func_signature_elems"]["params"][0]).replace(
+                            " *", ""):
                 func_name = "::".join(namespace[0:-1]) + "::"
 
-                if (
-                    not convert_param_list_to_str_v2(
-                        function["func_signature_elems"]["params"][0]
-                    )
-                    == "~"
-                ):
+                if (not convert_param_list_to_str_v2(
+                        function["func_signature_elems"]["params"][0]) == "~"):
                     function["name"] = "~" + function["name"]
                 param_idx += 1
             # Class object handling
             elif namespace[-2] == convert_param_list_to_str_v2(
-                function["func_signature_elems"]["params"][0]
-            ).replace(" *", "").replace("const ", ""):
+                    function["func_signature_elems"]["params"][0]).replace(
+                        " *", "").replace("const ", ""):
                 func_name = "::".join(namespace[0:-1]) + "::"
                 param_idx += 1
             else:
@@ -2439,10 +2440,10 @@ def convert_debug_info_to_signature_v2(function, introspector_func):
 
     func_signature += func_name
     func_signature += "("
-    for idx in range(param_idx, len(function["func_signature_elems"]["params"])):
+    for idx in range(param_idx,
+                     len(function["func_signature_elems"]["params"])):
         param_string = convert_param_list_to_str_v2(
-            function["func_signature_elems"]["params"][idx]
-        )
+            function["func_signature_elems"]["params"][idx])
         function["args"].append(param_string)
         func_signature += param_string
         if idx < len(function["func_signature_elems"]["params"]) - 1:
@@ -2487,7 +2488,8 @@ def _safe_int(value, default=None):
         return default
 
 
-def _build_debug_function_indexes(debug_all_functions, header_index_by_name=None):
+def _build_debug_function_indexes(debug_all_functions,
+                                  header_index_by_name=None):
     debug_dict_by_name = {}
     debug_dict_by_filename = {}
     debug_lines_by_filename = {}
@@ -2496,27 +2498,23 @@ def _build_debug_function_indexes(debug_all_functions, header_index_by_name=None
 
     for debug_function in debug_all_functions:
         source_dict = debug_function.get("source", {})
-        normalized_source_file = os.path.normpath(source_dict.get("source_file", ""))
+        normalized_source_file = os.path.normpath(
+            source_dict.get("source_file", ""))
         source_dict["source_file"] = normalized_source_file
         debug_function["possible-header-files"] = list(
-            header_index_by_name.get(debug_function.get("name", ""), set())
-        )
+            header_index_by_name.get(debug_function.get("name", ""), set()))
 
-        parsed_line_number = _safe_int(
-            source_dict.get("source_line", "-1"), default=None
-        )
+        parsed_line_number = _safe_int(source_dict.get("source_line", "-1"),
+                                       default=None)
 
-        debug_dict_by_name.setdefault(debug_function.get("name", ""), []).append(
-            debug_function
-        )
-        debug_dict_by_filename.setdefault(normalized_source_file, []).append(
-            debug_function
-        )
+        debug_dict_by_name.setdefault(debug_function.get("name", ""),
+                                      []).append(debug_function)
+        debug_dict_by_filename.setdefault(normalized_source_file,
+                                          []).append(debug_function)
         if parsed_line_number is None:
             continue
         debug_lines_by_filename.setdefault(normalized_source_file, []).append(
-            (parsed_line_number, debug_function)
-        )
+            (parsed_line_number, debug_function))
 
     for source_file, line_debug_pairs in debug_lines_by_filename.items():
         line_debug_pairs.sort(key=lambda item: item[0])
@@ -2542,12 +2540,14 @@ def correlate_introspector_func_to_debug_information(
 
     for debug_function in same_name_dfs:
         if debug_function.get("name", "") == if_func["Func name"]:
-            func_signature = convert_debug_info_to_signature_v2(debug_function, if_func)
+            func_signature = convert_debug_info_to_signature_v2(
+                debug_function, if_func)
             return func_signature, debug_function
 
     # We could not find the right one, let's search more broadly for it.
     source_file = os.path.normpath(if_func.get("Functions filename", ""))
-    source_line_begin = _safe_int(if_func.get("source_line_begin"), default=None)
+    source_line_begin = _safe_int(if_func.get("source_line_begin"),
+                                  default=None)
     if source_line_begin is None:
         return None, None
 
@@ -2558,23 +2558,19 @@ def correlate_introspector_func_to_debug_information(
         line_values = indexed_debug_lines["lines"]
         matching_debug_functions = indexed_debug_lines["functions"]
         exact_line_idx = bisect.bisect_left(line_values, source_line_begin)
-        if (
-            exact_line_idx < len(line_values)
-            and line_values[exact_line_idx] == source_line_begin
-            and source_line_begin != 0
-        ):
+        if (exact_line_idx < len(line_values)
+                and line_values[exact_line_idx] == source_line_begin
+                and source_line_begin != 0):
             matched_debug_func = matching_debug_functions[exact_line_idx]
             func_signature = convert_debug_info_to_signature_v2(
-                matched_debug_func, if_func
-            )
+                matched_debug_func, if_func)
             return func_signature, matched_debug_func
 
         preceding_line_idx = exact_line_idx - 1
         if preceding_line_idx >= 0:
             matched_debug_func = matching_debug_functions[preceding_line_idx]
             func_signature = convert_debug_info_to_signature_v2(
-                matched_debug_func, if_func
-            )
+                matched_debug_func, if_func)
             return func_signature, matched_debug_func
 
     target_minimum = 999999
@@ -2582,7 +2578,8 @@ def correlate_introspector_func_to_debug_information(
     most_likely_func = None
 
     for dfunction in debug_dict_by_filename.get(source_file, []):
-        dline = _safe_int(dfunction["source"].get("source_line", "-1"), default=None)
+        dline = _safe_int(dfunction["source"].get("source_line", "-1"),
+                          default=None)
         if dline is None:
             continue
 
@@ -2592,14 +2589,14 @@ def correlate_introspector_func_to_debug_information(
         distance_between_beginnings = source_line_begin - dline
 
         if distance_between_beginnings == 0 and dline != 0:
-            func_signature = convert_debug_info_to_signature_v2(dfunction, if_func)
+            func_signature = convert_debug_info_to_signature_v2(
+                dfunction, if_func)
             return func_signature, dfunction
 
-        if (
-            distance_between_beginnings > 0
-            and distance_between_beginnings < target_minimum
-        ):
-            tfunc_signature = convert_debug_info_to_signature_v2(dfunction, if_func)
+        if (distance_between_beginnings > 0
+                and distance_between_beginnings < target_minimum):
+            tfunc_signature = convert_debug_info_to_signature_v2(
+                dfunction, if_func)
             most_likely_func = dfunction
             target_minimum = distance_between_beginnings
 
@@ -2610,9 +2607,10 @@ def correlate_introspector_func_to_debug_information(
     return None, None
 
 
-def correlate_introspection_functions_to_debug_info(
-    all_functions_json_report, debug_all_functions, proj_lang, report_dict=None
-):
+def correlate_introspection_functions_to_debug_info(all_functions_json_report,
+                                                    debug_all_functions,
+                                                    proj_lang,
+                                                    report_dict=None):
     """Correlates function data collected by debug information to function
     data collected by LLVMs module, and uses the correlated data to generate
     function signatures for each function based on debug information."""
@@ -2627,7 +2625,8 @@ def correlate_introspection_functions_to_debug_info(
     header_index_by_name = {}
     header_name_pattern = re.compile(r"([A-Za-z_~][A-Za-z0-9_:~]*)\s*\(")
     for header_src_file in normalized_paths:
-        if not (header_src_file.endswith(".h") or header_src_file.endswith(".hpp")):
+        if not (header_src_file.endswith(".h")
+                or header_src_file.endswith(".hpp")):
             continue
         if not os.path.isfile(header_src_file):
             continue
@@ -2640,7 +2639,8 @@ def correlate_introspection_functions_to_debug_info(
                         header_index_by_name[match] = entry
                         if "::" in match:
                             short_match = match.rsplit("::", maxsplit=1)[-1]
-                            entry = header_index_by_name.get(short_match, set())
+                            entry = header_index_by_name.get(
+                                short_match, set())
                             entry.add(header_src_file)
                             header_index_by_name[short_match] = entry
         except UnicodeDecodeError:
@@ -2649,13 +2649,12 @@ def correlate_introspection_functions_to_debug_info(
     # A lot of look-ups are needed when matching LLVM functions to debug
     # functions. Start with creating two indexes to make these look-ups
     # faster.
-    (debug_dict_by_name, debug_dict_by_filename, debug_lines_by_filename) = (
-        _build_debug_function_indexes(debug_all_functions, header_index_by_name)
-    )
+    (debug_dict_by_name, debug_dict_by_filename,
+     debug_lines_by_filename) = (_build_debug_function_indexes(
+         debug_all_functions, header_index_by_name))
 
-    logger.debug(
-        "Indexed debug functions by file: %d entries", len(debug_dict_by_filename)
-    )
+    logger.debug("Indexed debug functions by file: %d entries",
+                 len(debug_dict_by_filename))
 
     # Now correlate signatures
     for if_func in all_functions_json_report:
@@ -2666,8 +2665,7 @@ def correlate_introspection_functions_to_debug_info(
                 debug_dict_by_name,
                 debug_dict_by_filename,
                 debug_lines_by_filename,
-            )
-        )
+            ))
 
         if func_sig is not None:
             if_func["function_signature"] = func_sig
@@ -2721,7 +2719,9 @@ def _scan_source_tree(
     interesting_source_files: set[str] = set()
 
     if language == "jvm":
-        source_extensions = [".java", ".scala", ".sc", ".groovy", ".kt", ".kts"]
+        source_extensions = [
+            ".java", ".scala", ".sc", ".groovy", ".kt", ".kts"
+        ]
     elif language == "python":
         source_extensions = [".py"]
     elif language == "rust":
@@ -2763,12 +2763,9 @@ def _scan_source_tree(
 
     for root, dirs, files in os.walk(scan_root):
         dirs[:] = [
-            d
-            for d in dirs
-            if not _matches_any_pattern(
-                os.path.join(root, d), compiled_exclude_patterns
-            )
-            and not any(avoid in os.path.join(root, d) for avoid in to_avoid)
+            d for d in dirs if not _matches_any_pattern(
+                os.path.join(root, d), compiled_exclude_patterns) and not any(
+                    avoid in os.path.join(root, d) for avoid in to_avoid)
         ]
         for f in files:
             path = os.path.join(root, f)
@@ -2861,8 +2858,7 @@ def extract_tests_from_directories(
         is_sub_directory = False
         for seed_directory in seed_directories:
             if directory == seed_directory or directory.startswith(
-                seed_directory + os.sep
-            ):
+                    seed_directory + os.sep):
                 is_sub_directory = True
                 break
         if not is_sub_directory:
@@ -2950,12 +2946,11 @@ def extract_tests_from_directories(
             return False
         for directory in seed_directories:
             normalized_directory = os.path.normpath(directory)
-            directory_prefix = (
-                normalized_directory
-                if normalized_directory.endswith(os.sep)
-                else normalized_directory + os.sep
-            )
-            if path == normalized_directory or path.startswith(directory_prefix):
+            directory_prefix = (normalized_directory
+                                if normalized_directory.endswith(os.sep) else
+                                normalized_directory + os.sep)
+            if path == normalized_directory or path.startswith(
+                    directory_prefix):
                 return True
         return False
 
@@ -2975,18 +2970,15 @@ def extract_tests_from_directories(
                 continue
 
             root = os.path.dirname(normalized_path)
-            if any(ins in root for ins in inspirations) and is_non_fuzz_harness(
-                normalized_path
-            ):
+            if any(ins in root for ins in
+                   inspirations) and is_non_fuzz_harness(normalized_path):
                 all_test_files.add(normalized_path)
     else:
         # Traverse each seed directory once and apply both matching heuristics.
         for directory in seed_directories:
             for root, dirs, files in os.walk(directory):
                 dirs[:] = [
-                    d
-                    for d in dirs
-                    if not d.startswith(".")
+                    d for d in dirs if not d.startswith(".")
                     and is_candidate_source(os.path.join(root, d))
                 ]
 
@@ -3011,7 +3003,8 @@ def extract_tests_from_directories(
                         all_test_files.add(absolute_path)
                         continue
 
-                    if is_inspiration_root and is_non_fuzz_harness(absolute_path):
+                    if is_inspiration_root and is_non_fuzz_harness(
+                            absolute_path):
                         all_test_files.add(absolute_path)
     new_test_files = set()
     for test_file in all_test_files:
@@ -3024,7 +3017,8 @@ def extract_tests_from_directories(
     for test_file in all_test_files:
         logger.info(test_file)
         if need_copy:
-            dst = os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER + "/" + test_file)
+            dst = os.path.join(out_dir,
+                               constants.SAVED_SOURCE_FOLDER + "/" + test_file)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy(test_file, dst)
 
@@ -3039,7 +3033,8 @@ def _extract_test_information_jvm():
     code to locate extra example source files."""
 
     all_test_files = set()
-    source_code_extensions = (".java", ".scala", ".sc", ".kt", ".kts", ".groovy")
+    source_code_extensions = (".java", ".scala", ".sc", ".kt", ".kts",
+                              ".groovy")
     inspirations = ["sample", "example", "documentation", "demo"]
 
     # Java project source code is meant to exist in the $SRC directory
@@ -3072,9 +3067,9 @@ def _extract_test_information_jvm():
         for root, _, files in os.walk(source_path):
             for file in files:
                 if file.endswith(source_code_extensions) and any(
-                    inspiration in file for inspiration in inspirations
-                ):
-                    path = os.path.relpath(os.path.join(root, file), source_path)
+                        inspiration in file for inspiration in inspirations):
+                    path = os.path.relpath(os.path.join(root, file),
+                                           source_path)
                     all_test_files.add(path)
 
     # Walk through all the files under possible sample path and locate example sources
@@ -3082,7 +3077,8 @@ def _extract_test_information_jvm():
         for root, _, files in os.walk(sample_path):
             for file in files:
                 if file.endswith(source_code_extensions):
-                    path = os.path.relpath(os.path.join(root, file), sample_path)
+                    path = os.path.relpath(os.path.join(root, file),
+                                           sample_path)
                     all_test_files.add(path)
 
     return all_test_files
@@ -3112,15 +3108,17 @@ def light_correlate_source_to_executable(language, exclude_patterns=None):
     # Match based on file names. This should be the most primitive but
     # will catch a large number of targets
     for source_file in all_source_files:
-        harness_source_file = os.path.splitext(os.path.basename(source_file))[0]
+        harness_source_file = os.path.splitext(
+            os.path.basename(source_file))[0]
         matches = set()
         for cov_report in cov_reports:
             cov_report_base = os.path.splitext(os.path.basename(cov_report))[0]
             if cov_report_base == harness_source_file:
                 matches.add(cov_report_base)
         if len(matches) == 1:
-            pairs.append(
-                {"harness_source": source_file, "harness_executable": matches.pop()}
-            )
+            pairs.append({
+                "harness_source": source_file,
+                "harness_executable": matches.pop()
+            })
 
     return pairs

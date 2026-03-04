@@ -34,7 +34,7 @@ from concurrent.futures import (
     as_completed,
     wait,
 )
-from typing import Any, TypeVar
+from typing import Any, Iterator, TypeVar
 import yaml
 
 from fuzz_introspector import backend_loaders
@@ -1677,8 +1677,11 @@ def _collect_correlator_shard_updates(
                 "Correlator shard file not found: "
                 f"shard={shard_path!r} resolved={resolved_shard_path!r}")
 
-        for row_idx, func_signature_elems, source_location in _iter_correlator_shard_updates(
-                resolved_shard_path):
+        for (
+                row_idx,
+                func_signature_elems,
+                source_location,
+        ) in _iter_correlator_shard_updates(resolved_shard_path):
             if row_idx < 0 or row_idx >= function_count:
                 raise ValueError(
                     f"Correlator shard row index out of range: {row_idx}")
@@ -1705,11 +1708,12 @@ def _apply_collected_correlator_updates_in_place(
     | list[tuple[int, dict[str, Any], dict[str, Any]]],
 ) -> int:
     update_count = 0
+    update_iterable: Iterator[tuple[int, dict[str, Any], dict[str, Any]]]
     if isinstance(validated_updates, dict):
         update_iterable = ((row_idx, payload[0], payload[1])
                            for row_idx, payload in validated_updates.items())
     else:
-        update_iterable = validated_updates
+        update_iterable = iter(validated_updates)
 
     for row_idx, func_signature_elems, source_location in update_iterable:
         debug_func = all_debug_functions[row_idx]

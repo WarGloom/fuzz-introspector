@@ -56,8 +56,7 @@ def parse_stage_marker_line(line: str) -> StageMarkerEvent | None:
 
     try:
         timestamp = datetime.datetime.fromisoformat(
-            timestamp_raw.replace("Z", "+00:00")
-        )
+            timestamp_raw.replace("Z", "+00:00"))
         metadata_obj = json.loads(metadata_raw)
     except (ValueError, json.JSONDecodeError):
         return None
@@ -102,13 +101,11 @@ def pair_stage_events(
     """
     include_stages = set(stages) if stages is not None else None
     open_starts: dict[str, list[datetime.datetime]] = defaultdict(list)
-    paired: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {
-            "durations": [],
-            "missing_starts": 0,
-            "missing_ends": 0,
-        }
-    )
+    paired: dict[str, dict[str, Any]] = defaultdict(lambda: {
+        "durations": [],
+        "missing_starts": 0,
+        "missing_ends": 0,
+    })
 
     for event in events:
         if include_stages is not None and event.stage not in include_stages:
@@ -120,7 +117,8 @@ def pair_stage_events(
         elif event.event == "end":
             if open_starts[event.stage]:
                 start_time = open_starts[event.stage].pop()
-                duration_seconds = (event.timestamp - start_time).total_seconds()
+                duration_seconds = (event.timestamp -
+                                    start_time).total_seconds()
                 if duration_seconds >= 0:
                     stage_record["durations"].append(duration_seconds)
             else:
@@ -152,13 +150,20 @@ def summarize_stage_metrics(
         total_seconds = float(sum(durations))
 
         summary[stage_name] = {
-            "count": duration_count,
-            "total_seconds": total_seconds,
-            "mean_seconds": (total_seconds / duration_count) if duration_count else 0.0,
-            "max_seconds": max(durations) if durations else 0.0,
-            "min_seconds": min(durations) if durations else 0.0,
-            "missing_starts": int(record.get("missing_starts", 0)),
-            "missing_ends": int(record.get("missing_ends", 0)),
+            "count":
+            duration_count,
+            "total_seconds":
+            total_seconds,
+            "mean_seconds":
+            (total_seconds / duration_count) if duration_count else 0.0,
+            "max_seconds":
+            max(durations) if durations else 0.0,
+            "min_seconds":
+            min(durations) if durations else 0.0,
+            "missing_starts":
+            int(record.get("missing_starts", 0)),
+            "missing_ends":
+            int(record.get("missing_ends", 0)),
         }
 
     return summary
