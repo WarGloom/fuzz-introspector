@@ -8,7 +8,9 @@ use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
 
-#[derive(Debug, Default, Serialize)]
+const DEFAULT_MERGE_WINDOW_SIZE: usize = 16;
+
+#[derive(Debug, Default, PartialEq, Eq, Serialize)]
 struct OutputPayload {
     covmap: BTreeMap<String, Vec<[i64; 2]>>,
     branch_cov_map: BTreeMap<String, Vec<i64>>,
@@ -244,6 +246,32 @@ fn render_output_json(payload: &OutputPayload) -> Result<String, String> {
     serde_json::to_string(payload).map_err(|err| format!("failed serializing output payload: {err}"))
 }
 
+fn merge_output_payload(base: &mut OutputPayload, partial: OutputPayload) {
+    base.covmap.extend(partial.covmap);
+    base.branch_cov_map.extend(partial.branch_cov_map);
+}
+
+fn parse_and_merge_reports_windowed(
+    coverage_reports: &[String],
+    merge_window_size: usize,
+) -> Result<OutputPayload, String> {
+    let bounded_window_size = merge_window_size.max(1);
+    let mut output = OutputPayload::with_coverage_files(coverage_reports.to_vec());
+
+    for report_window in coverage_reports.chunks(bounded_window_size) {
+        let partial_outputs: Vec<Result<OutputPayload, String>> = report_window
+            .par_iter()
+            .map(|path| parse_coverage_report(path))
+            .collect();
+
+        for partial in partial_outputs {
+            merge_output_payload(&mut output, partial?);
+        }
+    }
+
+    Ok(output)
+}
+
 fn run() -> Result<(), String> {
     let mut raw_input = String::new();
     io::stdin()
@@ -252,19 +280,8 @@ fn run() -> Result<(), String> {
 
     let coverage_reports = parse_coverage_reports(&raw_input)?;
 
-    // Parse all report files in parallel; collect in original order.
-    let partial_outputs: Vec<Result<OutputPayload, String>> = coverage_reports
-        .par_iter()
-        .map(|path| parse_coverage_report(path))
-        .collect();
-
-    // Merge results sequentially to preserve file order (last file wins for duplicate keys).
-    let mut output = OutputPayload::with_coverage_files(coverage_reports.clone());
-    for partial in partial_outputs {
-        let partial = partial?;
-        output.covmap.extend(partial.covmap);
-        output.branch_cov_map.extend(partial.branch_cov_map);
-    }
+    let output =
+        parse_and_merge_reports_windowed(&coverage_reports, DEFAULT_MERGE_WINDOW_SIZE)?;
 
     let json_output = render_output_json(&output)?;
     io::stdout()
@@ -280,5 +297,85 @@ fn main() {
     if let Err(err) = run() {
         let _ = writeln!(io::stderr(), "{err}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    fn write_temp_report(contents: &str) -> Result<String, String> {
+        let mut path = env::temp_dir();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| format!("failed to calculate unix timestamp: {err}"))?
+            .as_nanos();
+        path.push(format!(
+            "native_llvm_cov_loader_rust_test_{}_{}.txt",
+            std::process::id(),
+            now
+        ));
+        fs::write(&path, contents)
+            .map_err(|err| format!("failed writing temp report {}: {err}", path.display()))?;
+        Ok(path_to_string(path))
+    }
+
+    fn path_to_string(path: PathBuf) -> String {
+        path.to_string_lossy().into_owned()
+    }
+
+    fn delete_temp_reports(paths: &[String]) {
+        for path in paths {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn merge_is_deterministic_across_window_sizes() -> Result<(), String> {
+        let report_one = write_temp_report(
+            "target:\n1| 1| switch(a)\nBranch (1:1): [True: 1, False: 0]\n2| 1| case 0:\nBranch (2:1): [True: 3, False: 0]\n",
+        )?;
+        let report_two = write_temp_report(
+            "target:\n1| 2| switch(a)\nBranch (1:1): [True: 2, False: 0]\n2| 1| case 0:\nBranch (2:1): [True: 4, False: 0]\n",
+        )?;
+        let report_three = write_temp_report(
+            "target:\n1| 3| switch(a)\nBranch (1:1): [True: 5, False: 1]\n2| 1| case 0:\nBranch (2:1): [True: 9, False: 0]\n",
+        )?;
+        let reports = vec![report_one, report_two, report_three];
+
+        let merged_single = parse_and_merge_reports_windowed(&reports, 1)?;
+        let merged_windowed = parse_and_merge_reports_windowed(&reports, 2)?;
+        let merged_all = parse_and_merge_reports_windowed(&reports, 32)?;
+
+        assert_eq!(merged_single, merged_windowed);
+        assert_eq!(merged_single, merged_all);
+        assert_eq!(merged_single.covmap.get("target"), Some(&vec![[1, 3], [2, 1]]));
+        assert_eq!(
+            merged_single.branch_cov_map.get("target:1,2"),
+            Some(&vec![5, 1, 9])
+        );
+
+        delete_temp_reports(&reports);
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_function_sections_keep_latest_payload() -> Result<(), String> {
+        let report = write_temp_report(
+            "dup:\n1| 9| old\n\ndup:\n1| 5| switch(x)\nBranch (1:3): [True: 7, False: 2]\n2| 1| case 1:\nBranch (2:3): [True: 4, False: 0]\n",
+        )?;
+
+        let parsed = parse_coverage_report(&report)?;
+
+        assert_eq!(parsed.covmap.get("dup"), Some(&vec![[1, 5], [2, 1]]));
+        assert_eq!(parsed.branch_cov_map.get("dup:1,2"), Some(&vec![7, 2, 4]));
+
+        delete_temp_reports(&[report]);
+        Ok(())
     }
 }
