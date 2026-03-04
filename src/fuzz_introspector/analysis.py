@@ -15,6 +15,7 @@
 
 import abc
 import bisect
+import collections
 import concurrent.futures
 import json
 import logging
@@ -2440,9 +2441,9 @@ def _safe_int(value, default=None):
 
 
 def _build_debug_function_indexes(debug_all_functions, header_index_by_name=None):
-    debug_dict_by_name = {}
-    debug_dict_by_filename = {}
-    debug_lines_by_filename = {}
+    debug_dict_by_name = collections.defaultdict(list)
+    debug_dict_by_filename = collections.defaultdict(list)
+    debug_lines_by_filename = collections.defaultdict(list)
     if header_index_by_name is None:
         header_index_by_name = {}
 
@@ -2458,15 +2459,15 @@ def _build_debug_function_indexes(debug_all_functions, header_index_by_name=None
             source_dict.get("source_line", "-1"), default=None
         )
 
-        debug_dict_by_name.setdefault(debug_function.get("name", ""), []).append(
+        debug_dict_by_name[debug_function.get("name", "")].append(
             debug_function
         )
-        debug_dict_by_filename.setdefault(normalized_source_file, []).append(
+        debug_dict_by_filename[normalized_source_file].append(
             debug_function
         )
         if parsed_line_number is None:
             continue
-        debug_lines_by_filename.setdefault(normalized_source_file, []).append(
+        debug_lines_by_filename[normalized_source_file].append(
             (parsed_line_number, debug_function)
         )
 
