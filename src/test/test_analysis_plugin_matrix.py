@@ -206,6 +206,7 @@ def test_fi_native_plugins_rust_env_routes_to_native_proxy(monkeypatch) -> None:
 
     proxy = analysis.NativePluginProxy()
 
+    profiles = []
     with (
         mock.patch.object(
             analysis.NativePluginProxy,
@@ -534,6 +535,7 @@ def test_native_proxy_caches_results_for_repeated_calls(monkeypatch) -> None:
     )
     proj_profile = _make_full_fake_proj_profile(["alpha"])
     proxy = analysis.NativePluginProxy()
+    profiles = []
 
     with (
         mock.patch.object(
@@ -546,8 +548,8 @@ def test_native_proxy_caches_results_for_repeated_calls(monkeypatch) -> None:
             return_value=fake_proc,
         ) as run_mock,
     ):
-        first = proxy.run_analysis(proj_profile, [], ["optimal_targets"])
-        second = proxy.run_analysis(proj_profile, [], ["optimal_targets"])
+        first = proxy.run_analysis(proj_profile, profiles, ["optimal_targets"])
+        second = proxy.run_analysis(proj_profile, profiles, ["optimal_targets"])
 
     assert "optimal_targets" in first
     assert "optimal_targets" in second
@@ -570,6 +572,7 @@ def test_native_proxy_prefetches_once_and_reuses_cached_plugin_results(
     proj_profile = _make_full_fake_proj_profile(["alpha"], has_coverage=True)
     proxy = analysis.NativePluginProxy()
 
+    profiles = []
     with (
         mock.patch.object(
             analysis.NativePluginProxy,
@@ -581,8 +584,10 @@ def test_native_proxy_prefetches_once_and_reuses_cached_plugin_results(
             return_value=fake_proc,
         ) as run_mock,
     ):
-        first = proxy.run_analysis(proj_profile, [], ["optimal_targets"])
-        second = proxy.run_analysis(proj_profile, [], ["runtime_coverage_analysis"])
+        first = proxy.run_analysis(proj_profile, profiles, ["optimal_targets"])
+        second = proxy.run_analysis(
+            proj_profile, profiles, ["runtime_coverage_analysis"]
+        )
 
     assert "optimal_targets" in first
     assert "runtime_coverage_analysis" in second

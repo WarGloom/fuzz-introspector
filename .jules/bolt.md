@@ -1,3 +1,0 @@
-## 2024-05-24 - Avoid dict.setdefault(key, []) in hot loops
-**Learning:** For better performance and readability when accumulating values into dictionary lists (multimaps), prefer using `collections.defaultdict(list)` over `dict.setdefault(key, []).append(...)`. The `setdefault` approach allocates an empty list on every iteration, regardless of whether the key already exists, which causes unnecessary memory pressure and overhead in hot loops (such as those parsing large debug profiles).
-**Action:** Always use `collections.defaultdict(list)` when building dictionary multimaps to avoid redundant list allocations.

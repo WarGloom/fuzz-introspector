@@ -1454,7 +1454,8 @@ def create_friendly_debug_types(debug_type_dictionary,
     if not dump_files:
         return
 
-    member_entries_by_scope: dict[int, list[dict[str, Any]]] = collections.defaultdict(list)
+    member_entries_by_scope: dict[int, list[dict[
+        str, Any]]] = collections.defaultdict(list)
     for elem_addr, elem_val in debug_type_dictionary.items():
         if elem_val["tag"] != "DW_TAG_member":
             continue
@@ -1706,6 +1707,8 @@ def _apply_collected_correlator_updates_in_place(
     | list[tuple[int, dict[str, Any], dict[str, Any]]],
 ) -> int:
     update_count = 0
+    from typing import Iterable
+    update_iterable: Iterable[tuple[int, dict[str, Any], dict[str, Any]]]
     if isinstance(validated_updates, dict):
         update_iterable = ((row_idx, payload[0], payload[1])
                            for row_idx, payload in validated_updates.items())
