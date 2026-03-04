@@ -624,6 +624,86 @@ def test_native_proxy_caches_results_for_repeated_calls(monkeypatch) -> None:
     assert run_mock.call_count == 1
 
 
+def test_native_proxy_reuses_plugin_cache_after_coalesced_call(monkeypatch) -> None:
+    """Single-plugin requests reuse plugin-level cache from coalesced dispatch."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    coalesced_result = {}
+    coalesced_result.update(_make_optimal_targets_native_result(["alpha"]))
+    coalesced_result.update(_make_runtime_cov_native_result(["alpha"]))
+
+    fake_proc = _make_native_proc(coalesced_result)
+    proj_profile = _make_full_fake_proj_profile(["alpha"], has_coverage=True)
+    proxy = analysis.NativePluginProxy()
+
+    with (
+        mock.patch.object(
+            analysis.NativePluginProxy,
+            "find_binary",
+            return_value="/usr/bin/native_analysis_plugins_rust",
+        ),
+        mock.patch(
+            "fuzz_introspector.analysis.subprocess.run",
+            return_value=fake_proc,
+        ) as run_mock,
+    ):
+        coalesced = proxy.run_analysis(
+            proj_profile,
+            [],
+            ["optimal_targets", "runtime_coverage_analysis"],
+        )
+        optimal_only = proxy.run_analysis(proj_profile, [], ["optimal_targets"])
+        runtime_only = proxy.run_analysis(
+            proj_profile,
+            [],
+            ["runtime_coverage_analysis"],
+        )
+
+    assert "optimal_targets" in coalesced
+    assert "runtime_coverage_analysis" in coalesced
+    assert "optimal_targets" in optimal_only
+    assert "runtime_coverage_analysis" in runtime_only
+    assert run_mock.call_count == 1
+
+
+def test_native_proxy_coalesces_scoped_single_plugin_requests(monkeypatch) -> None:
+    """Single-plugin calls within one request scope dispatch once."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    coalesced_result = {}
+    coalesced_result.update(_make_optimal_targets_native_result(["alpha"]))
+    coalesced_result.update(_make_runtime_cov_native_result(["alpha"]))
+
+    fake_proc = _make_native_proc(coalesced_result)
+    proj_profile = _make_full_fake_proj_profile(["alpha"], has_coverage=True)
+    proxy = analysis.NativePluginProxy()
+
+    with (
+        mock.patch.object(
+            analysis.NativePluginProxy,
+            "find_binary",
+            return_value="/usr/bin/native_analysis_plugins_rust",
+        ),
+        mock.patch(
+            "fuzz_introspector.analysis.subprocess.run",
+            return_value=fake_proc,
+        ) as run_mock,
+        analysis.native_plugin_request_scope(
+            ["optimal_targets", "runtime_coverage_analysis"]
+        ),
+    ):
+        optimal_only = proxy.run_analysis(proj_profile, [], ["optimal_targets"])
+        runtime_only = proxy.run_analysis(
+            proj_profile,
+            [],
+            ["runtime_coverage_analysis"],
+        )
+
+    assert "optimal_targets" in optimal_only
+    assert "runtime_coverage_analysis" in runtime_only
+    assert run_mock.call_count == 1
+
+
 def test_native_proxy_runs_per_requested_plugin_set(
     monkeypatch,
 ) -> None:
@@ -651,6 +731,57 @@ def test_native_proxy_runs_per_requested_plugin_set(
 
     assert "optimal_targets" in first
     assert "runtime_coverage_analysis" in second
+    assert run_mock.call_count == 2
+
+
+def test_native_proxy_does_not_reuse_incomplete_cross_set_cache(
+    monkeypatch,
+) -> None:
+    """Overlapping but distinct plugin sets must dispatch when one plugin is missing."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    first_result = {}
+    first_result.update(_make_optimal_targets_native_result(["alpha"]))
+    first_result.update(_make_runtime_cov_native_result(["alpha"]))
+
+    second_result = {}
+    second_result.update(_make_optimal_targets_native_result(["alpha"]))
+    second_result.update(
+        _make_calltree_native_result(total=10, reached=4, unreached=6, pct=40.0)
+    )
+
+    proj_profile = _make_full_fake_proj_profile(["alpha"], has_coverage=True)
+    proxy = analysis.NativePluginProxy()
+
+    with (
+        mock.patch.object(
+            analysis.NativePluginProxy,
+            "find_binary",
+            return_value="/usr/bin/native_analysis_plugins_rust",
+        ),
+        mock.patch(
+            "fuzz_introspector.analysis.subprocess.run",
+            side_effect=[
+                _make_native_proc(first_result),
+                _make_native_proc(second_result),
+            ],
+        ) as run_mock,
+    ):
+        first = proxy.run_analysis(
+            proj_profile,
+            [],
+            ["optimal_targets", "runtime_coverage_analysis"],
+        )
+        second = proxy.run_analysis(
+            proj_profile,
+            [],
+            ["optimal_targets", "calltree_analysis"],
+        )
+
+    assert "optimal_targets" in first
+    assert "runtime_coverage_analysis" in first
+    assert "optimal_targets" in second
+    assert "calltree_analysis" in second
     assert run_mock.call_count == 2
 
 

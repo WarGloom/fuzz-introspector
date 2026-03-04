@@ -1478,6 +1478,10 @@ def _create_section_optional_analyses_impl(
     combined_analyses = analyses_to_run + [
         x for x in output_json if x not in analyses_to_run
     ]
+    native_plugin_scope = analysis.get_native_plugin_keys_for_analyses(
+        combined_analyses)
+    dispatch_scope = (analysis.native_plugin_request_scope(native_plugin_scope)
+                      if len(native_plugin_scope) > 1 else contextlib.nullcontext())
 
     coordinator = merge_coordinator.MergeCoordinator(out_dir)
     parallel_worker_count = _parse_parallel_worker_count()
@@ -1504,96 +1508,97 @@ def _create_section_optional_analyses_impl(
         else:
             serial_interfaces.append(analysis_interface)
 
-    if parallel_worker_count > 1 and parallel_interfaces:
-        logger.info(
-            " - Running %d vetted analyses with %d workers (%s backend)",
-            len(parallel_interfaces),
-            parallel_worker_count,
-            parallel_backend,
-        )
-        logger.info(
-            " - Parallel analyses: %s",
-            [analysis_cls.get_name() for analysis_cls in parallel_interfaces],
-        )
-        parallel_results = _run_parallel_analyses(
-            parallel_interfaces,
-            analyses_to_run,
-            introspection_proj,
-            basefolder,
-            coverage_url,
-            out_dir,
-            dump_files,
-            parallel_worker_count,
-            table_id_offsets,
-            parallel_backend,
-        )
-        for envelope in parallel_results:
-            status = envelope.get("status")
-            if status != "success":
-                logger.error("Parallel analysis failed: %s", envelope)
-                raise FuzzIntrospectorError(
-                    "Parallel analysis failed; see logs for details")
-            coordinator.add_analysis_result(envelope["analysis_name"],
-                                            envelope)
-    elif parallel_worker_count > 1:
-        logger.info(" - No vetted analyses requested; running serial")
-
-    for analysis_interface in serial_interfaces:
-        analysis_name = analysis_interface.get_name()
-        logger.info(" - Running serial analysis: %s", analysis_name)
-        if use_parallel_merge:
-            envelope = _run_serial_analysis_with_envelope(
-                analysis_interface,
-                analysis_name in analyses_to_run,
+    with dispatch_scope:
+        if parallel_worker_count > 1 and parallel_interfaces:
+            logger.info(
+                " - Running %d vetted analyses with %d workers (%s backend)",
+                len(parallel_interfaces),
+                parallel_worker_count,
+                parallel_backend,
+            )
+            logger.info(
+                " - Parallel analyses: %s",
+                [analysis_cls.get_name() for analysis_cls in parallel_interfaces],
+            )
+            parallel_results = _run_parallel_analyses(
+                parallel_interfaces,
+                analyses_to_run,
                 introspection_proj,
                 basefolder,
                 coverage_url,
                 out_dir,
                 dump_files,
-                table_id_offsets.get(analysis_name, 0),
+                parallel_worker_count,
+                table_id_offsets,
+                parallel_backend,
             )
-            if envelope.get("status") != "success":
-                logger.error("Serial analysis failed: %s", envelope)
-                raise FuzzIntrospectorError(
-                    "Serial analysis failed; see logs for details")
-            coordinator.add_analysis_result(analysis_name, envelope)
-        else:
-            analysis_instance = analysis.instantiate_analysis_interface(
-                analysis_interface)
-            analysis_instance.dump_files = dump_files
+            for envelope in parallel_results:
+                status = envelope.get("status")
+                if status != "success":
+                    logger.error("Parallel analysis failed: %s", envelope)
+                    raise FuzzIntrospectorError(
+                        "Parallel analysis failed; see logs for details")
+                coordinator.add_analysis_result(envelope["analysis_name"],
+                                                envelope)
+        elif parallel_worker_count > 1:
+            logger.info(" - No vetted analyses requested; running serial")
 
-            # Set display_html flag for the analysis_instance
-            analysis_instance.set_display_html(
-                analysis_name in analyses_to_run)
-
-            introspection_proj.optional_analyses.append(analysis_instance)
-
-            # Process analysis in serial mode (worker count = 1)
-            intent_collector = merge_intents.MergeIntentCollector()
-            with merge_intents.merge_intent_context(intent_collector):
-                html_string = analysis_instance.analysis_func(
-                    table_of_contents,
-                    tables,
-                    introspection_proj.proj_profile,
-                    introspection_proj.profiles,
+        for analysis_interface in serial_interfaces:
+            analysis_name = analysis_interface.get_name()
+            logger.info(" - Running serial analysis: %s", analysis_name)
+            if use_parallel_merge:
+                envelope = _run_serial_analysis_with_envelope(
+                    analysis_interface,
+                    analysis_name in analyses_to_run,
+                    introspection_proj,
                     basefolder,
                     coverage_url,
-                    conclusions,
                     out_dir,
+                    dump_files,
+                    table_id_offsets.get(analysis_name, 0),
                 )
+                if envelope.get("status") != "success":
+                    logger.error("Serial analysis failed: %s", envelope)
+                    raise FuzzIntrospectorError(
+                        "Serial analysis failed; see logs for details")
+                coordinator.add_analysis_result(analysis_name, envelope)
+            else:
+                analysis_instance = analysis.instantiate_analysis_interface(
+                    analysis_interface)
+                analysis_instance.dump_files = dump_files
 
-            worker_result = merge_coordinator.AnalysisWorkerResult(
-                analysis_name=analysis_name,
-                status="success",
-                display_html=analysis_name in analyses_to_run,
-                html_fragment=html_string,
-                conclusions=[],
-                table_specs=[],
-                merge_intents=intent_collector.get_intents(),
-                diagnostics=[],
-            )
-            coordinator.add_analysis_result(analysis_name,
-                                            worker_result.to_envelope())
+                # Set display_html flag for the analysis_instance
+                analysis_instance.set_display_html(
+                    analysis_name in analyses_to_run)
+
+                introspection_proj.optional_analyses.append(analysis_instance)
+
+                # Process analysis in serial mode (worker count = 1)
+                intent_collector = merge_intents.MergeIntentCollector()
+                with merge_intents.merge_intent_context(intent_collector):
+                    html_string = analysis_instance.analysis_func(
+                        table_of_contents,
+                        tables,
+                        introspection_proj.proj_profile,
+                        introspection_proj.profiles,
+                        basefolder,
+                        coverage_url,
+                        conclusions,
+                        out_dir,
+                    )
+
+                worker_result = merge_coordinator.AnalysisWorkerResult(
+                    analysis_name=analysis_name,
+                    status="success",
+                    display_html=analysis_name in analyses_to_run,
+                    html_fragment=html_string,
+                    conclusions=[],
+                    table_specs=[],
+                    merge_intents=intent_collector.get_intents(),
+                    diagnostics=[],
+                )
+                coordinator.add_analysis_result(analysis_name,
+                                                worker_result.to_envelope())
 
     success, merged = coordinator.merge_results()
     if not success:

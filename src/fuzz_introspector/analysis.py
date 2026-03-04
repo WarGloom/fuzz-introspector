@@ -16,6 +16,7 @@
 import abc
 import bisect
 import concurrent.futures
+import contextlib
 import json
 import logging
 import os
@@ -134,9 +135,39 @@ _NATIVE_PLUGIN_REQUIRES_TARGET_LANG: frozenset[str] = frozenset({
     "sink_coverage_analysis",
 })
 
+_NATIVE_PLUGIN_REQUEST_SCOPE: tuple[str, ...] = tuple()
+
 
 def _normalize_plugin_names(plugin_names: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     return tuple(sorted(set(plugin_names)))
+
+
+def get_native_plugin_keys_for_analyses(
+    analysis_names: list[str] | tuple[str, ...],
+) -> tuple[str, ...]:
+    """Map requested analysis names to native plugin keys."""
+    native_plugin_keys = []
+    for analysis_name in analysis_names:
+        plugin_key = _PYTHON_NAME_TO_NATIVE_KEY.get(analysis_name)
+        if plugin_key is not None:
+            native_plugin_keys.append(plugin_key)
+    return _normalize_plugin_names(native_plugin_keys)
+
+
+def get_native_plugin_request_scope() -> tuple[str, ...]:
+    return _NATIVE_PLUGIN_REQUEST_SCOPE
+
+
+@contextlib.contextmanager
+def native_plugin_request_scope(plugin_names: list[str] | tuple[str, ...]):
+    """Set process-local coalescing scope for native plugin dispatch."""
+    global _NATIVE_PLUGIN_REQUEST_SCOPE
+    previous_scope = _NATIVE_PLUGIN_REQUEST_SCOPE
+    _NATIVE_PLUGIN_REQUEST_SCOPE = _normalize_plugin_names(plugin_names)
+    try:
+        yield
+    finally:
+        _NATIVE_PLUGIN_REQUEST_SCOPE = previous_scope
 
 
 def _serialize_project_for_native_plugins(
@@ -411,6 +442,23 @@ class NativePluginProxy:
         if cached_results is not None:
             return cached_results
 
+        dispatch_plugin_names = normalized_plugin_names
+        scoped_plugin_names = get_native_plugin_request_scope()
+        if (len(scoped_plugin_names) > len(normalized_plugin_names)
+                and set(normalized_plugin_names).issubset(scoped_plugin_names)):
+            dispatch_plugin_names = scoped_plugin_names
+
+            cached_results = self._get_cached_plugin_results(
+                proj_profile_obj, profiles_list, dispatch_plugin_names)
+            if cached_results is not None:
+                requested_results = self._get_cached_plugin_results(
+                    proj_profile_obj,
+                    profiles_list,
+                    normalized_plugin_names,
+                )
+                if requested_results is not None:
+                    return requested_results
+
         native_bin = self.find_binary()
         if not native_bin:
             logger.warning(
@@ -424,7 +472,7 @@ class NativePluginProxy:
             native_bin,
             proj_profile_obj,
             profiles_list,
-            normalized_plugin_names,
+            dispatch_plugin_names,
         )
         if not results:
             return {}
@@ -432,7 +480,7 @@ class NativePluginProxy:
         self._cache_results(
             proj_profile_obj,
             profiles_list,
-            normalized_plugin_names,
+            dispatch_plugin_names,
             results,
         )
 
