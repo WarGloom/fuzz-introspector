@@ -1,11 +1,13 @@
 name: Unit tests
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - 'frontends/**'
       - 'src/**'
       - 'test/**'
+      - 'tools/**'
       - '.github/workflows/testing.yml'
   push:
     branches:
@@ -14,6 +16,7 @@ on:
       - 'frontends/**'
       - 'src/**'
       - 'test/**'
+      - 'tools/**'
       - '.github/workflows/testing.yml'
 permissions: read-all
 jobs:

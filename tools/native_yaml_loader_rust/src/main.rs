@@ -200,13 +200,7 @@ fn handle_profile_batch_mode(paths: &[JsonValue]) -> Result<(), String> {
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let loaded: Vec<JsonValue> = string_paths
-        .par_iter()
-        .map(|path| match load_yaml(path) {
-            Ok(parsed) => parsed,
-            Err(_) => JsonValue::Null,
-        })
-        .collect();
+    let loaded = load_profile_batch_paths(&string_paths);
 
     let mut stdout = io::stdout().lock();
     let out = serde_json::json!({"profiles": loaded});
@@ -215,6 +209,26 @@ fn handle_profile_batch_mode(paths: &[JsonValue]) -> Result<(), String> {
         .write_all(b"\n")
         .map_err(|err| format!("stdout write error: {err}"))?;
     Ok(())
+}
+
+fn load_profile_batch_paths(paths: &[&str]) -> Vec<JsonValue> {
+    paths
+        .par_iter()
+        .map(|path| {
+            if path.trim().is_empty() {
+                eprintln!("failed to parse profile path: empty path entry");
+                return JsonValue::Null;
+            }
+
+            match load_yaml(path) {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    eprintln!("failed to parse profile {path}: {err}");
+                    JsonValue::Null
+                }
+            }
+        })
+        .collect()
 }
 
 fn handle_debug_mode(paths: &[JsonValue]) -> Result<(), String> {
@@ -291,7 +305,7 @@ fn run() -> Result<i32, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_pyyaml_int, parse_pyyaml_scalar};
+    use super::{load_profile_batch_paths, parse_pyyaml_int, parse_pyyaml_scalar};
     use serde_json::json;
 
     #[test]
@@ -317,6 +331,12 @@ mod tests {
             Some(json!(18446744073709551615u64))
         );
         assert_eq!(parse_pyyaml_int("09"), None);
+    }
+
+    #[test]
+    fn profile_batch_treats_whitespace_paths_as_null() {
+        let loaded = load_profile_batch_paths(&[" "]);
+        assert_eq!(loaded, vec![json!(null)]);
     }
 }
 

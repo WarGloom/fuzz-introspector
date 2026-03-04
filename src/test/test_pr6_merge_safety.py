@@ -29,7 +29,6 @@ from fuzz_introspector.html_report import create_section_optional_analyses
 
 
 class StubAnalysisBase(analysis.AnalysisInterface):
-
     def get_json_string_result(self) -> str:
         return self.json_string_result
 
@@ -55,8 +54,9 @@ class StubParallelFirst(StubAnalysisBase):
         conclusions: List[html_helpers.HTMLConclusion],
         out_dir: str,
     ) -> str:
-        table_of_contents.add_entry("Parallel First", "parallel-first",
-                                    html_helpers.HTML_HEADING.H2)
+        table_of_contents.add_entry(
+            "Parallel First", "parallel-first", html_helpers.HTML_HEADING.H2
+        )
         tables.append("table-parallel-first")
         return "<div>Parallel First</div>"
 
@@ -79,8 +79,9 @@ class StubSerialMiddle(StubAnalysisBase):
         conclusions: List[html_helpers.HTMLConclusion],
         out_dir: str,
     ) -> str:
-        table_of_contents.add_entry("Serial Middle", "serial-middle",
-                                    html_helpers.HTML_HEADING.H2)
+        table_of_contents.add_entry(
+            "Serial Middle", "serial-middle", html_helpers.HTML_HEADING.H2
+        )
         tables.append("table-serial-middle")
         return "<div>Serial Middle</div>"
 
@@ -103,20 +104,18 @@ class StubParallelLast(StubAnalysisBase):
         conclusions: List[html_helpers.HTMLConclusion],
         out_dir: str,
     ) -> str:
-        table_of_contents.add_entry("Parallel Last", "parallel-last",
-                                    html_helpers.HTML_HEADING.H2)
+        table_of_contents.add_entry(
+            "Parallel Last", "parallel-last", html_helpers.HTML_HEADING.H2
+        )
         tables.append("table-parallel-last")
         return "<div>Parallel Last</div>"
 
 
 def _build_project(tmp_path: Path) -> analysis.IntrospectionProject:
-    proj = analysis.IntrospectionProject(constants.LANGUAGES.CPP,
-                                         str(tmp_path), "")
+    proj = analysis.IntrospectionProject(constants.LANGUAGES.CPP, str(tmp_path), "")
     proj.proj_profile = {
         "project_name": "merge-safety-test",
-        "fuzzers": [{
-            "id": "fuzzer1"
-        }],
+        "fuzzers": [{"id": "fuzzer1"}],
     }
     proj.profiles = {}
     proj.optional_analyses = []
@@ -128,11 +127,12 @@ def _add_worker_result(
     analysis_name: str,
     merge_intents: List[Dict[str, Any]],
     table_ids: List[str] | None = None,
+    display_html: bool = False,
 ) -> None:
     worker_result = merge_coordinator.AnalysisWorkerResult(
         analysis_name=analysis_name,
         status="success",
-        display_html=False,
+        display_html=display_html,
         merge_intents=merge_intents,
     )
     envelope = worker_result.to_envelope()
@@ -161,12 +161,9 @@ def test_pr6_toc_table_canonical_order_serial_parallel_mix(
         analyses_registry,
         "analysis_parallel_compatibility",
         {
-            StubParallelFirst:
-            analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
-            StubSerialMiddle:
-            analyses_registry.PARALLEL_COMPATIBILITY_SERIAL_ONLY,
-            StubParallelLast:
-            analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+            StubParallelFirst: analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+            StubSerialMiddle: analyses_registry.PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+            StubParallelLast: analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
         },
     )
 
@@ -195,7 +192,8 @@ def test_pr6_toc_table_canonical_order_serial_parallel_mix(
     )
 
     toc_titles = [
-        entry.entry_title for entry in table_of_contents.entries
+        entry.entry_title
+        for entry in table_of_contents.entries
         if entry.entry_title != "Analyses and suggestions"
     ]
     assert toc_titles == [
@@ -211,7 +209,8 @@ def test_pr6_toc_table_canonical_order_serial_parallel_mix(
 
 
 def test_pr6_table_id_uniqueness_across_parallel_analyses(
-    tmp_path: Path, ) -> None:
+    tmp_path: Path,
+) -> None:
     out_dir = tmp_path / "merge"
     out_dir.mkdir(parents=True, exist_ok=True)
     coordinator = merge_coordinator.MergeCoordinator(str(out_dir))
@@ -221,24 +220,72 @@ def test_pr6_table_id_uniqueness_across_parallel_analyses(
         "StubParallelFirst",
         [],
         table_ids=["dup-table"],
+        display_html=True,
     )
     _add_worker_result(
         coordinator,
         "StubParallelLast",
         [],
         table_ids=["dup-table"],
+        display_html=True,
     )
 
     success, merged = coordinator.merge_results()
     assert not success, "Duplicate table IDs must fail merge"
     assert any(
         conflict.get("type") == "table_id_conflict"
-        and conflict.get("table_id") == "dup-table" for conflict in merged.get(
-            "conflicts", [])), "Duplicate table ID conflict must be reported"
+        and conflict.get("table_id") == "dup-table"
+        for conflict in merged.get("conflicts", [])
+    ), "Duplicate table ID conflict must be reported"
+
+
+def test_pr6_hidden_analysis_ui_fields_not_merged(tmp_path: Path) -> None:
+    out_dir = tmp_path / "ui-merge-guard"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    coordinator = merge_coordinator.MergeCoordinator(str(out_dir))
+
+    hidden_intent = merge_intents.create_json_upsert_intent(
+        "analyses.HiddenAnalysis.key",
+        "value",
+    )
+    hidden_result = merge_coordinator.AnalysisWorkerResult(
+        analysis_name="HiddenAnalysis",
+        status="success",
+        display_html=False,
+        html_fragment="<div>hidden</div>",
+        conclusions=[{"severity": 1, "title": "hidden", "description": "hidden"}],
+        merge_intents=[hidden_intent],
+    )
+    hidden_envelope = hidden_result.to_envelope()
+    hidden_envelope["toc_entries"] = [
+        {
+            "entry_title": "Hidden",
+            "href_link": "hidden",
+            "heading_type": html_helpers.HTML_HEADING.H2.value,
+        }
+    ]
+    hidden_envelope["table_ids"] = ["hidden-table"]
+    coordinator.add_analysis_result("HiddenAnalysis", hidden_envelope)
+
+    success, merged = coordinator.merge_results()
+
+    assert success
+    assert "html_fragments" not in merged
+    assert "conclusions" not in merged
+    assert "toc_entries" not in merged
+    assert "table_ids" not in merged
+    assert coordinator.merged_json_report == {
+        "analyses": {
+            "HiddenAnalysis": {
+                "key": "value",
+            }
+        }
+    }
 
 
 def test_pr6_no_partial_artifact_writes_on_merge_conflict(
-    tmp_path: Path, ) -> None:
+    tmp_path: Path,
+) -> None:
     out_dir = tmp_path / "artifacts"
     out_dir.mkdir(parents=True, exist_ok=True)
     coordinator = merge_coordinator.MergeCoordinator(str(out_dir))
@@ -262,7 +309,8 @@ def test_pr6_no_partial_artifact_writes_on_merge_conflict(
 
     artifact_path = out_dir / "reports" / "output.json"
     assert not artifact_path.exists(), (
-        "No artifact should be written when merge conflicts occur")
+        "No artifact should be written when merge conflicts occur"
+    )
 
 
 def test_pr6_content_b64_hash_verification(tmp_path: Path) -> None:
@@ -286,10 +334,11 @@ def test_pr6_content_b64_hash_verification(tmp_path: Path) -> None:
     assert any(
         conflict.get("type") == "artifact_content_hash_mismatch"
         and conflict.get("relative_path") == "reports/hash.json"
-        for conflict in merged.get(
-            "conflicts", [])), "Content hash mismatch must be reported"
+        for conflict in merged.get("conflicts", [])
+    ), "Content hash mismatch must be reported"
     assert not (out_dir / "reports" / "hash.json").exists(), (
-        "No artifact should be written on hash mismatch")
+        "No artifact should be written on hash mismatch"
+    )
 
 
 def test_pr6_symlink_escape_path_safety_optional(tmp_path: Path) -> None:
@@ -317,7 +366,8 @@ def test_pr6_symlink_escape_path_safety_optional(tmp_path: Path) -> None:
     assert any(
         conflict.get("type") == "artifact_path_unsafe"
         and conflict.get("relative_path") == "escape/evil.txt"
-        for conflict in merged.get(
-            "conflicts", [])), "Symlink escape must be reported as unsafe path"
+        for conflict in merged.get("conflicts", [])
+    ), "Symlink escape must be reported as unsafe path"
     assert not (outside_dir / "evil.txt").exists(), (
-        "Symlink escape must not write outside base directory")
+        "Symlink escape must not write outside base directory"
+    )

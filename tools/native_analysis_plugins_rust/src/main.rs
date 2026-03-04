@@ -32,7 +32,7 @@ use std::time::Instant;
 // ── Function entry deserialization ────────────────────────────────────────────
 
 /// Deserialised representation of one function from the project_data payload.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct FunctionEntry {
     name: String,
     hitcount: u64,
@@ -48,10 +48,41 @@ struct FunctionEntry {
     /// `effective_reached_count()` instead of reading this field directly.
     functions_reached_count: usize,
     reached_by_fuzzers: Vec<String>,
-    #[allow(dead_code)] // deserialized from payload; available for future plugin use
     runtime_coverage_percent: f64,
+    is_accessible: bool,
+    is_jvm_library: bool,
+    is_enum: bool,
     source_file: String,
     incoming_references: Vec<String>,
+}
+
+impl Default for FunctionEntry {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            hitcount: 0,
+            arg_count: 0,
+            cyclomatic_complexity: 0,
+            total_cyclomatic_complexity: 0,
+            new_unreached_complexity: 0,
+            bb_count: 0,
+            functions_reached_len: 0,
+            functions_reached_count: 0,
+            reached_by_fuzzers: Vec::new(),
+            runtime_coverage_percent: 0.0,
+            is_accessible: true, // Match Python: getattr(fp, "is_accessible", True)
+            is_jvm_library: false,
+            is_enum: false,
+            source_file: String::new(),
+            incoming_references: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct FunctionTableEntry {
+    name: String,
+    total_cyclomatic_complexity: i64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -66,6 +97,9 @@ struct FunctionFieldMask {
     functions_reached_len_or_count: bool,
     reached_by_fuzzers: bool,
     runtime_coverage_percent: bool,
+    is_accessible: bool,
+    is_jvm_library: bool,
+    is_enum: bool,
     source_file: bool,
     incoming_references: bool,
 }
@@ -106,6 +140,14 @@ fn required_function_fields(plugins: &[String]) -> FunctionFieldMask {
                 fields.name = true;
                 fields.total_cyclomatic_complexity = true;
             }
+            "far_reach_low_coverage_analysis" => {
+                fields.name = true;
+                fields.cyclomatic_complexity = true;
+                fields.runtime_coverage_percent = true;
+                fields.is_accessible = true;
+                fields.is_jvm_library = true;
+                fields.is_enum = true;
+            }
             _ => {}
         }
     }
@@ -123,6 +165,10 @@ fn parse_i64_field(obj: &serde_json::Map<String, JsonValue>, key: &str) -> i64 {
 
 fn parse_f64_field(obj: &serde_json::Map<String, JsonValue>, key: &str) -> f64 {
     obj.get(key).and_then(JsonValue::as_f64).unwrap_or(0.0)
+}
+
+fn parse_bool_field(obj: &serde_json::Map<String, JsonValue>, key: &str) -> bool {
+    obj.get(key).and_then(JsonValue::as_bool).unwrap_or(false)
 }
 
 fn parse_string_field(obj: &serde_json::Map<String, JsonValue>, key: &str) -> String {
@@ -208,6 +254,17 @@ fn parse_functions(project_data: &JsonValue, requested_plugins: &[String]) -> Ve
                             entry.runtime_coverage_percent =
                                 parse_f64_field(obj, "runtime_coverage_percent");
                         }
+                        if fields.is_accessible {
+                            entry.is_accessible = obj.get("is_accessible")
+                                .and_then(JsonValue::as_bool)
+                                .unwrap_or(true);  // Match Python: getattr(fp, "is_accessible", True)
+                        }
+                        if fields.is_jvm_library {
+                            entry.is_jvm_library = parse_bool_field(obj, "is_jvm_library");
+                        }
+                        if fields.is_enum {
+                            entry.is_enum = parse_bool_field(obj, "is_enum");
+                        }
                         if fields.source_file {
                             entry.source_file = parse_string_field(obj, "source_file");
                         }
@@ -223,17 +280,84 @@ fn parse_functions(project_data: &JsonValue, requested_plugins: &[String]) -> Ve
         .unwrap_or_default()
 }
 
+fn parse_function_table_entries(project_data: &JsonValue) -> Vec<FunctionTableEntry> {
+    project_data
+        .get("functions")
+        .and_then(JsonValue::as_array)
+        .map(|functions| {
+            functions
+                .iter()
+                .map(|function_value| {
+                    let mut entry = FunctionTableEntry::default();
+                    if let Some(obj) = function_value.as_object() {
+                        entry.name = parse_string_field(obj, "name");
+                        entry.total_cyclomatic_complexity =
+                            parse_i64_field(obj, "total_cyclomatic_complexity");
+                    }
+                    entry
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn plugin_requires_full_functions_parse(plugin: &str) -> bool {
+    matches!(
+        plugin,
+        "optimal_targets"
+            | "runtime_coverage_analysis"
+            | "calltree_analysis"
+            | "sink_coverage_analysis"
+            | "far_reach_low_coverage_analysis"
+    )
+}
+
+fn derive_function_table_entries_from_functions(
+    functions: &[FunctionEntry],
+) -> Vec<FunctionTableEntry> {
+    functions
+        .iter()
+        .map(|function| FunctionTableEntry {
+            name: function.name.clone(),
+            total_cyclomatic_complexity: function.total_cyclomatic_complexity,
+        })
+        .collect()
+}
+
 /// Request-scoped parsed data shared by all plugin handlers.
 #[derive(Debug)]
 struct ParsedProjectData {
     functions: Vec<FunctionEntry>,
+    function_table_entries: Vec<FunctionTableEntry>,
     target_lang: Option<String>,
 }
 
 /// Parse the subset of `project_data` used by Rust-native plugins once.
 fn parse_project_data(project_data: &JsonValue, requested_plugins: &[String]) -> ParsedProjectData {
+    let function_table_requested = requested_plugins.iter().any(|p| p == "function_table");
+    let full_functions_requested = requested_plugins
+        .iter()
+        .any(|p| plugin_requires_full_functions_parse(p));
+
+    let functions = if full_functions_requested {
+        parse_functions(project_data, requested_plugins)
+    } else {
+        Vec::new()
+    };
+
+    let function_table_entries = if function_table_requested {
+        if full_functions_requested {
+            derive_function_table_entries_from_functions(&functions)
+        } else {
+            parse_function_table_entries(project_data)
+        }
+    } else {
+        Vec::new()
+    };
+
     ParsedProjectData {
-        functions: parse_functions(project_data, requested_plugins),
+        functions,
+        function_table_entries,
         target_lang: project_data
             .get("target_lang")
             .and_then(JsonValue::as_str)
@@ -987,12 +1111,12 @@ fn run_sink_coverage_analysis(parsed_data: &ParsedProjectData) -> PluginResult {
 fn run_function_table(parsed_data: &ParsedProjectData) -> PluginResult {
     log::debug!("[function_table] running");
 
-    let functions = &parsed_data.functions;
-    let total = functions.len();
+    let function_table_entries = &parsed_data.function_table_entries;
+    let total = function_table_entries.len();
 
     // Sort by total_cyclomatic_complexity descending; stable to keep original
     // insertion order for ties.
-    let mut sorted: Vec<&FunctionEntry> = functions.iter().collect();
+    let mut sorted: Vec<&FunctionTableEntry> = function_table_entries.iter().collect();
     sorted.sort_by(|a, b| b.total_cyclomatic_complexity.cmp(&a.total_cyclomatic_complexity));
 
     let top_complexity = sorted
@@ -1016,6 +1140,62 @@ fn run_function_table(parsed_data: &ParsedProjectData) -> PluginResult {
     PluginResult { tables, summary }
 }
 
+/// `far_reach_low_coverage_analysis`: select candidate functions with low
+/// runtime coverage and high structural complexity.
+///
+/// This ports `_get_functions_of_interest()` from
+/// `far_reach_low_coverage_analyser.py` except for `min_complexity`, which is
+/// a runtime CLI flag handled on the Python side to preserve parity.
+fn run_far_reach_low_coverage_analysis(parsed_data: &ParsedProjectData) -> PluginResult {
+    log::debug!("[far_reach_low_coverage_analysis] running");
+
+    let mut candidates: Vec<(usize, &FunctionEntry)> = parsed_data
+        .functions
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| {
+            if !f.is_accessible || f.is_jvm_library || f.is_enum {
+                return false;
+            }
+            if f.runtime_coverage_percent > 20.0 {
+                return false;
+            }
+            true
+        })
+        .collect();
+
+    // Match Python order from `_get_functions_of_interest`:
+    //   1) cyclomatic_complexity descending
+    //   2) runtime coverage ascending
+    // Keep original input order for total ties.
+    candidates.sort_by(|(idx_a, a), (idx_b, b)| {
+        b.cyclomatic_complexity
+            .cmp(&a.cyclomatic_complexity)
+            .then_with(|| {
+                a.runtime_coverage_percent
+                    .total_cmp(&b.runtime_coverage_percent)
+            })
+            .then_with(|| idx_a.cmp(idx_b))
+    });
+
+    let rows: Vec<JsonValue> = candidates
+        .into_iter()
+        .map(|(_, f)| {
+            serde_json::json!({
+                "function_name": f.name,
+            })
+        })
+        .collect();
+
+    let summary = format!(
+        "far_reach_low_coverage_analysis: {} candidate(s)",
+        rows.len()
+    );
+    let mut tables = HashMap::new();
+    tables.insert("far_reach_candidates".to_string(), rows);
+    PluginResult { tables, summary }
+}
+
 /// Dispatcher: route a plugin name to its handler function.
 ///
 /// Returns `None` for unknown plugin names so the caller can log and skip.
@@ -1026,6 +1206,9 @@ fn dispatch_plugin(name: &str, parsed_data: &ParsedProjectData) -> Option<Plugin
         "calltree_analysis" => Some(run_calltree_analysis(parsed_data)),
         "sink_coverage_analysis" => Some(run_sink_coverage_analysis(parsed_data)),
         "function_table" => Some(run_function_table(parsed_data)),
+        "far_reach_low_coverage_analysis" => {
+            Some(run_far_reach_low_coverage_analysis(parsed_data))
+        }
         _ => {
             log::warn!("unknown plugin requested: {:?}", name);
             None
@@ -1221,6 +1404,7 @@ mod tests {
             "calltree_analysis".to_string(),
             "sink_coverage_analysis".to_string(),
             "function_table".to_string(),
+            "far_reach_low_coverage_analysis".to_string(),
         ];
         parse_project_data(data, &plugins)
     }
@@ -1256,6 +1440,13 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_far_reach_low_coverage_analysis_returns_some() {
+        let parsed_data = parsed(&json!({}));
+        let result = dispatch_plugin("far_reach_low_coverage_analysis", &parsed_data);
+        assert!(result.is_some());
+    }
+
+    #[test]
     fn function_table_returns_compact_ordered_names() {
         let data = sample_project_data();
         let parsed_data = parsed(&data);
@@ -1266,6 +1457,105 @@ mod tests {
         assert_eq!(names[0], "foo");
         assert_eq!(names[1], "bar");
         assert_eq!(names[2], "main");
+    }
+
+    #[test]
+    fn parse_project_data_function_table_only_populates_compact_entries() {
+        let data = json!({
+            "functions": [
+                {
+                    "name": "foo",
+                    "total_cyclomatic_complexity": 80
+                },
+                {
+                    "name": "bar"
+                }
+            ]
+        });
+        let plugins = vec!["function_table".to_string()];
+        let parsed_data = parse_project_data(&data, &plugins);
+
+        assert!(parsed_data.functions.is_empty());
+        assert_eq!(parsed_data.function_table_entries.len(), 2);
+        assert_eq!(parsed_data.function_table_entries[0].name, "foo");
+        assert_eq!(
+            parsed_data.function_table_entries[0].total_cyclomatic_complexity,
+            80
+        );
+        assert_eq!(parsed_data.function_table_entries[1].name, "bar");
+        assert_eq!(
+            parsed_data.function_table_entries[1].total_cyclomatic_complexity,
+            0
+        );
+    }
+
+    #[test]
+    fn parse_project_data_unknown_plus_function_table_does_not_parse_full_functions() {
+        let data = json!({
+            "functions": [
+                {
+                    "name": "foo",
+                    "total_cyclomatic_complexity": 80,
+                    "hitcount": "malformed"
+                },
+                {
+                    "name": "bar",
+                    "total_cyclomatic_complexity": 30
+                }
+            ]
+        });
+        let plugins = vec!["function_table".to_string(), "unknown_plugin".to_string()];
+        let parsed_data = parse_project_data(&data, &plugins);
+
+        assert!(parsed_data.functions.is_empty());
+        assert_eq!(parsed_data.function_table_entries.len(), 2);
+        assert_eq!(parsed_data.function_table_entries[0].name, "foo");
+        assert_eq!(
+            parsed_data.function_table_entries[0].total_cyclomatic_complexity,
+            80
+        );
+        assert_eq!(parsed_data.function_table_entries[1].name, "bar");
+    }
+
+    #[test]
+    fn parse_project_data_mixed_request_derives_function_table_from_functions() {
+        let data = json!({
+            "functions": [
+                {
+                    "name": "foo",
+                    "hitcount": 0,
+                    "arg_count": 2,
+                    "cyclomatic_complexity": 25,
+                    "total_cyclomatic_complexity": 80,
+                    "new_unreached_complexity": 60,
+                    "bb_count": 5,
+                    "functions_reached": ["bar"],
+                    "source_file": "foo.cpp"
+                },
+                {
+                    "name": "bar",
+                    "hitcount": 1,
+                    "arg_count": 1,
+                    "cyclomatic_complexity": 10,
+                    "total_cyclomatic_complexity": 30,
+                    "new_unreached_complexity": 25,
+                    "bb_count": 3,
+                    "functions_reached": [],
+                    "source_file": "bar.cpp"
+                }
+            ]
+        });
+        let plugins = vec!["optimal_targets".to_string(), "function_table".to_string()];
+        let parsed_data = parse_project_data(&data, &plugins);
+
+        assert_eq!(parsed_data.functions.len(), 2);
+        assert_eq!(parsed_data.function_table_entries.len(), 2);
+
+        let result = run_function_table(&parsed_data);
+        let names = &result.tables["ordered_function_names"];
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[0], "foo");
+        assert_eq!(names[1], "bar");
     }
 
     // ── optimal_targets tests ────────────────────────────────────────────────
@@ -1442,6 +1732,86 @@ mod tests {
             result.tables["runtime_coverage"].is_empty(),
             "nuc<=20 must be excluded"
         );
+    }
+
+    // ── far_reach_low_coverage_analysis tests ───────────────────────────────
+
+    #[test]
+    fn far_reach_low_coverage_has_expected_table_key() {
+        let result = run_far_reach_low_coverage_analysis(&parsed(&json!({})));
+        assert!(result.tables.contains_key("far_reach_candidates"));
+        assert!(!result.summary.is_empty());
+    }
+
+    #[test]
+    fn far_reach_low_coverage_filters_and_sorts_like_python_path() {
+        let data = json!({
+            "functions": [
+                {
+                    "name": "skip_high_cov",
+                    "cyclomatic_complexity": 100,
+                    "runtime_coverage_percent": 70.0,
+                    "is_accessible": true,
+                    "is_jvm_library": false,
+                    "is_enum": false
+                },
+                {
+                    "name": "skip_enum",
+                    "cyclomatic_complexity": 50,
+                    "runtime_coverage_percent": 0.0,
+                    "is_accessible": true,
+                    "is_jvm_library": false,
+                    "is_enum": true
+                },
+                {
+                    "name": "tie_cov_second",
+                    "cyclomatic_complexity": 30,
+                    "runtime_coverage_percent": 10.0,
+                    "is_accessible": true,
+                    "is_jvm_library": false,
+                    "is_enum": false
+                },
+                {
+                    "name": "highest_cc",
+                    "cyclomatic_complexity": 70,
+                    "runtime_coverage_percent": 15.0,
+                    "is_accessible": true,
+                    "is_jvm_library": false,
+                    "is_enum": false
+                },
+                {
+                    "name": "tie_cov_first",
+                    "cyclomatic_complexity": 30,
+                    "runtime_coverage_percent": 5.0,
+                    "is_accessible": true,
+                    "is_jvm_library": false,
+                    "is_enum": false
+                }
+            ]
+        });
+
+        let result = run_far_reach_low_coverage_analysis(&parsed(&data));
+        let rows = &result.tables["far_reach_candidates"];
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["function_name"], "highest_cc");
+        assert_eq!(rows[1]["function_name"], "tie_cov_first");
+        assert_eq!(rows[2]["function_name"], "tie_cov_second");
+    }
+
+    #[test]
+    fn far_reach_missing_is_accessible_defaults_to_accessible() {
+        let data = json!({
+            "functions": [{
+                "name": "no_accessible_field",
+                "cyclomatic_complexity": 50,
+                "runtime_coverage_percent": 5.0,
+                "is_jvm_library": false,
+                "is_enum": false
+            }]
+        });
+        let result = run_far_reach_low_coverage_analysis(&parsed(&data));
+        let rows = &result.tables["far_reach_candidates"];
+        assert_eq!(rows.len(), 1, "missing is_accessible should default to true");
     }
 
     // ── calltree_analysis tests ───────────────────────────────────────────────

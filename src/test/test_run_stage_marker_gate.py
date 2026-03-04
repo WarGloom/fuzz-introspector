@@ -55,8 +55,38 @@ class TestRunStageMarkerGate(unittest.TestCase):
         self.assertIn("--stages", command)
         self.assertIn("--max-regression-percent", command)
         self.assertIn("--output-json", command)
-        self.assertIn("optional_analyses,report_generation", command)
+        self.assertIn(
+            "optional_analyses,report_generation,type_correlation",
+            command,
+        )
         self.assertIn("10.0", command)
+
+    def test_main_uses_default_stages_when_not_specified(self):
+        argv = [
+            "run_stage_marker_gate.py",
+            "--baseline-log",
+            "baseline.log",
+            "--candidate-log",
+            "candidate.log",
+            "--output-json",
+            "result.json",
+        ]
+        completed = subprocess.CompletedProcess(args=["x"], returncode=0)
+
+        with mock.patch.object(sys, "argv", argv):
+            with mock.patch.object(
+                run_stage_marker_gate.subprocess,
+                "run",
+                return_value=completed,
+            ) as run_mock:
+                result = run_stage_marker_gate.main()
+
+        self.assertEqual(result, 0)
+        command = run_mock.call_args.args[0]
+        self.assertEqual(
+            command[command.index("--stages") + 1],
+            "optional_analyses,report_generation,type_correlation",
+        )
 
     def test_main_returns_validator_exit_code(self):
         argv = [

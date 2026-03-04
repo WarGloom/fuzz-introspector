@@ -144,10 +144,27 @@ def read_fuzzer_data_file_to_profile(
         logger.info("CFG file not valid.")
         return None
 
-    profile = fuzzer_profile.FuzzerProfile(cfg_file,
-                                           data_dict_yaml,
-                                           language,
-                                           cfg_content=cfg_content)
+    try:
+        profile = fuzzer_profile.FuzzerProfile(cfg_file,
+                                               data_dict_yaml,
+                                               language,
+                                               cfg_content=cfg_content)
+    except Exception:
+        if preloaded_yaml is None:
+            raise
+
+        logger.warning(
+            "Failed to construct profile from preloaded YAML for %s; retrying from file",
+            cfg_file,
+        )
+        data_dict_yaml = _load_profile_yaml(yaml_path)
+        if data_dict_yaml is None or not isinstance(data_dict_yaml, dict):
+            raise
+
+        profile = fuzzer_profile.FuzzerProfile(cfg_file,
+                                               data_dict_yaml,
+                                               language,
+                                               cfg_content=cfg_content)
 
     if not profile.has_entry_point():
         logger.info("Found no entrypoints")

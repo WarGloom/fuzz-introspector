@@ -27,6 +27,7 @@ from fuzz_introspector import cli
 from fuzz_introspector import commands
 from fuzz_introspector import html_report
 from fuzz_introspector.analyses import calltree_analysis as ct_module
+from fuzz_introspector.analyses import far_reach_low_coverage_analyser as frlc_module
 from fuzz_introspector.analyses import sinks_analyser as sinks_module
 from fuzz_introspector.analyses import optimal_targets as ot_module
 from fuzz_introspector.analyses import runtime_coverage_analysis as rca_module
@@ -34,7 +35,8 @@ from fuzz_introspector.analyses import runtime_coverage_analysis as rca_module
 
 def test_all_registered_analysis_plugins_have_unique_names() -> None:
     plugin_names = [
-        analysis_cls.get_name() for analysis_cls in analysis.get_all_analyses()
+        analysis_cls.get_name()
+        for analysis_cls in analysis.get_all_analyses()
     ]
 
     assert plugin_names
@@ -49,6 +51,7 @@ def test_enable_all_analyses_selects_entire_plugin_registry(
     captured_analyses: list[str] = []
 
     class FakeIntrospectionProject:
+
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             del args, kwargs
 
@@ -59,12 +62,10 @@ def test_enable_all_analyses_selects_entire_plugin_registry(
         del kwargs
         captured_analyses.extend(args[1])
 
-    monkeypatch.setattr(
-        commands.analysis, "IntrospectionProject", FakeIntrospectionProject
-    )
-    monkeypatch.setattr(
-        commands.html_report, "create_html_report", fake_create_html_report
-    )
+    monkeypatch.setattr(commands.analysis, "IntrospectionProject",
+                        FakeIntrospectionProject)
+    monkeypatch.setattr(commands.html_report, "create_html_report",
+                        fake_create_html_report)
 
     exit_code, _ = commands.run_analysis_on_dir(
         target_folder=str(tmp_path),
@@ -81,7 +82,8 @@ def test_enable_all_analyses_selects_entire_plugin_registry(
     )
 
     expected_names = {
-        analysis_cls.get_name() for analysis_cls in analysis.get_all_analyses()
+        analysis_cls.get_name()
+        for analysis_cls in analysis.get_all_analyses()
     }
 
     assert exit_code == 0
@@ -100,6 +102,7 @@ def test_run_analysis_on_dir_skip_html_report_skips_renderer(
     monkeypatch,
     tmp_path,
 ) -> None:
+
     class FakeIntrospectionProject:
         load_data_files_calls = 0
 
@@ -111,9 +114,8 @@ def test_run_analysis_on_dir_skip_html_report_skips_renderer(
             self.__class__.load_data_files_calls += 1
 
     html_calls = []
-    monkeypatch.setattr(
-        commands.analysis, "IntrospectionProject", FakeIntrospectionProject
-    )
+    monkeypatch.setattr(commands.analysis, "IntrospectionProject",
+                        FakeIntrospectionProject)
     monkeypatch.setattr(
         commands.html_report,
         "create_html_report",
@@ -149,11 +151,15 @@ def test_cli_main_report_forwards_skip_html_report(monkeypatch) -> None:
         return 0, {}
 
     monkeypatch.setattr(cli, "set_logging_level", lambda: None)
-    monkeypatch.setattr(cli.commands, "run_analysis_on_dir", _fake_run_analysis_on_dir)
+    monkeypatch.setattr(cli.commands, "run_analysis_on_dir",
+                        _fake_run_analysis_on_dir)
     monkeypatch.setattr(
         cli.sys,
         "argv",
-        ["fuzz-introspector", "report", "--target-dir", "/tmp", "--skip-html-report"],
+        [
+            "fuzz-introspector", "report", "--target-dir", "/tmp",
+            "--skip-html-report"
+        ],
     )
 
     with pytest.raises(SystemExit) as exc_info:
@@ -186,13 +192,19 @@ def _make_native_response(plugin_names, status="success"):
             "tables": {},
             "summary": f"{name} stub",
         }
-    return {"schema_version": 1, "status": status, "results": results, "elapsed_ms": 5}
+    return {
+        "schema_version": 1,
+        "status": status,
+        "results": results,
+        "elapsed_ms": 5
+    }
 
 
 # ── Test 1: FI_NATIVE_PLUGINS=rust routes to NativePluginProxy ───────────────
 
 
-def test_fi_native_plugins_rust_env_routes_to_native_proxy(monkeypatch) -> None:
+def test_fi_native_plugins_rust_env_routes_to_native_proxy(
+        monkeypatch) -> None:
     """When FI_NATIVE_PLUGINS=rust and binary exists, NativePluginProxy is invoked."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
@@ -207,14 +219,13 @@ def test_fi_native_plugins_rust_env_routes_to_native_proxy(monkeypatch) -> None:
     proxy = analysis.NativePluginProxy()
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run", return_value=fake_proc
-        ) as mock_run,
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch("fuzz_introspector.analysis.subprocess.run",
+                       return_value=fake_proc) as mock_run,
     ):
         result = proxy.run_analysis(
             _make_fake_proj_profile(),
@@ -262,7 +273,8 @@ def test_native_proxy_enabled_for_global_rust_backend(monkeypatch) -> None:
 # ── Test 2: Empty native results → Python fallback ───────────────────────────
 
 
-def test_native_proxy_empty_results_signals_python_fallback(monkeypatch) -> None:
+def test_native_proxy_empty_results_signals_python_fallback(
+        monkeypatch) -> None:
     """When the native binary returns empty results, run_analysis returns {}."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
@@ -281,12 +293,13 @@ def test_native_proxy_empty_results_signals_python_fallback(monkeypatch) -> None
     proxy = analysis.NativePluginProxy()
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch("fuzz_introspector.analysis.subprocess.run", return_value=fake_proc),
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch("fuzz_introspector.analysis.subprocess.run",
+                       return_value=fake_proc),
     ):
         result = proxy.run_analysis(
             _make_fake_proj_profile(),
@@ -315,12 +328,13 @@ def test_native_proxy_valid_results_returned_to_caller(monkeypatch) -> None:
     proxy = analysis.NativePluginProxy()
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch("fuzz_introspector.analysis.subprocess.run", return_value=fake_proc),
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch("fuzz_introspector.analysis.subprocess.run",
+                       return_value=fake_proc),
     ):
         result = proxy.run_analysis(
             _make_fake_proj_profile(),
@@ -336,19 +350,23 @@ def test_native_proxy_valid_results_returned_to_caller(monkeypatch) -> None:
 # ── Test 4: Binary missing → Python plugins run normally (no crash) ──────────
 
 
-def test_native_proxy_missing_binary_returns_empty_no_crash(monkeypatch) -> None:
+def test_native_proxy_missing_binary_returns_empty_no_crash(
+        monkeypatch) -> None:
     """When the Rust binary is not on PATH, run_analysis returns {} without crashing."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
     proxy = analysis.NativePluginProxy()
 
-    with mock.patch.object(
-        analysis.NativePluginProxy, "find_binary", return_value=None
-    ):
+    with mock.patch.object(analysis.NativePluginProxy,
+                           "find_binary",
+                           return_value=None):
         result = proxy.run_analysis(
             _make_fake_proj_profile(),
             [],
-            ["optimal_targets", "runtime_coverage_analysis", "calltree_analysis"],
+            [
+                "optimal_targets", "runtime_coverage_analysis",
+                "calltree_analysis"
+            ],
         )
 
     # No exception raised; empty dict returned so caller runs all Python plugins
@@ -367,12 +385,13 @@ def test_native_proxy_binary_nonzero_exit_returns_empty(monkeypatch) -> None:
     proxy = analysis.NativePluginProxy()
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch("fuzz_introspector.analysis.subprocess.run", return_value=fake_proc),
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch("fuzz_introspector.analysis.subprocess.run",
+                       return_value=fake_proc),
     ):
         result = proxy.run_analysis(
             _make_fake_proj_profile(),
@@ -395,12 +414,13 @@ def test_native_proxy_malformed_json_returns_empty(monkeypatch) -> None:
     proxy = analysis.NativePluginProxy()
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch("fuzz_introspector.analysis.subprocess.run", return_value=fake_proc),
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch("fuzz_introspector.analysis.subprocess.run",
+                       return_value=fake_proc),
     ):
         result = proxy.run_analysis(
             _make_fake_proj_profile(),
@@ -418,17 +438,16 @@ def test_native_proxy_timeout_returns_empty(monkeypatch) -> None:
     proxy = analysis.NativePluginProxy()
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(
-                cmd="native_analysis_plugins_rust", timeout=300
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
             ),
-        ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(
+                    cmd="native_analysis_plugins_rust", timeout=300),
+            ),
     ):
         result = proxy.run_analysis(
             _make_fake_proj_profile(),
@@ -466,22 +485,20 @@ def test_native_proxy_schema_version_in_request(monkeypatch) -> None:
         return fake_proc
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run", side_effect=_capture_run
-        ),
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch("fuzz_introspector.analysis.subprocess.run",
+                       side_effect=_capture_run),
     ):
         proxy.run_analysis(_make_fake_proj_profile(), [], ["optimal_targets"])
 
     assert captured_input, "subprocess.run was not called"
     request_payload = json.loads(captured_input[0])
-    assert (
-        request_payload["schema_version"] == analysis.NativePluginProxy.SCHEMA_VERSION
-    )
+    assert (request_payload["schema_version"] ==
+            analysis.NativePluginProxy.SCHEMA_VERSION)
     assert "optimal_targets" in request_payload["plugins"]
     assert "project_data" in request_payload
 
@@ -504,25 +521,24 @@ def test_native_proxy_function_table_uses_slim_payload(monkeypatch) -> None:
         return fake_proc
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run", side_effect=_capture_run
-        ),
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch("fuzz_introspector.analysis.subprocess.run",
+                       side_effect=_capture_run),
     ):
-        proxy.run_analysis(
-            _make_full_fake_proj_profile(["alpha", "beta"]), [], ["function_table"]
-        )
+        proxy.run_analysis(_make_full_fake_proj_profile(["alpha", "beta"]), [],
+                           ["function_table"])
 
     assert captured_input, "subprocess.run was not called"
     request_payload = json.loads(captured_input[0])
     functions_payload = request_payload["project_data"]["functions"]
     assert functions_payload
     for function_entry in functions_payload:
-        assert set(function_entry.keys()) == {"name", "total_cyclomatic_complexity"}
+        assert set(
+            function_entry.keys()) == {"name", "total_cyclomatic_complexity"}
     assert "function_count" not in request_payload["project_data"]
     assert "fuzzer_count" not in request_payload["project_data"]
     assert "has_coverage_data" not in request_payload["project_data"]
@@ -533,7 +549,7 @@ def test_native_proxy_runtime_cov_payload_is_plugin_minimal() -> None:
     payload = proxy._build_payload_bytes(
         _make_full_fake_proj_profile(["alpha"]),
         [],
-        ("runtime_coverage_analysis",),
+        ("runtime_coverage_analysis", ),
     )
 
     request_payload = json.loads(payload)
@@ -551,7 +567,8 @@ def test_native_proxy_runtime_cov_payload_is_plugin_minimal() -> None:
     assert "has_coverage_data" not in request_payload["project_data"]
 
 
-def test_native_proxy_sink_payload_includes_only_sink_and_target_lang_fields() -> None:
+def test_native_proxy_sink_payload_includes_only_sink_and_target_lang_fields(
+) -> None:
     proxy = analysis.NativePluginProxy()
 
     proj_profile = _make_full_fake_proj_profile(["sink_fn"])
@@ -562,7 +579,7 @@ def test_native_proxy_sink_payload_includes_only_sink_and_target_lang_fields() -
     payload = proxy._build_payload_bytes(
         proj_profile,
         [],
-        ("sink_coverage_analysis",),
+        ("sink_coverage_analysis", ),
     )
 
     request_payload = json.loads(payload)
@@ -576,6 +593,26 @@ def test_native_proxy_sink_payload_includes_only_sink_and_target_lang_fields() -
     }
 
 
+def test_native_proxy_far_reach_payload_is_plugin_minimal() -> None:
+    proxy = analysis.NativePluginProxy()
+    payload = proxy._build_payload_bytes(
+        _make_full_fake_proj_profile(["alpha"]),
+        [],
+        ("far_reach_low_coverage_analysis", ),
+    )
+
+    request_payload = json.loads(payload)
+    function_entry = request_payload["project_data"]["functions"][0]
+    assert set(function_entry.keys()) == {
+        "name",
+        "cyclomatic_complexity",
+        "runtime_coverage_percent",
+        "is_accessible",
+        "is_jvm_library",
+        "is_enum",
+    }
+
+
 def test_native_proxy_payload_cache_key_includes_plugin_set_identity() -> None:
     proxy = analysis.NativePluginProxy()
     proj_profile = _make_full_fake_proj_profile(["alpha"])
@@ -583,7 +620,7 @@ def test_native_proxy_payload_cache_key_includes_plugin_set_identity() -> None:
     payload_one = proxy._build_payload_bytes(
         proj_profile,
         [],
-        ("function_table",),
+        ("function_table", ),
     )
     payload_two = proxy._build_payload_bytes(
         proj_profile,
@@ -600,21 +637,20 @@ def test_native_proxy_caches_results_for_repeated_calls(monkeypatch) -> None:
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
     fake_proc = _make_native_proc(
-        _make_optimal_targets_native_result(["alpha"]),
-    )
+        _make_optimal_targets_native_result(["alpha"]), )
     proj_profile = _make_full_fake_proj_profile(["alpha"])
     proxy = analysis.NativePluginProxy()
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            return_value=fake_proc,
-        ) as run_mock,
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                return_value=fake_proc,
+            ) as run_mock,
     ):
         first = proxy.run_analysis(proj_profile, [], ["optimal_targets"])
         second = proxy.run_analysis(proj_profile, [], ["optimal_targets"])
@@ -624,7 +660,8 @@ def test_native_proxy_caches_results_for_repeated_calls(monkeypatch) -> None:
     assert run_mock.call_count == 1
 
 
-def test_native_proxy_reuses_plugin_cache_after_coalesced_call(monkeypatch) -> None:
+def test_native_proxy_reuses_plugin_cache_after_coalesced_call(
+        monkeypatch) -> None:
     """Single-plugin requests reuse plugin-level cache from coalesced dispatch."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
@@ -637,22 +674,23 @@ def test_native_proxy_reuses_plugin_cache_after_coalesced_call(monkeypatch) -> N
     proxy = analysis.NativePluginProxy()
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            return_value=fake_proc,
-        ) as run_mock,
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                return_value=fake_proc,
+            ) as run_mock,
     ):
         coalesced = proxy.run_analysis(
             proj_profile,
             [],
             ["optimal_targets", "runtime_coverage_analysis"],
         )
-        optimal_only = proxy.run_analysis(proj_profile, [], ["optimal_targets"])
+        optimal_only = proxy.run_analysis(proj_profile, [],
+                                          ["optimal_targets"])
         runtime_only = proxy.run_analysis(
             proj_profile,
             [],
@@ -666,7 +704,8 @@ def test_native_proxy_reuses_plugin_cache_after_coalesced_call(monkeypatch) -> N
     assert run_mock.call_count == 1
 
 
-def test_native_proxy_coalesces_scoped_single_plugin_requests(monkeypatch) -> None:
+def test_native_proxy_coalesces_scoped_single_plugin_requests(
+        monkeypatch) -> None:
     """Single-plugin calls within one request scope dispatch once."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
@@ -679,20 +718,20 @@ def test_native_proxy_coalesces_scoped_single_plugin_requests(monkeypatch) -> No
     proxy = analysis.NativePluginProxy()
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            return_value=fake_proc,
-        ) as run_mock,
-        analysis.native_plugin_request_scope(
-            ["optimal_targets", "runtime_coverage_analysis"]
-        ),
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                return_value=fake_proc,
+            ) as run_mock,
+            analysis.native_plugin_request_scope(
+                ["optimal_targets", "runtime_coverage_analysis"]),
     ):
-        optimal_only = proxy.run_analysis(proj_profile, [], ["optimal_targets"])
+        optimal_only = proxy.run_analysis(proj_profile, [],
+                                          ["optimal_targets"])
         runtime_only = proxy.run_analysis(
             proj_profile,
             [],
@@ -704,30 +743,30 @@ def test_native_proxy_coalesces_scoped_single_plugin_requests(monkeypatch) -> No
     assert run_mock.call_count == 1
 
 
-def test_native_proxy_runs_per_requested_plugin_set(
-    monkeypatch,
-) -> None:
+def test_native_proxy_runs_per_requested_plugin_set(monkeypatch, ) -> None:
     """Distinct plugin sets trigger distinct native dispatches."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
-    first_proc = _make_native_proc(_make_optimal_targets_native_result(["alpha"]))
+    first_proc = _make_native_proc(
+        _make_optimal_targets_native_result(["alpha"]))
     second_proc = _make_native_proc(_make_runtime_cov_native_result(["alpha"]))
     proj_profile = _make_full_fake_proj_profile(["alpha"], has_coverage=True)
     proxy = analysis.NativePluginProxy()
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            side_effect=[first_proc, second_proc],
-        ) as run_mock,
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                side_effect=[first_proc, second_proc],
+            ) as run_mock,
     ):
         first = proxy.run_analysis(proj_profile, [], ["optimal_targets"])
-        second = proxy.run_analysis(proj_profile, [], ["runtime_coverage_analysis"])
+        second = proxy.run_analysis(proj_profile, [],
+                                    ["runtime_coverage_analysis"])
 
     assert "optimal_targets" in first
     assert "runtime_coverage_analysis" in second
@@ -735,8 +774,7 @@ def test_native_proxy_runs_per_requested_plugin_set(
 
 
 def test_native_proxy_does_not_reuse_incomplete_cross_set_cache(
-    monkeypatch,
-) -> None:
+    monkeypatch, ) -> None:
     """Overlapping but distinct plugin sets must dispatch when one plugin is missing."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
@@ -747,25 +785,27 @@ def test_native_proxy_does_not_reuse_incomplete_cross_set_cache(
     second_result = {}
     second_result.update(_make_optimal_targets_native_result(["alpha"]))
     second_result.update(
-        _make_calltree_native_result(total=10, reached=4, unreached=6, pct=40.0)
-    )
+        _make_calltree_native_result(total=10,
+                                     reached=4,
+                                     unreached=6,
+                                     pct=40.0))
 
     proj_profile = _make_full_fake_proj_profile(["alpha"], has_coverage=True)
     proxy = analysis.NativePluginProxy()
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            side_effect=[
-                _make_native_proc(first_result),
-                _make_native_proc(second_result),
-            ],
-        ) as run_mock,
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                side_effect=[
+                    _make_native_proc(first_result),
+                    _make_native_proc(second_result),
+                ],
+            ) as run_mock,
     ):
         first = proxy.run_analysis(
             proj_profile,
@@ -815,15 +855,28 @@ def _make_fake_func_profile(function_name="some_func"):
     fp.cov_init_graph_percentage = 0.0
     fp.function_source_file = "foo.c"
     fp.incoming_references = []
+    fp.is_accessible = True
+    fp.is_jvm_library = False
+    fp.is_enum = False
+    fp.to_dict.side_effect = lambda coverage: {
+        "function_name": function_name,
+        "total_cyclomatic_complexity": fp.total_cyclomatic_complexity,
+        "runtime_coverage_percent": coverage,
+    }
     return fp
 
 
 def _make_full_fake_proj_profile(function_names=None, has_coverage=False):
     """Full fake proj_profile suitable for analysis_func calls."""
-    fp_map = {name: _make_fake_func_profile(name) for name in (function_names or [])}
+    fp_map = {
+        name: _make_fake_func_profile(name)
+        for name in (function_names or [])
+    }
     pp = mock.MagicMock()
     pp.all_functions = fp_map
+    pp.all_constructors = {}
     pp.target_lang = "c-cpp"
+    pp.get_func_hit_percentage.side_effect = lambda _name: 0.0
     pp.has_coverage_data.return_value = has_coverage
     return pp
 
@@ -845,37 +898,40 @@ def _make_native_proc(result_dict, status="success"):
 
 def _make_optimal_targets_native_result(function_names):
     """Build a valid native result dict for the optimal_targets plugin."""
-    rows = [
-        {
-            "function_name": name,
-            "cyclomatic_complexity": 10,
-            "total_cyclomatic_complexity": 50,
-            "new_unreached_complexity": 40,
-            "functions_reached_count": 5,
-            "arg_count": 2,
-            "bb_count": 4,
-            "source_file": "foo.c",
+    rows = [{
+        "function_name": name,
+        "cyclomatic_complexity": 10,
+        "total_cyclomatic_complexity": 50,
+        "new_unreached_complexity": 40,
+        "functions_reached_count": 5,
+        "arg_count": 2,
+        "bb_count": 4,
+        "source_file": "foo.c",
+    } for name in function_names]
+    return {
+        "optimal_targets": {
+            "tables": {
+                "optimal_targets": rows
+            },
+            "summary": ""
         }
-        for name in function_names
-    ]
-    return {"optimal_targets": {"tables": {"optimal_targets": rows}, "summary": ""}}
+    }
 
 
 def _make_runtime_cov_native_result(function_names):
     """Build a valid native result dict for the runtime_coverage_analysis plugin."""
-    rows = [
-        {
-            "function_name": name,
-            "hitcount": 0,
-            "new_unreached_complexity": 40,
-            "total_cyclomatic_complexity": 50,
-            "reached_by_fuzzers": [],
-        }
-        for name in function_names
-    ]
+    rows = [{
+        "function_name": name,
+        "hitcount": 0,
+        "new_unreached_complexity": 40,
+        "total_cyclomatic_complexity": 50,
+        "reached_by_fuzzers": [],
+    } for name in function_names]
     return {
         "runtime_coverage_analysis": {
-            "tables": {"runtime_coverage": rows},
+            "tables": {
+                "runtime_coverage": rows
+            },
             "summary": "",
         }
     }
@@ -890,14 +946,23 @@ def _make_calltree_native_result(total, reached, unreached, pct):
         "reach_percentage": pct,
         "target_lang": "c-cpp",
     }
-    return {"calltree_analysis": {"tables": {"calltree_nodes": [row]}, "summary": ""}}
+    return {
+        "calltree_analysis": {
+            "tables": {
+                "calltree_nodes": [row]
+            },
+            "summary": ""
+        }
+    }
 
 
 def _make_sink_native_result(rows):
     """Build a valid native result dict for sink_coverage_analysis."""
     return {
         "sink_coverage_analysis": {
-            "tables": {"sink_coverage": rows},
+            "tables": {
+                "sink_coverage": rows
+            },
             "summary": "",
         }
     }
@@ -906,7 +971,9 @@ def _make_sink_native_result(rows):
 # ── OptimalTargets plugin wiring ──────────────────────────────────────────────
 
 
-def _call_optimal_targets_analysis_func(proj_profile, profiles=None, out_dir=None):
+def _call_optimal_targets_analysis_func(proj_profile,
+                                        profiles=None,
+                                        out_dir=None):
     """Drive OptimalTargets.analysis_func with safe HTML-rendering mocks."""
     instance = ot_module.OptimalTargets()
     instance.dump_files = False
@@ -927,21 +994,21 @@ def _call_optimal_targets_analysis_func(proj_profile, profiles=None, out_dir=Non
     try:
         # Patch the heavy HTML-rendering helpers so we don't need a real profile.
         with (
-            mock.patch.object(
-                instance,
-                "get_optimal_target_section",
-                return_value="<section/>",
-            ),
-            mock.patch.object(
-                instance,
-                "get_consequential_section",
-                return_value="<consequential/>",
-            ),
-            mock.patch(
-                "fuzz_introspector.analyses.optimal_targets.html_helpers"
-                ".html_add_header_with_link",
-                return_value="",
-            ),
+                mock.patch.object(
+                    instance,
+                    "get_optimal_target_section",
+                    return_value="<section/>",
+                ),
+                mock.patch.object(
+                    instance,
+                    "get_consequential_section",
+                    return_value="<consequential/>",
+                ),
+                mock.patch(
+                    "fuzz_introspector.analyses.optimal_targets.html_helpers"
+                    ".html_add_header_with_link",
+                    return_value="",
+                ),
         ):
             instance.analysis_func(
                 toc,
@@ -960,7 +1027,8 @@ def _call_optimal_targets_analysis_func(proj_profile, profiles=None, out_dir=Non
     return instance
 
 
-def test_optimal_targets_uses_rust_result_and_skips_python(monkeypatch) -> None:
+def test_optimal_targets_uses_rust_result_and_skips_python(
+        monkeypatch) -> None:
     """When FI_NATIVE_PLUGINS=rust and Rust returns rows, iteratively_get_optimal_targets
     must NOT be called."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
@@ -972,19 +1040,19 @@ def test_optimal_targets_uses_rust_result_and_skips_python(monkeypatch) -> None:
     fake_proc = _make_native_proc(native_result)
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            return_value=fake_proc,
-        ),
-        mock.patch.object(
-            ot_module.OptimalTargets,
-            "iteratively_get_optimal_targets",
-        ) as mock_py_heavy,
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                return_value=fake_proc,
+            ),
+            mock.patch.object(
+                ot_module.OptimalTargets,
+                "iteratively_get_optimal_targets",
+            ) as mock_py_heavy,
     ):
         _call_optimal_targets_analysis_func(proj_profile)
 
@@ -992,8 +1060,7 @@ def test_optimal_targets_uses_rust_result_and_skips_python(monkeypatch) -> None:
 
 
 def test_optimal_targets_falls_back_to_python_when_rust_returns_empty(
-    monkeypatch,
-) -> None:
+    monkeypatch, ) -> None:
     """When FI_NATIVE_PLUGINS=rust but Rust returns {}, iteratively_get_optimal_targets
     IS called."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
@@ -1006,20 +1073,20 @@ def test_optimal_targets_falls_back_to_python_when_rust_returns_empty(
     fake_new_profile = _make_full_fake_proj_profile(func_names)
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            return_value=fake_proc,
-        ),
-        mock.patch.object(
-            ot_module.OptimalTargets,
-            "iteratively_get_optimal_targets",
-            return_value=(fake_new_profile, [fake_fp]),
-        ) as mock_py_heavy,
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                return_value=fake_proc,
+            ),
+            mock.patch.object(
+                ot_module.OptimalTargets,
+                "iteratively_get_optimal_targets",
+                return_value=(fake_new_profile, [fake_fp]),
+            ) as mock_py_heavy,
     ):
         _call_optimal_targets_analysis_func(proj_profile)
 
@@ -1036,9 +1103,9 @@ def test_optimal_targets_python_path_when_native_disabled(monkeypatch) -> None:
     fake_new_profile = _make_full_fake_proj_profile(func_names)
 
     with mock.patch.object(
-        ot_module.OptimalTargets,
-        "iteratively_get_optimal_targets",
-        return_value=(fake_new_profile, [fake_fp]),
+            ot_module.OptimalTargets,
+            "iteratively_get_optimal_targets",
+            return_value=(fake_new_profile, [fake_fp]),
     ) as mock_py_heavy:
         _call_optimal_targets_analysis_func(proj_profile)
 
@@ -1061,21 +1128,21 @@ def _call_runtime_cov_analysis_func(proj_profile, profiles=None, out_dir=None):
 
     try:
         with (
-            mock.patch(
-                "fuzz_introspector.analyses.runtime_coverage_analysis.html_helpers"
-                ".html_add_header_with_link",
-                return_value="",
-            ),
-            mock.patch(
-                "fuzz_introspector.analyses.runtime_coverage_analysis.html_helpers"
-                ".html_create_table_head",
-                return_value="",
-            ),
-            mock.patch(
-                "fuzz_introspector.analyses.runtime_coverage_analysis.html_helpers"
-                ".html_table_add_row",
-                return_value="",
-            ),
+                mock.patch(
+                    "fuzz_introspector.analyses.runtime_coverage_analysis.html_helpers"
+                    ".html_add_header_with_link",
+                    return_value="",
+                ),
+                mock.patch(
+                    "fuzz_introspector.analyses.runtime_coverage_analysis.html_helpers"
+                    ".html_create_table_head",
+                    return_value="",
+                ),
+                mock.patch(
+                    "fuzz_introspector.analyses.runtime_coverage_analysis.html_helpers"
+                    ".html_table_add_row",
+                    return_value="",
+                ),
         ):
             instance.analysis_func(
                 toc,
@@ -1107,19 +1174,19 @@ def test_runtime_cov_uses_rust_result_and_skips_python(monkeypatch) -> None:
     fake_proc = _make_native_proc(native_result)
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            return_value=fake_proc,
-        ),
-        mock.patch.object(
-            rca_module.RuntimeCoverageAnalysis,
-            "get_low_cov_high_line_funcs",
-        ) as mock_py_heavy,
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                return_value=fake_proc,
+            ),
+            mock.patch.object(
+                rca_module.RuntimeCoverageAnalysis,
+                "get_low_cov_high_line_funcs",
+            ) as mock_py_heavy,
     ):
         _call_runtime_cov_analysis_func(proj_profile)
 
@@ -1127,8 +1194,7 @@ def test_runtime_cov_uses_rust_result_and_skips_python(monkeypatch) -> None:
 
 
 def test_runtime_cov_falls_back_to_python_when_rust_returns_empty(
-    monkeypatch,
-) -> None:
+    monkeypatch, ) -> None:
     """When FI_NATIVE_PLUGINS=rust but Rust returns {}, get_low_cov_high_line_funcs
     IS called."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
@@ -1140,20 +1206,20 @@ def test_runtime_cov_falls_back_to_python_when_rust_returns_empty(
     fake_proc = _make_native_proc({})
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            return_value=fake_proc,
-        ),
-        mock.patch.object(
-            rca_module.RuntimeCoverageAnalysis,
-            "get_low_cov_high_line_funcs",
-            return_value=func_names,
-        ) as mock_py_heavy,
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                return_value=fake_proc,
+            ),
+            mock.patch.object(
+                rca_module.RuntimeCoverageAnalysis,
+                "get_low_cov_high_line_funcs",
+                return_value=func_names,
+            ) as mock_py_heavy,
     ):
         _call_runtime_cov_analysis_func(proj_profile)
 
@@ -1169,9 +1235,9 @@ def test_runtime_cov_python_path_when_native_disabled(monkeypatch) -> None:
     proj_profile.runtime_coverage.get_hit_summary.return_value = (100, 40)
 
     with mock.patch.object(
-        rca_module.RuntimeCoverageAnalysis,
-        "get_low_cov_high_line_funcs",
-        return_value=func_names,
+            rca_module.RuntimeCoverageAnalysis,
+            "get_low_cov_high_line_funcs",
+            return_value=func_names,
     ) as mock_py_heavy:
         _call_runtime_cov_analysis_func(proj_profile)
 
@@ -1194,9 +1260,8 @@ def _call_calltree_analysis_func(proj_profile, profiles=None, out_dir=None):
 
     try:
         with mock.patch(
-            "fuzz_introspector.analyses.calltree_analysis.json_report"
-            ".add_analysis_json_str_as_dict_to_report"
-        ):
+                "fuzz_introspector.analyses.calltree_analysis.json_report"
+                ".add_analysis_json_str_as_dict_to_report"):
             result = instance.analysis_func(
                 toc,
                 [],
@@ -1224,15 +1289,15 @@ def test_calltree_uses_rust_result_and_stores_json(monkeypatch) -> None:
     fake_proc = _make_native_proc(native_result)
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            return_value=fake_proc,
-        ),
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                return_value=fake_proc,
+            ),
     ):
         instance, result = _call_calltree_analysis_func(proj_profile)
 
@@ -1256,8 +1321,7 @@ def test_calltree_returns_empty_string_when_rust_disabled(monkeypatch) -> None:
 
 
 def test_calltree_returns_empty_string_when_rust_returns_empty(
-    monkeypatch,
-) -> None:
+    monkeypatch, ) -> None:
     """When FI_NATIVE_PLUGINS=rust but Rust returns {}, analysis_func still returns ''."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
@@ -1265,15 +1329,15 @@ def test_calltree_returns_empty_string_when_rust_returns_empty(
     fake_proc = _make_native_proc({})
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            return_value=fake_proc,
-        ),
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                return_value=fake_proc,
+            ),
     ):
         instance, result = _call_calltree_analysis_func(proj_profile)
 
@@ -1294,9 +1358,10 @@ def test_sink_coverage_uses_native_targets_when_available(monkeypatch) -> None:
     profiles = [mock.MagicMock(target_lang="c-cpp")]
 
     proxy = mock.MagicMock()
-    proxy.run_analysis.return_value = _make_sink_native_result(
-        [{"func_name": "system", "cwe": "CWE78"}]
-    )
+    proxy.run_analysis.return_value = _make_sink_native_result([{
+        "func_name": "system",
+        "cwe": "CWE78"
+    }])
 
     instance = sinks_module.SinkCoverageAnalyser()
     instance.display_html = False
@@ -1306,27 +1371,25 @@ def test_sink_coverage_uses_native_targets_when_available(monkeypatch) -> None:
         return "", json.dumps({cwe: []}), args[7]
 
     with (
-        mock.patch.object(
-            instance,
-            "_retrieve_data_list",
-            return_value=([], [sink_function], ["fuzzer.cc"]),
-        ),
-        mock.patch.object(
-            instance, "_retrieve_content_rows", side_effect=_fake_rows
-        ) as rows_mock,
-        mock.patch(
-            "fuzz_introspector.analyses.sinks_analyser.analysis.get_native_plugin_proxy",
-            return_value=proxy,
-        ),
-        mock.patch(
-            "fuzz_introspector.analyses.sinks_analyser.html_helpers"
-            ".html_add_header_with_link",
-            return_value="",
-        ),
-        mock.patch(
-            "fuzz_introspector.analyses.sinks_analyser.json_report"
-            ".add_analysis_json_str_as_dict_to_report"
-        ),
+            mock.patch.object(
+                instance,
+                "_retrieve_data_list",
+                return_value=([], [sink_function], ["fuzzer.cc"]),
+            ),
+            mock.patch.object(instance,
+                              "_retrieve_content_rows",
+                              side_effect=_fake_rows) as rows_mock,
+            mock.patch(
+                "fuzz_introspector.analyses.sinks_analyser.analysis.get_native_plugin_proxy",
+                return_value=proxy,
+            ),
+            mock.patch(
+                "fuzz_introspector.analyses.sinks_analyser.html_helpers"
+                ".html_add_header_with_link",
+                return_value="",
+            ),
+            mock.patch("fuzz_introspector.analyses.sinks_analyser.json_report"
+                       ".add_analysis_json_str_as_dict_to_report"),
     ):
         instance.analysis_func(
             table_of_contents=mock.MagicMock(),
@@ -1339,9 +1402,8 @@ def test_sink_coverage_uses_native_targets_when_available(monkeypatch) -> None:
             out_dir=".",
         )
 
-    proxy.run_analysis.assert_called_once_with(
-        proj_profile, profiles, ["sink_coverage_analysis"]
-    )
+    proxy.run_analysis.assert_called_once_with(proj_profile, profiles,
+                                               ["sink_coverage_analysis"])
     cwe_to_sink_arg = {
         call.args[4]: call.kwargs.get("sink_functions")
         for call in rows_mock.call_args_list
@@ -1350,7 +1412,8 @@ def test_sink_coverage_uses_native_targets_when_available(monkeypatch) -> None:
     assert cwe_to_sink_arg["CWE79"] == []
 
 
-def test_sink_coverage_falls_back_when_native_sink_rows_empty(monkeypatch) -> None:
+def test_sink_coverage_falls_back_when_native_sink_rows_empty(
+        monkeypatch) -> None:
     """When native sink table is empty, Python sink filtering path stays active."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
@@ -1369,27 +1432,26 @@ def test_sink_coverage_falls_back_when_native_sink_rows_empty(monkeypatch) -> No
         return "", json.dumps({cwe: []}), args[7]
 
     with (
-        mock.patch.object(
-            instance,
-            "_retrieve_data_list",
-            return_value=([], [_make_fake_func_profile("system")], ["fuzzer.cc"]),
-        ),
-        mock.patch.object(
-            instance, "_retrieve_content_rows", side_effect=_fake_rows
-        ) as rows_mock,
-        mock.patch(
-            "fuzz_introspector.analyses.sinks_analyser.analysis.get_native_plugin_proxy",
-            return_value=proxy,
-        ),
-        mock.patch(
-            "fuzz_introspector.analyses.sinks_analyser.html_helpers"
-            ".html_add_header_with_link",
-            return_value="",
-        ),
-        mock.patch(
-            "fuzz_introspector.analyses.sinks_analyser.json_report"
-            ".add_analysis_json_str_as_dict_to_report"
-        ),
+            mock.patch.object(
+                instance,
+                "_retrieve_data_list",
+                return_value=([], [_make_fake_func_profile("system")],
+                              ["fuzzer.cc"]),
+            ),
+            mock.patch.object(instance,
+                              "_retrieve_content_rows",
+                              side_effect=_fake_rows) as rows_mock,
+            mock.patch(
+                "fuzz_introspector.analyses.sinks_analyser.analysis.get_native_plugin_proxy",
+                return_value=proxy,
+            ),
+            mock.patch(
+                "fuzz_introspector.analyses.sinks_analyser.html_helpers"
+                ".html_add_header_with_link",
+                return_value="",
+            ),
+            mock.patch("fuzz_introspector.analyses.sinks_analyser.json_report"
+                       ".add_analysis_json_str_as_dict_to_report"),
     ):
         instance.analysis_func(
             table_of_contents=mock.MagicMock(),
@@ -1404,8 +1466,127 @@ def test_sink_coverage_falls_back_when_native_sink_rows_empty(monkeypatch) -> No
 
     assert rows_mock.call_count == len(sinks_module.CWES)
     assert all(
-        call.kwargs.get("sink_functions") is None for call in rows_mock.call_args_list
+        call.kwargs.get("sink_functions") is None
+        for call in rows_mock.call_args_list)
+
+
+# ── FarReachLowCoverageAnalyser native plugin wiring ─────────────────────────
+
+
+def _make_far_reach_native_result(function_names):
+    rows = [{"function_name": name} for name in function_names]
+    return {
+        "far_reach_low_coverage_analysis": {
+            "tables": {
+                "far_reach_candidates": rows
+            },
+            "summary": "",
+        }
+    }
+
+
+def _call_far_reach_standalone_analysis(instance, proj_profile):
+    instance.dump_files = False
+    instance.standalone_analysis(proj_profile, [], out_dir=".")
+
+
+def test_far_reach_uses_native_candidates_and_skips_python_filter(
+        monkeypatch) -> None:
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    proj_profile = _make_full_fake_proj_profile(["alpha", "beta"])
+    proxy = mock.MagicMock()
+    proxy.run_analysis.return_value = _make_far_reach_native_result(
+        ["beta", "alpha"])
+
+    instance = frlc_module.FarReachLowCoverageAnalyser()
+    instance.set_max_functions(10)
+
+    with (
+            mock.patch(
+                "fuzz_introspector.analyses.far_reach_low_coverage_analyser"
+                ".analysis.get_native_plugin_proxy",
+                return_value=proxy,
+            ),
+            mock.patch.object(
+                instance,
+                "_get_functions_of_interest",
+            ) as python_filter_mock,
+    ):
+        _call_far_reach_standalone_analysis(instance, proj_profile)
+
+    proxy.run_analysis.assert_called_once_with(
+        proj_profile,
+        [],
+        ["far_reach_low_coverage_analysis"],
     )
+    python_filter_mock.assert_not_called()
+    assert [
+        row["function_name"] for row in instance.json_results["functions"]
+    ] == [
+        "beta",
+        "alpha",
+    ]
+
+
+def test_far_reach_falls_back_to_python_for_only_referenced_mode(
+        monkeypatch) -> None:
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    proj_profile = _make_full_fake_proj_profile(["alpha"])
+    proxy = mock.MagicMock()
+    instance = frlc_module.FarReachLowCoverageAnalyser()
+    instance.set_flags(False, True, False, False, False)
+
+    with (
+            mock.patch(
+                "fuzz_introspector.analyses.far_reach_low_coverage_analyser"
+                ".analysis.get_native_plugin_proxy",
+                return_value=proxy,
+            ),
+            mock.patch.object(
+                instance,
+                "_get_functions_of_interest",
+                return_value=[proj_profile.all_functions["alpha"]],
+            ) as python_filter_mock,
+    ):
+        _call_far_reach_standalone_analysis(instance, proj_profile)
+
+    proxy.run_analysis.assert_not_called()
+    python_filter_mock.assert_called_once()
+
+
+def test_far_reach_falls_back_to_python_on_malformed_native_rows(
+        monkeypatch) -> None:
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+
+    proj_profile = _make_full_fake_proj_profile(["alpha"])
+    proxy = mock.MagicMock()
+    proxy.run_analysis.return_value = {
+        "far_reach_low_coverage_analysis": {
+            "tables": {
+                "far_reach_candidates": [{}]
+            },
+            "summary": "",
+        }
+    }
+
+    instance = frlc_module.FarReachLowCoverageAnalyser()
+    with (
+            mock.patch(
+                "fuzz_introspector.analyses.far_reach_low_coverage_analyser"
+                ".analysis.get_native_plugin_proxy",
+                return_value=proxy,
+            ),
+            mock.patch.object(
+                instance,
+                "_get_functions_of_interest",
+                return_value=[proj_profile.all_functions["alpha"]],
+            ) as python_filter_mock,
+    ):
+        _call_far_reach_standalone_analysis(instance, proj_profile)
+
+    python_filter_mock.assert_called_once()
 
 
 # ── FunctionTable native plugin wiring ───────────────────────────────────────
@@ -1418,24 +1599,30 @@ def _make_function_table_native_result(function_names_with_complexity):
         function_names_with_complexity: list of (name, total_cyclomatic_complexity) tuples,
             already in the desired sort order.
     """
-    rows = [
-        {
-            "name": name,
-            "total_cyclomatic_complexity": cc,
-            "cyclomatic_complexity": 5,
-            "source_file": "foo.c",
-            "arg_count": 1,
-            "bb_count": 2,
+    rows = [{
+        "name": name,
+        "total_cyclomatic_complexity": cc,
+        "cyclomatic_complexity": 5,
+        "source_file": "foo.c",
+        "arg_count": 1,
+        "bb_count": 2,
+    } for name, cc in function_names_with_complexity]
+    return {
+        "function_table": {
+            "tables": {
+                "all_functions_table": rows
+            },
+            "summary": ""
         }
-        for name, cc in function_names_with_complexity
-    ]
-    return {"function_table": {"tables": {"all_functions_table": rows}, "summary": ""}}
+    }
 
 
 def _make_function_table_native_order_result(function_names):
     return {
         "function_table": {
-            "tables": {"ordered_function_names": list(function_names)},
+            "tables": {
+                "ordered_function_names": list(function_names)
+            },
             "summary": "",
         }
     }
@@ -1446,29 +1633,39 @@ def test_function_table_in_native_plugin_names() -> None:
 
 
 def test_function_table_in_python_name_to_native_key() -> None:
-    assert analysis._PYTHON_NAME_TO_NATIVE_KEY.get("FunctionTable") == "function_table"
+    assert analysis._PYTHON_NAME_TO_NATIVE_KEY.get(
+        "FunctionTable") == "function_table"
+
+
+def test_far_reach_in_native_plugin_names() -> None:
+    assert "FarReachLowCoverageAnalyser" in analysis._NATIVE_PLUGIN_NAMES
+
+
+def test_far_reach_in_python_name_to_native_key() -> None:
+    assert (analysis._PYTHON_NAME_TO_NATIVE_KEY.get(
+        "FarReachLowCoverageAnalyser") == "far_reach_low_coverage_analysis")
 
 
 def test_get_native_function_table_order_returns_sorted_names(
-    monkeypatch,
-) -> None:
+    monkeypatch, ) -> None:
     """When native is enabled and returns rows, names are returned in order."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
     func_data = [("high_cc", 100), ("mid_cc", 50), ("low_cc", 10)]
-    fake_proc = _make_native_proc(_make_function_table_native_result(func_data))
+    fake_proc = _make_native_proc(
+        _make_function_table_native_result(func_data))
     proj_profile = _make_full_fake_proj_profile()
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            return_value=fake_proc,
-        ),
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                return_value=fake_proc,
+            ),
     ):
         result = html_report._get_native_function_table_order(proj_profile)
 
@@ -1476,33 +1673,33 @@ def test_get_native_function_table_order_returns_sorted_names(
 
 
 def test_get_native_function_table_order_accepts_compact_ordered_names(
-    monkeypatch,
-) -> None:
+    monkeypatch, ) -> None:
     """When native returns compact ordering, names are returned in order."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
     fake_proc = _make_native_proc(
-        _make_function_table_native_order_result(["high_cc", "mid_cc", "low_cc"])
-    )
+        _make_function_table_native_order_result(
+            ["high_cc", "mid_cc", "low_cc"]))
     proj_profile = _make_full_fake_proj_profile()
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            return_value=fake_proc,
-        ),
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                return_value=fake_proc,
+            ),
     ):
         result = html_report._get_native_function_table_order(proj_profile)
 
     assert result == ["high_cc", "mid_cc", "low_cc"]
 
 
-def test_get_cached_native_function_table_order_caches_per_profile(monkeypatch) -> None:
+def test_get_cached_native_function_table_order_caches_per_profile(
+        monkeypatch) -> None:
     """Native ordering is computed once and reused for the same profile."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
     html_report._NATIVE_FUNCTION_TABLE_ORDER_CACHE.clear()
@@ -1510,11 +1707,13 @@ def test_get_cached_native_function_table_order_caches_per_profile(monkeypatch) 
     proj_profile = _make_full_fake_proj_profile(["one", "two"])
 
     with mock.patch(
-        "fuzz_introspector.html_report._get_native_function_table_order",
-        return_value=["one", "two"],
+            "fuzz_introspector.html_report._get_native_function_table_order",
+            return_value=["one", "two"],
     ) as native_order_mock:
-        first = html_report._get_cached_native_function_table_order(proj_profile)
-        second = html_report._get_cached_native_function_table_order(proj_profile)
+        first = html_report._get_cached_native_function_table_order(
+            proj_profile)
+        second = html_report._get_cached_native_function_table_order(
+            proj_profile)
 
     assert first == ["one", "two"]
     assert second == ["one", "two"]
@@ -1522,8 +1721,7 @@ def test_get_cached_native_function_table_order_caches_per_profile(monkeypatch) 
 
 
 def test_get_native_function_table_order_returns_none_when_disabled(
-    monkeypatch,
-) -> None:
+    monkeypatch, ) -> None:
     """When native plugins are disabled, None is returned."""
     monkeypatch.delenv(analysis.FI_NATIVE_PLUGINS_ENV, raising=False)
 
@@ -1534,27 +1732,31 @@ def test_get_native_function_table_order_returns_none_when_disabled(
 
 
 def test_get_native_function_table_order_returns_none_on_empty_rows(
-    monkeypatch,
-) -> None:
+    monkeypatch, ) -> None:
     """When the native plugin returns an empty table, None is returned."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
     # Empty table — no rows
-    fake_proc = _make_native_proc(
-        {"function_table": {"tables": {"all_functions_table": []}, "summary": ""}}
-    )
+    fake_proc = _make_native_proc({
+        "function_table": {
+            "tables": {
+                "all_functions_table": []
+            },
+            "summary": ""
+        }
+    })
     proj_profile = _make_full_fake_proj_profile()
 
     with (
-        mock.patch.object(
-            analysis.NativePluginProxy,
-            "find_binary",
-            return_value="/usr/bin/native_analysis_plugins_rust",
-        ),
-        mock.patch(
-            "fuzz_introspector.analysis.subprocess.run",
-            return_value=fake_proc,
-        ),
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_rust",
+            ),
+            mock.patch(
+                "fuzz_introspector.analysis.subprocess.run",
+                return_value=fake_proc,
+            ),
     ):
         result = html_report._get_native_function_table_order(proj_profile)
 
@@ -1562,17 +1764,16 @@ def test_get_native_function_table_order_returns_none_on_empty_rows(
 
 
 def test_get_native_function_table_order_returns_none_on_missing_binary(
-    monkeypatch,
-) -> None:
+    monkeypatch, ) -> None:
     """When the native binary is not found, None is returned gracefully."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
     proj_profile = _make_full_fake_proj_profile()
 
     with mock.patch.object(
-        analysis.NativePluginProxy,
-        "find_binary",
-        return_value=None,
+            analysis.NativePluginProxy,
+            "find_binary",
+            return_value=None,
     ):
         result = html_report._get_native_function_table_order(proj_profile)
 

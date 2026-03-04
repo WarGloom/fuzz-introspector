@@ -1,11 +1,13 @@
 name: Mypy
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - 'src/**'
       - 'frontends/python/**'
       - 'oss_fuzz_integration/**'
+      - 'tools/**'
       - '.github/workflows/mypy.yml'
   push:
     branches:
@@ -14,6 +16,7 @@ on:
       - 'src/**'
       - 'frontends/python/**'
       - 'oss_fuzz_integration/**'
+      - 'tools/**'
       - '.github/workflows/mypy.yml'
 permissions: read-all
 jobs:

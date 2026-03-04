@@ -170,19 +170,21 @@ class MergeCoordinator:
     def _merge_single_result(self, analysis_name: str,
                              result: Dict[str, Any]) -> None:
         """Merge a single analysis result into the final structure."""
+        display_html = result.get("display_html", False)
+
         # Merge JSON upserts
         for intent in result.get("merge_intents", []):
             if intent["type"] == "json_upsert":
                 self._merge_json_upsert(intent)
 
         # Merge conclusions
-        if "conclusions" in result:
+        if display_html and "conclusions" in result:
             if "conclusions" not in self.merged_content:
                 self.merged_content["conclusions"] = []
             self.merged_content["conclusions"].extend(result["conclusions"])
 
         # Store HTML fragment if display_html is True
-        if result.get("display_html", False):
+        if display_html:
             if "html_fragments" not in self.merged_content:
                 self.merged_content["html_fragments"] = []
             self.merged_content["html_fragments"].append({
@@ -192,12 +194,12 @@ class MergeCoordinator:
                 result["html_fragment"],
             })
 
-        if "toc_entries" in result:
+        if display_html and "toc_entries" in result:
             if "toc_entries" not in self.merged_content:
                 self.merged_content["toc_entries"] = []
             self.merged_content["toc_entries"].extend(result["toc_entries"])
 
-        if "table_ids" in result:
+        if display_html and "table_ids" in result:
             if "table_ids" not in self.merged_content:
                 self.merged_content["table_ids"] = []
             for table_id in result["table_ids"]:

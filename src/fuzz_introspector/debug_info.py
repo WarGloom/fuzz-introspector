@@ -736,7 +736,7 @@ def _build_yaml_shards(paths: list[str], shard_size: int) -> list[list[str]]:
 
 
 def _load_yaml_file(path: str) -> Any:
-    with open(path, "r") as yaml_f:
+    with open(path, "r", encoding="utf-8") as yaml_f:
         return yaml.safe_load(yaml_f)
 
 
@@ -745,8 +745,16 @@ def _load_yaml_shard(paths: list[str]) -> list[Any]:
     for path in paths:
         try:
             parsed = _load_yaml_file(path)
-            if parsed:
+            if isinstance(parsed, list):
                 shard_items.extend(parsed)
+            elif isinstance(parsed, dict):
+                shard_items.append(parsed)
+            elif parsed is not None:
+                logger.warning(
+                    "Skipping unsupported YAML payload type in %s: %s",
+                    path,
+                    type(parsed).__name__,
+                )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("Failed to load yaml file %s: %s", path, exc)
     return shard_items
@@ -785,7 +793,12 @@ def _iter_spill_items(spill_path: str):
         spill_fp.seek(0)
 
         if first_non_whitespace == "[":
-            payload = json.load(spill_fp)
+            try:
+                payload = json.load(spill_fp)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Failed to decode legacy spill JSON array in {spill_path}: {exc.msg}"
+                ) from exc
             if isinstance(payload, list):
                 for item in payload:
                     yield item
@@ -793,11 +806,16 @@ def _iter_spill_items(spill_path: str):
             yield payload
             return
 
-        for line in spill_fp:
+        for line_number, line in enumerate(spill_fp, start=1):
             line = line.strip()
             if not line:
                 continue
-            payload = json.loads(line)
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    "Failed to decode NDJSON spill in "
+                    f"{spill_path} at line {line_number}: {exc.msg}") from exc
             if isinstance(payload, list):
                 for item in payload:
                     yield item

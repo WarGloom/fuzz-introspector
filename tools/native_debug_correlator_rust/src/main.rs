@@ -357,12 +357,12 @@ fn build_type_index(records: &[JsonValue]) -> TypeIndex {
     index
 }
 
-fn build_correlation_plan(functions: &[FunctionEntry]) -> (Vec<FunctionEntry>, Vec<usize>) {
-    let mut unique_functions: Vec<FunctionEntry> = Vec::new();
+fn build_correlation_plan(functions: &[FunctionEntry]) -> (Vec<usize>, Vec<usize>) {
+    let mut unique_row_indices: Vec<usize> = Vec::new();
     let mut row_to_unique_idx: Vec<usize> = Vec::with_capacity(functions.len());
     let mut key_to_unique_idx: HashMap<(&str, &[i128]), usize> = HashMap::with_capacity(functions.len());
 
-    for function in functions {
+    for (row_idx, function) in functions.iter().enumerate() {
         let key = (
             function.file_location.as_str(),
             function.type_arguments.as_slice(),
@@ -370,15 +370,15 @@ fn build_correlation_plan(functions: &[FunctionEntry]) -> (Vec<FunctionEntry>, V
         let unique_idx = if let Some(existing_idx) = key_to_unique_idx.get(&key) {
             *existing_idx
         } else {
-            let next_idx = unique_functions.len();
-            unique_functions.push(function.clone());
+            let next_idx = unique_row_indices.len();
+            unique_row_indices.push(row_idx);
             key_to_unique_idx.insert(key, next_idx);
             next_idx
         };
         row_to_unique_idx.push(unique_idx);
     }
 
-    (unique_functions, row_to_unique_idx)
+    (unique_row_indices, row_to_unique_idx)
 }
 
 fn extract_func_sig_friendly_type_tags(target_type: i128, type_map: &HashMap<i128, TypeEntry>) -> Vec<String> {
@@ -715,8 +715,8 @@ fn correlate_chunk_with_cache(
         return Vec::new();
     }
 
-    let (unique_functions, row_to_unique_idx) = build_correlation_plan(function_chunk);
-    let unique_records = correlate_chunk_parallel(&unique_functions, type_map);
+    let (unique_row_indices, row_to_unique_idx) = build_correlation_plan(function_chunk);
+    let unique_records = correlate_chunk_parallel_by_index(function_chunk, &unique_row_indices, type_map);
 
     let mut records: Vec<CorrelatedRecord> = Vec::with_capacity(function_chunk.len());
     for (function, &unique_idx) in function_chunk.iter().zip(row_to_unique_idx.iter()) {
@@ -730,16 +730,20 @@ fn correlate_chunk_with_cache(
     records
 }
 
-fn correlate_chunk_parallel(
+fn correlate_chunk_parallel_by_index(
     function_chunk: &[FunctionEntry],
+    unique_row_indices: &[usize],
     type_map: &HashMap<i128, TypeEntry>,
 ) -> Vec<CachedCorrelationResult> {
     // rayon par_iter preserves order, so no post-sort or fallback path needed.
-    function_chunk
+    unique_row_indices
         .par_iter()
-        .map(|function| CachedCorrelationResult {
-            func_signature_elems: extract_debugged_function_signature(function, type_map),
-            source: extract_source_location(&function.file_location),
+        .map(|row_idx| {
+            let function = &function_chunk[*row_idx];
+            CachedCorrelationResult {
+                func_signature_elems: extract_debugged_function_signature(function, type_map),
+                source: extract_source_location(&function.file_location),
+            }
         })
         .collect()
 }
@@ -827,8 +831,8 @@ fn run_request(request: Request) -> Result<Response, AppError> {
     timings.parse_ms = to_ms(parse_started.elapsed());
 
     let dedupe_started = Instant::now();
-    let (memoized_correlation_inputs, _) = build_correlation_plan(&parsed_functions);
-    counters.deduped_functions = memoized_correlation_inputs.len();
+    let (unique_row_indices, _) = build_correlation_plan(&parsed_functions);
+    counters.deduped_functions = unique_row_indices.len();
     timings.dedupe_ms = to_ms(dedupe_started.elapsed());
 
     if request.dump_files {
@@ -906,9 +910,9 @@ mod tests {
             function_entry(3, "/src/a.c:10"),
         ];
 
-        let (unique_functions, row_to_unique_idx) = build_correlation_plan(&functions);
+        let (unique_row_indices, row_to_unique_idx) = build_correlation_plan(&functions);
 
-        assert_eq!(unique_functions.len(), 2);
+        assert_eq!(unique_row_indices, vec![0, 2]);
         assert_eq!(row_to_unique_idx, vec![0, 0, 1, 0]);
     }
 
@@ -934,10 +938,57 @@ mod tests {
             function_entry_with_types(2, "/src/a.c:10", vec![1, 2]),
         ];
 
-        let (unique_functions, row_to_unique_idx) = build_correlation_plan(&functions);
+        let (unique_row_indices, row_to_unique_idx) = build_correlation_plan(&functions);
 
-        assert_eq!(unique_functions.len(), 2);
+        assert_eq!(unique_row_indices, vec![0, 1]);
         assert_eq!(row_to_unique_idx, vec![0, 1, 0]);
+    }
+
+    #[test]
+    fn correlate_chunk_parallel_by_index_respects_unique_row_indices_order() {
+        let functions = vec![
+            function_entry_with_types(100, "/src/a.c:10", vec![1]),
+            function_entry_with_types(101, "/src/b.c:20", vec![2]),
+            function_entry_with_types(102, "/src/c.c:30", vec![3]),
+            function_entry_with_types(103, "/src/d.c:40", vec![4]),
+        ];
+        let unique_row_indices = vec![3, 0, 2, 0];
+
+        let records = correlate_chunk_parallel_by_index(&functions, &unique_row_indices, &HashMap::new());
+        let record_sources: Vec<String> = records
+            .into_iter()
+            .map(|record| record.source.source_file)
+            .collect();
+
+        assert_eq!(
+            record_sources,
+            vec![
+                "/src/d.c".to_string(),
+                "/src/a.c".to_string(),
+                "/src/c.c".to_string(),
+                "/src/a.c".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn correlate_chunk_with_cache_is_deterministic_across_runs() {
+        let functions = vec![
+            function_entry_with_types(10, "/src/a.c:10", vec![1, 2]),
+            function_entry_with_types(20, "/src/a.c:10", vec![1, 2]),
+            function_entry_with_types(30, "/src/b.c:30", vec![3]),
+            function_entry_with_types(40, "/src/a.c:10", vec![1, 2]),
+            function_entry_with_types(50, "/src/c.c:50", vec![4, 5]),
+        ];
+
+        let baseline = serde_json::to_string(&correlate_chunk_with_cache(&functions, &HashMap::new()))
+            .expect("failed to serialize baseline records");
+
+        for _ in 0..10 {
+            let current = serde_json::to_string(&correlate_chunk_with_cache(&functions, &HashMap::new()))
+                .expect("failed to serialize correlated records");
+            assert_eq!(current, baseline);
+        }
     }
 }
 

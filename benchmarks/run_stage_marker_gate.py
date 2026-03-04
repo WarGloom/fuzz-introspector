@@ -23,7 +23,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR_SCRIPT = REPO_ROOT / "benchmarks" / "validate_stage_marker_regression.py"
-DEFAULT_STAGES = "optional_analyses,report_generation"
+DEFAULT_STAGES = "optional_analyses,report_generation,type_correlation"
 DEFAULT_MAX_REGRESSION_PERCENT = 10.0
 
 
@@ -50,7 +50,11 @@ def main() -> int:
     parser.add_argument("--baseline-log", required=True)
     parser.add_argument("--candidate-log", required=True)
     parser.add_argument("--output-json", required=True)
-    parser.add_argument("--stages", default=DEFAULT_STAGES)
+    parser.add_argument(
+        "--stages",
+        default=DEFAULT_STAGES,
+        help="Comma-separated stages to validate; override for mixed-version logs.",
+    )
     parser.add_argument(
         "--max-regression-percent",
         type=float,

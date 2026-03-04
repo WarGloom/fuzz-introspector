@@ -23,11 +23,13 @@ from fuzz_introspector import data_loader  # noqa: E402
 
 
 class _ProfileStub:
+
     def __init__(self, name: str):
         self.name = name
 
 
 class _FutureStub:
+
     def __init__(self, value: Any):
         self._value = value
 
@@ -36,6 +38,7 @@ class _FutureStub:
 
 
 class _ExecutorStubOutOfOrder:
+
     def __init__(self, *_args, **_kwargs) -> None:
         self.futures = []
 
@@ -73,8 +76,7 @@ def test_resolve_profile_worker_count_default_uses_cpu_count(monkeypatch):
     monkeypatch.setattr(data_loader.os, "cpu_count", lambda: 24)
 
     configured_workers, effective_workers, rust_default_cap = (
-        data_loader._resolve_profile_worker_count(3)
-    )
+        data_loader._resolve_profile_worker_count(3))
 
     assert configured_workers == 24
     assert effective_workers == 3
@@ -82,16 +84,14 @@ def test_resolve_profile_worker_count_default_uses_cpu_count(monkeypatch):
 
 
 def test_resolve_profile_worker_count_uses_rust_default_from_reachability_env(
-    monkeypatch,
-):
+    monkeypatch, ):
     monkeypatch.delenv(data_loader.FI_PROFILE_WORKERS_ENV, raising=False)
     monkeypatch.setenv(data_loader.FI_REACHABILITY_BACKEND_ENV, "rust")
     monkeypatch.delenv("FI_NATIVE_BACKENDS", raising=False)
     monkeypatch.setattr(data_loader.os, "cpu_count", lambda: 24)
 
     configured_workers, effective_workers, rust_default_cap = (
-        data_loader._resolve_profile_worker_count(20)
-    )
+        data_loader._resolve_profile_worker_count(20))
 
     assert configured_workers == 3
     assert effective_workers == 3
@@ -99,31 +99,29 @@ def test_resolve_profile_worker_count_uses_rust_default_from_reachability_env(
 
 
 def test_resolve_profile_worker_count_uses_rust_default_from_native_backend_env(
-    monkeypatch,
-):
+    monkeypatch, ):
     monkeypatch.delenv(data_loader.FI_PROFILE_WORKERS_ENV, raising=False)
     monkeypatch.delenv(data_loader.FI_REACHABILITY_BACKEND_ENV, raising=False)
     monkeypatch.setenv("FI_NATIVE_BACKENDS", "rust")
     monkeypatch.setattr(data_loader.os, "cpu_count", lambda: 24)
 
     configured_workers, effective_workers, rust_default_cap = (
-        data_loader._resolve_profile_worker_count(20)
-    )
+        data_loader._resolve_profile_worker_count(20))
 
     assert configured_workers == 3
     assert effective_workers == 3
     assert rust_default_cap is True
 
 
-def test_resolve_profile_worker_count_explicit_override_beats_rust_default(monkeypatch):
+def test_resolve_profile_worker_count_explicit_override_beats_rust_default(
+        monkeypatch):
     monkeypatch.setenv(data_loader.FI_PROFILE_WORKERS_ENV, "12")
     monkeypatch.setenv(data_loader.FI_REACHABILITY_BACKEND_ENV, "rust")
     monkeypatch.setenv("FI_NATIVE_BACKENDS", "rust")
     monkeypatch.setattr(data_loader.os, "cpu_count", lambda: 24)
 
     configured_workers, effective_workers, rust_default_cap = (
-        data_loader._resolve_profile_worker_count(20)
-    )
+        data_loader._resolve_profile_worker_count(20))
 
     assert configured_workers == 12
     assert effective_workers == 12
@@ -131,33 +129,30 @@ def test_resolve_profile_worker_count_explicit_override_beats_rust_default(monke
 
 
 def test_load_all_profiles_parallel_preserves_file_order(monkeypatch):
-    monkeypatch.setattr(
-        data_loader.utils, "get_all_files_in_tree_with_regex", _fake_profile_data_files
-    )
+    monkeypatch.setattr(data_loader.utils, "get_all_files_in_tree_with_regex",
+                        _fake_profile_data_files)
 
     monkeypatch.delenv(data_loader.FI_PROFILE_BACKEND_ENV, raising=False)
-    monkeypatch.setattr(
-        data_loader.concurrent.futures, "ThreadPoolExecutor", _ExecutorStubOutOfOrder
-    )
-    monkeypatch.setattr(
-        data_loader.concurrent.futures, "as_completed", _as_completed_out_of_order
-    )
+    monkeypatch.setattr(data_loader.concurrent.futures, "ThreadPoolExecutor",
+                        _ExecutorStubOutOfOrder)
+    monkeypatch.setattr(data_loader.concurrent.futures, "as_completed",
+                        _as_completed_out_of_order)
 
     profiles = data_loader.load_all_profiles("/tmp", "c-cpp", parallelise=True)
-    assert [profile.name for profile in profiles] == ["c.data", "a.data", "b.data"]
+    assert [profile.name
+            for profile in profiles] == ["c.data", "a.data", "b.data"]
 
 
 def test_load_all_profiles_uses_process_backend_when_configured(monkeypatch):
-    monkeypatch.setattr(
-        data_loader.utils, "get_all_files_in_tree_with_regex", _fake_profile_data_files
-    )
-    monkeypatch.setenv(
-        data_loader.FI_PROFILE_BACKEND_ENV, data_loader.FI_PROFILE_BACKEND_PROCESS
-    )
+    monkeypatch.setattr(data_loader.utils, "get_all_files_in_tree_with_regex",
+                        _fake_profile_data_files)
+    monkeypatch.setenv(data_loader.FI_PROFILE_BACKEND_ENV,
+                       data_loader.FI_PROFILE_BACKEND_PROCESS)
 
     selected_backends = []
 
     class _ProcessExecutorStub(_ExecutorStubOutOfOrder):
+
         def __init__(self, *_args, **_kwargs) -> None:
             super().__init__(*_args, **_kwargs)
             selected_backends.append("process")
@@ -166,31 +161,29 @@ def test_load_all_profiles_uses_process_backend_when_configured(monkeypatch):
         del _args, _kwargs
         raise AssertionError("ThreadPoolExecutor should not be selected")
 
-    monkeypatch.setattr(
-        data_loader.concurrent.futures, "ProcessPoolExecutor", _ProcessExecutorStub
-    )
-    monkeypatch.setattr(
-        data_loader.concurrent.futures, "ThreadPoolExecutor", _thread_backend_guard
-    )
-    monkeypatch.setattr(
-        data_loader.concurrent.futures, "as_completed", _as_completed_out_of_order
-    )
+    monkeypatch.setattr(data_loader.concurrent.futures, "ProcessPoolExecutor",
+                        _ProcessExecutorStub)
+    monkeypatch.setattr(data_loader.concurrent.futures, "ThreadPoolExecutor",
+                        _thread_backend_guard)
+    monkeypatch.setattr(data_loader.concurrent.futures, "as_completed",
+                        _as_completed_out_of_order)
 
     profiles = data_loader.load_all_profiles("/tmp", "c-cpp", parallelise=True)
 
     assert selected_backends == ["process"]
-    assert [profile.name for profile in profiles] == ["c.data", "a.data", "b.data"]
+    assert [profile.name
+            for profile in profiles] == ["c.data", "a.data", "b.data"]
 
 
 def test_load_all_profiles_invalid_backend_falls_back_to_thread(monkeypatch):
-    monkeypatch.setattr(
-        data_loader.utils, "get_all_files_in_tree_with_regex", _fake_profile_data_files
-    )
+    monkeypatch.setattr(data_loader.utils, "get_all_files_in_tree_with_regex",
+                        _fake_profile_data_files)
     monkeypatch.setenv(data_loader.FI_PROFILE_BACKEND_ENV, "invalid-backend")
 
     selected_backends = []
 
     class _ThreadExecutorStub(_ExecutorStubOutOfOrder):
+
         def __init__(self, *_args, **_kwargs) -> None:
             super().__init__(*_args, **_kwargs)
             selected_backends.append("thread")
@@ -199,23 +192,22 @@ def test_load_all_profiles_invalid_backend_falls_back_to_thread(monkeypatch):
         del _args, _kwargs
         raise AssertionError("ProcessPoolExecutor should not be selected")
 
-    monkeypatch.setattr(
-        data_loader.concurrent.futures, "ThreadPoolExecutor", _ThreadExecutorStub
-    )
-    monkeypatch.setattr(
-        data_loader.concurrent.futures, "ProcessPoolExecutor", _process_backend_guard
-    )
-    monkeypatch.setattr(
-        data_loader.concurrent.futures, "as_completed", _as_completed_out_of_order
-    )
+    monkeypatch.setattr(data_loader.concurrent.futures, "ThreadPoolExecutor",
+                        _ThreadExecutorStub)
+    monkeypatch.setattr(data_loader.concurrent.futures, "ProcessPoolExecutor",
+                        _process_backend_guard)
+    monkeypatch.setattr(data_loader.concurrent.futures, "as_completed",
+                        _as_completed_out_of_order)
 
     profiles = data_loader.load_all_profiles("/tmp", "c-cpp", parallelise=True)
 
     assert selected_backends == ["thread"]
-    assert [profile.name for profile in profiles] == ["c.data", "a.data", "b.data"]
+    assert [profile.name
+            for profile in profiles] == ["c.data", "a.data", "b.data"]
 
 
 def test_load_all_profiles_fallback_to_serial_on_parallel_failure(monkeypatch):
+
     def fake_files(_root: str, pattern: str):
         del _root
         if "fuzzerLogFile" in pattern:
@@ -226,9 +218,8 @@ def test_load_all_profiles_fallback_to_serial_on_parallel_failure(monkeypatch):
             return []
         return []
 
-    monkeypatch.setattr(
-        data_loader.utils, "get_all_files_in_tree_with_regex", fake_files
-    )
+    monkeypatch.setattr(data_loader.utils, "get_all_files_in_tree_with_regex",
+                        fake_files)
 
     loaded = []
 
@@ -240,18 +231,16 @@ def test_load_all_profiles_fallback_to_serial_on_parallel_failure(monkeypatch):
         loaded.append(data_file)
         return data_file, _ProfileStub(data_file)
 
-    monkeypatch.setattr(
-        data_loader, "_load_profile_with_preloaded_yaml", fake_load_profile
-    )
+    monkeypatch.setattr(data_loader, "_load_profile_with_preloaded_yaml",
+                        fake_load_profile)
 
     def _boom_executor(*_args, **_kwargs):
         del _args, _kwargs
         raise RuntimeError("parallel disabled")
 
     monkeypatch.delenv(data_loader.FI_PROFILE_BACKEND_ENV, raising=False)
-    monkeypatch.setattr(
-        data_loader.concurrent.futures, "ThreadPoolExecutor", _boom_executor
-    )
+    monkeypatch.setattr(data_loader.concurrent.futures, "ThreadPoolExecutor",
+                        _boom_executor)
 
     profiles = data_loader.load_all_profiles("/tmp", "c-cpp", parallelise=True)
 
@@ -286,9 +275,8 @@ def test_load_all_profiles_uses_batched_yaml_loader_for_multiple_profiles(
             return []
         return []
 
-    monkeypatch.setattr(
-        data_loader.utils, "get_all_files_in_tree_with_regex", _fake_profile_data_files
-    )
+    monkeypatch.setattr(data_loader.utils, "get_all_files_in_tree_with_regex",
+                        _fake_profile_data_files)
 
     calls = []
 
@@ -302,18 +290,24 @@ def test_load_all_profiles_uses_batched_yaml_loader_for_multiple_profiles(
                     "profiles": [
                         {
                             "Fuzzer filename": "a.cc",
-                            "All functions": {"Elements": []},
+                            "All functions": {
+                                "Elements": []
+                            },
                         },
                         {
                             "Fuzzer filename": "b.cc",
-                            "All functions": {"Elements": []},
+                            "All functions": {
+                                "Elements": []
+                            },
                         },
                     ]
                 },
             )
-        raise AssertionError("Per-file YAML load should not run when batch succeeds")
+        raise AssertionError(
+            "Per-file YAML load should not run when batch succeeds")
 
     class _FuzzerProfileStub:
+
         def __init__(self, cfg_path, yaml_dict, language, cfg_content):
             del yaml_dict, language, cfg_content
             self.name = cfg_path
@@ -321,12 +315,14 @@ def test_load_all_profiles_uses_batched_yaml_loader_for_multiple_profiles(
         def has_entry_point(self):
             return True
 
-    monkeypatch.setattr(
-        data_loader.backend_loaders, "load_json_with_backend", _fake_loader
-    )
-    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile", _FuzzerProfileStub)
+    monkeypatch.setattr(data_loader.backend_loaders, "load_json_with_backend",
+                        _fake_loader)
+    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile",
+                        _FuzzerProfileStub)
 
-    profiles = data_loader.load_all_profiles(str(tmp_path), "c-cpp", parallelise=False)
+    profiles = data_loader.load_all_profiles(str(tmp_path),
+                                             "c-cpp",
+                                             parallelise=False)
 
     assert len(calls) == 1
     assert calls[0]["paths"] == [
@@ -347,11 +343,11 @@ def test_load_all_profiles_batch_yaml_failure_falls_back_to_python_loader(
     yaml_a = tmp_path / "fuzzerLogFile-a.data.yaml"
     yaml_b = tmp_path / "fuzzerLogFile-b.data.yaml"
     yaml_a.write_text(
-        "Fuzzer filename: a.cc\nAll functions:\n  Elements: []\n", encoding="utf-8"
-    )
+        "Fuzzer filename: a.cc\nAll functions:\n  Elements: []\n",
+        encoding="utf-8")
     yaml_b.write_text(
-        "Fuzzer filename: b.cc\nAll functions:\n  Elements: []\n", encoding="utf-8"
-    )
+        "Fuzzer filename: b.cc\nAll functions:\n  Elements: []\n",
+        encoding="utf-8")
 
     def _fake_profile_data_files(_root: str, pattern: str):
         del _root
@@ -363,9 +359,8 @@ def test_load_all_profiles_batch_yaml_failure_falls_back_to_python_loader(
             return []
         return []
 
-    monkeypatch.setattr(
-        data_loader.utils, "get_all_files_in_tree_with_regex", _fake_profile_data_files
-    )
+    monkeypatch.setattr(data_loader.utils, "get_all_files_in_tree_with_regex",
+                        _fake_profile_data_files)
 
     calls = []
 
@@ -378,12 +373,23 @@ def test_load_all_profiles_batch_yaml_failure_falls_back_to_python_loader(
     def _fake_yaml_reader(path: str):
         yaml_reads.append(path)
         if path == str(yaml_a):
-            return {"Fuzzer filename": "a.cc", "All functions": {"Elements": []}}
+            return {
+                "Fuzzer filename": "a.cc",
+                "All functions": {
+                    "Elements": []
+                }
+            }
         if path == str(yaml_b):
-            return {"Fuzzer filename": "b.cc", "All functions": {"Elements": []}}
+            return {
+                "Fuzzer filename": "b.cc",
+                "All functions": {
+                    "Elements": []
+                }
+            }
         return None
 
     class _FuzzerProfileStub:
+
         def __init__(self, cfg_path, yaml_dict, language, cfg_content):
             del language, cfg_content
             self.name = yaml_dict["Fuzzer filename"]
@@ -392,13 +398,16 @@ def test_load_all_profiles_batch_yaml_failure_falls_back_to_python_loader(
         def has_entry_point(self):
             return True
 
-    monkeypatch.setattr(
-        data_loader.backend_loaders, "load_json_with_backend", _fake_loader
-    )
-    monkeypatch.setattr(data_loader.utils, "data_file_read_yaml", _fake_yaml_reader)
-    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile", _FuzzerProfileStub)
+    monkeypatch.setattr(data_loader.backend_loaders, "load_json_with_backend",
+                        _fake_loader)
+    monkeypatch.setattr(data_loader.utils, "data_file_read_yaml",
+                        _fake_yaml_reader)
+    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile",
+                        _FuzzerProfileStub)
 
-    profiles = data_loader.load_all_profiles(str(tmp_path), "c-cpp", parallelise=False)
+    profiles = data_loader.load_all_profiles(str(tmp_path),
+                                             "c-cpp",
+                                             parallelise=False)
 
     assert len(calls) == 3
     assert "paths" in calls[0]
@@ -423,7 +432,9 @@ def test_read_fuzzer_data_file_to_profile_uses_external_yaml_backend(
             "go",
             {
                 "Fuzzer filename": "fuzzer.cc",
-                "All functions": {"Elements": []},
+                "All functions": {
+                    "Elements": []
+                },
             },
         ),
     )
@@ -431,6 +442,7 @@ def test_read_fuzzer_data_file_to_profile_uses_external_yaml_backend(
     captured_yaml = {}
 
     class _FuzzerProfileStub:
+
         def __init__(self, cfg_path, yaml_dict, language, cfg_content):
             del cfg_path, language, cfg_content
             captured_yaml.update(yaml_dict)
@@ -438,9 +450,11 @@ def test_read_fuzzer_data_file_to_profile_uses_external_yaml_backend(
         def has_entry_point(self):
             return True
 
-    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile", _FuzzerProfileStub)
+    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile",
+                        _FuzzerProfileStub)
 
-    profile = data_loader.read_fuzzer_data_file_to_profile(str(cfg_file), "c-cpp")
+    profile = data_loader.read_fuzzer_data_file_to_profile(
+        str(cfg_file), "c-cpp")
     assert profile is not None
     assert captured_yaml["Fuzzer filename"] == "fuzzer.cc"
 
@@ -467,6 +481,7 @@ def test_read_fuzzer_data_file_to_profile_uses_python_default_backend(
     captured_yaml = {}
 
     class _FuzzerProfileStub:
+
         def __init__(self, cfg_path, yaml_dict, language, cfg_content):
             del cfg_path, language, cfg_content
             captured_yaml.update(yaml_dict)
@@ -474,21 +489,20 @@ def test_read_fuzzer_data_file_to_profile_uses_python_default_backend(
         def has_entry_point(self):
             return True
 
-    monkeypatch.setattr(
-        data_loader.backend_loaders, "load_json_with_backend", _fake_loader
-    )
-    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile", _FuzzerProfileStub)
+    monkeypatch.setattr(data_loader.backend_loaders, "load_json_with_backend",
+                        _fake_loader)
+    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile",
+                        _FuzzerProfileStub)
     # Ensure no FI_ env vars bleed in from the environment.
     for key in list(__import__("os").environ):
         if key.startswith("FI_"):
             monkeypatch.delenv(key, raising=False)
 
-    profile = data_loader.read_fuzzer_data_file_to_profile(str(cfg_file), "c-cpp")
+    profile = data_loader.read_fuzzer_data_file_to_profile(
+        str(cfg_file), "c-cpp")
     assert profile is not None
-    assert (
-        captured_backend["default_backend"]
-        == data_loader.backend_loaders.BACKEND_PYTHON
-    )
+    assert (captured_backend["default_backend"] ==
+            data_loader.backend_loaders.BACKEND_PYTHON)
     assert captured_yaml["Fuzzer filename"] == "fuzzer.cc"
 
 
@@ -514,6 +528,7 @@ def test_read_fuzzer_data_file_to_profile_uses_rust_backend_when_env_set(
     captured_yaml = {}
 
     class _FuzzerProfileStub:
+
         def __init__(self, cfg_path, yaml_dict, language, cfg_content):
             del cfg_path, language, cfg_content
             captured_yaml.update(yaml_dict)
@@ -521,15 +536,82 @@ def test_read_fuzzer_data_file_to_profile_uses_rust_backend_when_env_set(
         def has_entry_point(self):
             return True
 
-    monkeypatch.setattr(
-        data_loader.backend_loaders, "load_json_with_backend", _fake_loader
-    )
-    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile", _FuzzerProfileStub)
+    monkeypatch.setattr(data_loader.backend_loaders, "load_json_with_backend",
+                        _fake_loader)
+    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile",
+                        _FuzzerProfileStub)
     monkeypatch.setenv("FI_NATIVE_BACKENDS", "rust")
 
-    profile = data_loader.read_fuzzer_data_file_to_profile(str(cfg_file), "c-cpp")
+    profile = data_loader.read_fuzzer_data_file_to_profile(
+        str(cfg_file), "c-cpp")
     assert profile is not None
-    assert (
-        captured_backend["default_backend"] == data_loader.backend_loaders.BACKEND_RUST
-    )
+    assert (captured_backend["default_backend"] ==
+            data_loader.backend_loaders.BACKEND_RUST)
     assert captured_yaml["Fuzzer filename"] == "fuzzer.cc"
+
+
+def test_read_fuzzer_data_file_to_profile_retries_with_file_yaml_when_preloaded_fails(
+    monkeypatch,
+    tmp_path,
+):
+    cfg_file = tmp_path / "fuzzerLogFile-sample.data"
+    cfg_file.write_text("Call tree\n", encoding="utf-8")
+    yaml_file = tmp_path / "fuzzerLogFile-sample.data.yaml"
+    yaml_file.write_text(
+        "Fuzzer filename: recovered.cc\nAll functions:\n  Elements: []\n",
+        encoding="utf-8",
+    )
+
+    backend_calls = []
+
+    def _fake_loader(**kwargs):
+        backend_calls.append(kwargs.get("payload"))
+        return "python", None
+
+    yaml_reads = []
+
+    def _fake_yaml_reader(path: str):
+        yaml_reads.append(path)
+        if path == str(yaml_file):
+            return {
+                "Fuzzer filename": "recovered.cc",
+                "All functions": {
+                    "Elements": []
+                },
+            }
+        return None
+
+    constructor_yaml = []
+
+    class _FuzzerProfileStub:
+
+        def __init__(self, cfg_path, yaml_dict, language, cfg_content):
+            del cfg_path, language, cfg_content
+            constructor_yaml.append(yaml_dict)
+            if yaml_dict.get("from_preloaded"):
+                raise ValueError("invalid preloaded yaml")
+            self.name = yaml_dict["Fuzzer filename"]
+
+        def has_entry_point(self):
+            return True
+
+    monkeypatch.setattr(data_loader.backend_loaders, "load_json_with_backend",
+                        _fake_loader)
+    monkeypatch.setattr(data_loader.utils, "data_file_read_yaml",
+                        _fake_yaml_reader)
+    monkeypatch.setattr(data_loader.fuzzer_profile, "FuzzerProfile",
+                        _FuzzerProfileStub)
+
+    profile = data_loader.read_fuzzer_data_file_to_profile(
+        str(cfg_file),
+        "c-cpp",
+        preloaded_yaml={"from_preloaded": True},
+    )
+
+    assert profile is not None
+    assert profile.name == "recovered.cc"
+    assert len(constructor_yaml) == 2
+    assert constructor_yaml[0] == {"from_preloaded": True}
+    assert constructor_yaml[1]["Fuzzer filename"] == "recovered.cc"
+    assert backend_calls == [{"path": str(yaml_file)}]
+    assert yaml_reads == [str(yaml_file)]

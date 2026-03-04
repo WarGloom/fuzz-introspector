@@ -17,7 +17,7 @@ import os
 import json
 import logging
 
-from typing import (Any, List, Dict)
+from typing import (Any, List, Dict, Optional)
 
 from fuzz_introspector import (analysis, html_helpers)
 
@@ -140,8 +140,11 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
             xref_dict = {}
 
         # Get interesting functions sorted by complexity and runtime coverage
-        filtered_functions = self._get_functions_of_interest(
-            all_functions, proj_profile)
+        filtered_functions = self._get_native_functions_of_interest(
+            proj_profile, profiles, all_functions)
+        if filtered_functions is None:
+            filtered_functions = self._get_functions_of_interest(
+                all_functions, proj_profile)
 
         # Process the final result list of functions according to the
         # configured flags
@@ -149,6 +152,12 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
             # Check for max_functions count
             if len(result_list) >= self.max_functions:
                 break
+
+            # Keep this check in the final pass so native candidates preserve
+            # CLI semantics even though the native pre-filter does not receive
+            # the dynamic min_complexity value.
+            if function.cyclomatic_complexity < self.min_complexity:
+                continue
 
             # Check for only_referenced_functions flag
             if (self.only_referenced_functions
@@ -191,6 +200,64 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
             logger.info('Dumping result to %s', result_json_path)
             with open(result_json_path, 'w') as f:
                 json.dump(self.json_results, f)
+
+    def _get_native_functions_of_interest(
+        self,
+        proj_profile: project_profile.MergedProjectProfile,
+        profiles: List[fuzzer_profile.FuzzerProfile],
+        all_functions: List[function_profile.FunctionProfile],
+    ) -> Optional[List[function_profile.FunctionProfile]]:
+        """Return native-sorted candidate functions, or None for fallback."""
+        if not analysis.NativePluginProxy.is_enabled():
+            return None
+
+        # This mode requires per-project callsite cross-reference parity that
+        # the native plugin currently does not model.
+        if self.only_referenced_functions:
+            logger.info(
+                '[native] FarReachLowCoverageAnalyser: '
+                'falling back to Python path for only_referenced_functions')
+            return None
+
+        try:
+            native_result = analysis.get_native_plugin_proxy().run_analysis(
+                proj_profile, profiles, ['far_reach_low_coverage_analysis'])
+            native_rows = native_result['far_reach_low_coverage_analysis'][
+                'tables']['far_reach_candidates']
+        except (KeyError, IndexError, TypeError, AttributeError):
+            return None
+
+        if not native_rows:
+            return None
+
+        function_map: Dict[str, List[function_profile.FunctionProfile]] = {}
+        for fd in all_functions:
+            function_map.setdefault(fd.function_name, []).append(fd)
+
+        native_functions: List[function_profile.FunctionProfile] = []
+        for row in native_rows:
+            if not isinstance(row, dict):
+                return None
+
+            function_name = row.get('function_name')
+            if not isinstance(function_name, str):
+                return None
+
+            candidates = function_map.get(function_name)
+            if not candidates:
+                continue
+
+            # pop(0) is safe: function_map is freshly built in this scope
+            # and handles duplicate function names by consuming sequentially.
+            native_functions.append(candidates.pop(0))
+
+        if not native_functions:
+            return None
+
+        logger.info(
+            '[native] FarReachLowCoverageAnalyser: used Rust result (%d candidates)',
+            len(native_functions))
+        return native_functions
 
     def _get_cross_reference_dict(
             self, functions: List[function_profile.FunctionProfile]

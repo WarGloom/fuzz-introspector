@@ -84,6 +84,7 @@ _NATIVE_PLUGIN_NAMES: frozenset[str] = frozenset({
     "CalltreeAnalysis",
     "SinkCoverageAnalyser",
     "FunctionTable",
+    "FarReachLowCoverageAnalyser",
 })
 
 # Mapping from Python plugin class .get_name() → Rust dispatcher key.
@@ -93,15 +94,17 @@ _PYTHON_NAME_TO_NATIVE_KEY: dict[str, str] = {
     "CalltreeAnalysis": "calltree_analysis",
     "SinkCoverageAnalyser": "sink_coverage_analysis",
     "FunctionTable": "function_table",
+    "FarReachLowCoverageAnalyser": "far_reach_low_coverage_analysis",
 }
 
-
 _NATIVE_PLUGIN_REQUIRED_FUNCTION_FIELDS: dict[str, frozenset[str]] = {
-    "function_table": frozenset({
+    "function_table":
+    frozenset({
         "name",
         "total_cyclomatic_complexity",
     }),
-    "optimal_targets": frozenset({
+    "optimal_targets":
+    frozenset({
         "name",
         "hitcount",
         "arg_count",
@@ -112,21 +115,33 @@ _NATIVE_PLUGIN_REQUIRED_FUNCTION_FIELDS: dict[str, frozenset[str]] = {
         "functions_reached_count",
         "source_file",
     }),
-    "runtime_coverage_analysis": frozenset({
+    "runtime_coverage_analysis":
+    frozenset({
         "name",
         "hitcount",
         "new_unreached_complexity",
         "total_cyclomatic_complexity",
         "reached_by_fuzzers",
     }),
-    "calltree_analysis": frozenset({
+    "calltree_analysis":
+    frozenset({
         "hitcount",
     }),
-    "sink_coverage_analysis": frozenset({
+    "sink_coverage_analysis":
+    frozenset({
         "name",
         "source_file",
         "incoming_references",
         "reached_by_fuzzers",
+    }),
+    "far_reach_low_coverage_analysis":
+    frozenset({
+        "name",
+        "cyclomatic_complexity",
+        "runtime_coverage_percent",
+        "is_accessible",
+        "is_jvm_library",
+        "is_enum",
     }),
 }
 
@@ -138,13 +153,13 @@ _NATIVE_PLUGIN_REQUIRES_TARGET_LANG: frozenset[str] = frozenset({
 _NATIVE_PLUGIN_REQUEST_SCOPE: tuple[str, ...] = tuple()
 
 
-def _normalize_plugin_names(plugin_names: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+def _normalize_plugin_names(
+        plugin_names: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     return tuple(sorted(set(plugin_names)))
 
 
 def get_native_plugin_keys_for_analyses(
-    analysis_names: list[str] | tuple[str, ...],
-) -> tuple[str, ...]:
+    analysis_names: list[str] | tuple[str, ...], ) -> tuple[str, ...]:
     """Map requested analysis names to native plugin keys."""
     native_plugin_keys = []
     for analysis_name in analysis_names:
@@ -179,9 +194,10 @@ def _serialize_project_for_native_plugins(
     include_target_lang = False
     for plugin_name in plugin_names:
         required_function_fields.update(
-            _NATIVE_PLUGIN_REQUIRED_FUNCTION_FIELDS.get(plugin_name, frozenset()))
-        include_target_lang = (include_target_lang
-                               or plugin_name in _NATIVE_PLUGIN_REQUIRES_TARGET_LANG)
+            _NATIVE_PLUGIN_REQUIRED_FUNCTION_FIELDS.get(
+                plugin_name, frozenset()))
+        include_target_lang = (include_target_lang or plugin_name
+                               in _NATIVE_PLUGIN_REQUIRES_TARGET_LANG)
 
     project_data: dict[str, Any] = {}
     if include_target_lang:
@@ -198,23 +214,39 @@ def _serialize_project_for_native_plugins(
             if "arg_count" in required_function_fields:
                 function_entry["arg_count"] = fp.arg_count
             if "cyclomatic_complexity" in required_function_fields:
-                function_entry["cyclomatic_complexity"] = fp.cyclomatic_complexity
+                function_entry[
+                    "cyclomatic_complexity"] = fp.cyclomatic_complexity
             if "total_cyclomatic_complexity" in required_function_fields:
-                function_entry["total_cyclomatic_complexity"] = fp.total_cyclomatic_complexity
+                function_entry[
+                    "total_cyclomatic_complexity"] = fp.total_cyclomatic_complexity
             if "new_unreached_complexity" in required_function_fields:
-                function_entry["new_unreached_complexity"] = fp.new_unreached_complexity
+                function_entry[
+                    "new_unreached_complexity"] = fp.new_unreached_complexity
             if "bb_count" in required_function_fields:
                 function_entry["bb_count"] = fp.bb_count
             if "functions_reached_count" in required_function_fields:
-                function_entry["functions_reached_count"] = len(fp.functions_reached)
+                function_entry["functions_reached_count"] = len(
+                    fp.functions_reached)
             if "reached_by_fuzzers" in required_function_fields:
-                function_entry["reached_by_fuzzers"] = list(fp.reached_by_fuzzers)
+                function_entry["reached_by_fuzzers"] = list(
+                    fp.reached_by_fuzzers)
             if "source_file" in required_function_fields:
-                function_entry["source_file"] = (getattr(fp, "function_source_file", "")
-                                                 or "")
+                function_entry["source_file"] = (getattr(
+                    fp, "function_source_file", "") or "")
             if "incoming_references" in required_function_fields:
                 function_entry["incoming_references"] = list(
                     getattr(fp, "incoming_references", []) or [])
+            if "runtime_coverage_percent" in required_function_fields:
+                function_entry["runtime_coverage_percent"] = (
+                    proj_profile_obj.get_func_hit_percentage(fname))
+            if "is_accessible" in required_function_fields:
+                function_entry["is_accessible"] = bool(
+                    getattr(fp, "is_accessible", True))
+            if "is_jvm_library" in required_function_fields:
+                function_entry["is_jvm_library"] = bool(
+                    getattr(fp, "is_jvm_library", False))
+            if "is_enum" in required_function_fields:
+                function_entry["is_enum"] = bool(getattr(fp, "is_enum", False))
             functions.append(function_entry)
 
     project_data["functions"] = functions
@@ -235,9 +267,9 @@ class NativePluginProxy:
     TIMEOUT_SECONDS = 300
 
     def __init__(self) -> None:
-        self._serialized_payload_cache: dict[
-            tuple[int, int, tuple[int, ...], tuple[str, ...]], bytes
-        ] = {}
+        self._serialized_payload_cache: dict[tuple[int, int, tuple[int, ...],
+                                                   tuple[str, ...]],
+                                             bytes] = {}
         self._result_cache_by_plugin_set: dict[tuple[int, tuple[int, ...],
                                                      tuple[str, ...]],
                                                dict[str, dict[str, Any]]] = {}
@@ -444,8 +476,8 @@ class NativePluginProxy:
 
         dispatch_plugin_names = normalized_plugin_names
         scoped_plugin_names = get_native_plugin_request_scope()
-        if (len(scoped_plugin_names) > len(normalized_plugin_names)
-                and set(normalized_plugin_names).issubset(scoped_plugin_names)):
+        if (len(scoped_plugin_names) > len(normalized_plugin_names) and
+                set(normalized_plugin_names).issubset(scoped_plugin_names)):
             dispatch_plugin_names = scoped_plugin_names
 
             cached_results = self._get_cached_plugin_results(
