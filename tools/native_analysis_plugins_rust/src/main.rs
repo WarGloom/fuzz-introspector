@@ -32,46 +32,194 @@ use std::time::Instant;
 // ── Function entry deserialization ────────────────────────────────────────────
 
 /// Deserialised representation of one function from the project_data payload.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Clone, Default)]
 struct FunctionEntry {
-    #[serde(default)]
     name: String,
-    #[serde(default)]
     hitcount: u64,
-    #[serde(default)]
     arg_count: u64,
-    #[serde(default)]
     cyclomatic_complexity: i64,
-    #[serde(default)]
     total_cyclomatic_complexity: i64,
-    #[serde(default)]
     new_unreached_complexity: i64,
-    #[serde(default)]
     bb_count: u64,
-    #[serde(default)]
-    functions_reached: Vec<String>,
+    /// Length of `functions_reached` from legacy payloads.
+    functions_reached_len: usize,
     /// Explicit count supplied by new Python payload (avoids sending the full
     /// list).  Zero means "not supplied" — callers must use
     /// `effective_reached_count()` instead of reading this field directly.
-    #[serde(default)]
     functions_reached_count: usize,
-    #[serde(default)]
     reached_by_fuzzers: Vec<String>,
-    #[serde(default)]
     #[allow(dead_code)] // deserialized from payload; available for future plugin use
     runtime_coverage_percent: f64,
-    #[serde(default)]
     source_file: String,
-    #[serde(default)]
     incoming_references: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct FunctionFieldMask {
+    name: bool,
+    hitcount: bool,
+    arg_count: bool,
+    cyclomatic_complexity: bool,
+    total_cyclomatic_complexity: bool,
+    new_unreached_complexity: bool,
+    bb_count: bool,
+    functions_reached_len_or_count: bool,
+    reached_by_fuzzers: bool,
+    runtime_coverage_percent: bool,
+    source_file: bool,
+    incoming_references: bool,
+}
+
+fn required_function_fields(plugins: &[String]) -> FunctionFieldMask {
+    let mut fields = FunctionFieldMask::default();
+
+    for plugin in plugins {
+        match plugin.as_str() {
+            "optimal_targets" => {
+                fields.name = true;
+                fields.hitcount = true;
+                fields.arg_count = true;
+                fields.cyclomatic_complexity = true;
+                fields.total_cyclomatic_complexity = true;
+                fields.new_unreached_complexity = true;
+                fields.bb_count = true;
+                fields.functions_reached_len_or_count = true;
+                fields.source_file = true;
+            }
+            "runtime_coverage_analysis" => {
+                fields.name = true;
+                fields.hitcount = true;
+                fields.new_unreached_complexity = true;
+                fields.total_cyclomatic_complexity = true;
+                fields.reached_by_fuzzers = true;
+            }
+            "calltree_analysis" => {
+                fields.hitcount = true;
+            }
+            "sink_coverage_analysis" => {
+                fields.name = true;
+                fields.reached_by_fuzzers = true;
+                fields.source_file = true;
+                fields.incoming_references = true;
+            }
+            "function_table" => {
+                fields.name = true;
+                fields.total_cyclomatic_complexity = true;
+            }
+            _ => {}
+        }
+    }
+
+    fields
+}
+
+fn parse_u64_field(obj: &serde_json::Map<String, JsonValue>, key: &str) -> u64 {
+    obj.get(key).and_then(JsonValue::as_u64).unwrap_or(0)
+}
+
+fn parse_i64_field(obj: &serde_json::Map<String, JsonValue>, key: &str) -> i64 {
+    obj.get(key).and_then(JsonValue::as_i64).unwrap_or(0)
+}
+
+fn parse_f64_field(obj: &serde_json::Map<String, JsonValue>, key: &str) -> f64 {
+    obj.get(key).and_then(JsonValue::as_f64).unwrap_or(0.0)
+}
+
+fn parse_string_field(obj: &serde_json::Map<String, JsonValue>, key: &str) -> String {
+    obj.get(key)
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn parse_string_vec_field(obj: &serde_json::Map<String, JsonValue>, key: &str) -> Vec<String> {
+    obj.get(key)
+        .and_then(JsonValue::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_reached_counters(obj: &serde_json::Map<String, JsonValue>) -> (usize, usize) {
+    let explicit_count = obj
+        .get("functions_reached_count")
+        .and_then(JsonValue::as_u64)
+        .map(|n| n as usize)
+        .unwrap_or(0);
+    let reached_len = obj
+        .get("functions_reached")
+        .and_then(JsonValue::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    (explicit_count, reached_len)
 }
 
 /// Parse `project_data["functions"]` into a `Vec<FunctionEntry>`.
 /// Returns an empty vec if the key is absent or malformed.
-fn parse_functions(project_data: &JsonValue) -> Vec<FunctionEntry> {
+fn parse_functions(project_data: &JsonValue, requested_plugins: &[String]) -> Vec<FunctionEntry> {
+    let fields = required_function_fields(requested_plugins);
+
     project_data
         .get("functions")
-        .and_then(|v| serde_json::from_value::<Vec<FunctionEntry>>(v.clone()).ok())
+        .and_then(JsonValue::as_array)
+        .map(|functions| {
+            functions
+                .iter()
+                .map(|function_value| {
+                    let mut entry = FunctionEntry::default();
+                    if let Some(obj) = function_value.as_object() {
+                        if fields.name {
+                            entry.name = parse_string_field(obj, "name");
+                        }
+                        if fields.hitcount {
+                            entry.hitcount = parse_u64_field(obj, "hitcount");
+                        }
+                        if fields.arg_count {
+                            entry.arg_count = parse_u64_field(obj, "arg_count");
+                        }
+                        if fields.cyclomatic_complexity {
+                            entry.cyclomatic_complexity =
+                                parse_i64_field(obj, "cyclomatic_complexity");
+                        }
+                        if fields.total_cyclomatic_complexity {
+                            entry.total_cyclomatic_complexity =
+                                parse_i64_field(obj, "total_cyclomatic_complexity");
+                        }
+                        if fields.new_unreached_complexity {
+                            entry.new_unreached_complexity =
+                                parse_i64_field(obj, "new_unreached_complexity");
+                        }
+                        if fields.bb_count {
+                            entry.bb_count = parse_u64_field(obj, "bb_count");
+                        }
+                        if fields.functions_reached_len_or_count {
+                            (entry.functions_reached_count, entry.functions_reached_len) =
+                                parse_reached_counters(obj);
+                        }
+                        if fields.reached_by_fuzzers {
+                            entry.reached_by_fuzzers = parse_string_vec_field(obj, "reached_by_fuzzers");
+                        }
+                        if fields.runtime_coverage_percent {
+                            entry.runtime_coverage_percent =
+                                parse_f64_field(obj, "runtime_coverage_percent");
+                        }
+                        if fields.source_file {
+                            entry.source_file = parse_string_field(obj, "source_file");
+                        }
+                        if fields.incoming_references {
+                            entry.incoming_references =
+                                parse_string_vec_field(obj, "incoming_references");
+                        }
+                    }
+                    entry
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -83,9 +231,9 @@ struct ParsedProjectData {
 }
 
 /// Parse the subset of `project_data` used by Rust-native plugins once.
-fn parse_project_data(project_data: &JsonValue) -> ParsedProjectData {
+fn parse_project_data(project_data: &JsonValue, requested_plugins: &[String]) -> ParsedProjectData {
     ParsedProjectData {
-        functions: parse_functions(project_data),
+        functions: parse_functions(project_data, requested_plugins),
         target_lang: project_data
             .get("target_lang")
             .and_then(JsonValue::as_str)
@@ -159,10 +307,10 @@ struct Response {
 ///   fall back to `functions_reached.len()`.
 #[inline]
 fn effective_reached_count(f: &FunctionEntry) -> usize {
-    if f.functions_reached_count > 0 || f.functions_reached.is_empty() {
+    if f.functions_reached_count > 0 || f.functions_reached_len == 0 {
         f.functions_reached_count
     } else {
-        f.functions_reached.len()
+        f.functions_reached_len
     }
 }
 
@@ -885,13 +1033,13 @@ fn dispatch_plugin(name: &str, parsed_data: &ParsedProjectData) -> Option<Plugin
     }
 }
 
-type ProjectDataParser = fn(&JsonValue) -> ParsedProjectData;
+type ProjectDataParser = fn(&JsonValue, &[String]) -> ParsedProjectData;
 
 fn run_request_with_parser(
     request: &Request,
     parse_project_data_fn: ProjectDataParser,
 ) -> HashMap<String, PluginResult> {
-    let parsed_data = parse_project_data_fn(&request.project_data);
+    let parsed_data = parse_project_data_fn(&request.project_data, &request.plugins);
 
     // Collect (name, result) pairs in parallel; rayon preserves input order.
     request
@@ -1067,7 +1215,14 @@ mod tests {
     }
 
     fn parsed(data: &JsonValue) -> ParsedProjectData {
-        parse_project_data(data)
+        let plugins = vec![
+            "optimal_targets".to_string(),
+            "runtime_coverage_analysis".to_string(),
+            "calltree_analysis".to_string(),
+            "sink_coverage_analysis".to_string(),
+            "function_table".to_string(),
+        ];
+        parse_project_data(data, &plugins)
     }
 
     // ── dispatch tests ───────────────────────────────────────────────────────
@@ -1335,9 +1490,12 @@ mod tests {
 
     static PARSE_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
-    fn counting_parse_project_data(project_data: &JsonValue) -> ParsedProjectData {
+    fn counting_parse_project_data(
+        project_data: &JsonValue,
+        requested_plugins: &[String],
+    ) -> ParsedProjectData {
         PARSE_INVOCATIONS.fetch_add(1, Ordering::SeqCst);
-        parse_project_data(project_data)
+        parse_project_data(project_data, requested_plugins)
     }
 
     #[test]
@@ -1432,17 +1590,36 @@ mod tests {
     #[test]
     fn parse_functions_returns_empty_for_missing_key() {
         let data = json!({"function_count": 5});
-        assert!(parse_functions(&data).is_empty());
+        let plugins = vec!["function_table".to_string()];
+        assert!(parse_functions(&data, &plugins).is_empty());
     }
 
     #[test]
     fn parse_functions_handles_defaults_for_missing_fields() {
         let data = json!({"functions": [{"name": "minimal"}]});
-        let funcs = parse_functions(&data);
+        let plugins = vec!["optimal_targets".to_string()];
+        let funcs = parse_functions(&data, &plugins);
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].name, "minimal");
         assert_eq!(funcs[0].hitcount, 0);
         assert_eq!(funcs[0].arg_count, 0);
+    }
+
+    #[test]
+    fn parse_functions_ignores_malformed_unused_fields_for_function_table() {
+        let data = json!({
+            "functions": [{
+                "name": "kept",
+                "total_cyclomatic_complexity": 99,
+                "incoming_references": [1, 2, 3],
+                "reached_by_fuzzers": [{"bad": "type"}]
+            }]
+        });
+        let plugins = vec!["function_table".to_string()];
+        let funcs = parse_functions(&data, &plugins);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "kept");
+        assert_eq!(funcs[0].total_cyclomatic_complexity, 99);
     }
 
     // ── effective_reached_count / functions_reached_count tests ──────────────
@@ -1459,7 +1636,8 @@ mod tests {
             "reached_by_fuzzers": [],
             "runtime_coverage_percent": 0.0, "source_file": "f.cpp"
         }]});
-        let funcs = parse_functions(&data);
+        let plugins = vec!["optimal_targets".to_string()];
+        let funcs = parse_functions(&data, &plugins);
         assert_eq!(effective_reached_count(&funcs[0]), 7);
     }
 
@@ -1475,7 +1653,8 @@ mod tests {
             "reached_by_fuzzers": [],
             "runtime_coverage_percent": 0.0, "source_file": "f.cpp"
         }]});
-        let funcs = parse_functions(&data);
+        let plugins = vec!["optimal_targets".to_string()];
+        let funcs = parse_functions(&data, &plugins);
         assert_eq!(effective_reached_count(&funcs[0]), 3);
     }
 
@@ -1483,7 +1662,8 @@ mod tests {
     #[test]
     fn effective_reached_count_zero_when_both_absent() {
         let data = json!({"functions": [{"name": "f"}]});
-        let funcs = parse_functions(&data);
+        let plugins = vec!["optimal_targets".to_string()];
+        let funcs = parse_functions(&data, &plugins);
         assert_eq!(effective_reached_count(&funcs[0]), 0);
     }
 

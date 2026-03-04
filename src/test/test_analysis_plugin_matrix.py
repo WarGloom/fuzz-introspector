@@ -523,6 +523,76 @@ def test_native_proxy_function_table_uses_slim_payload(monkeypatch) -> None:
     assert functions_payload
     for function_entry in functions_payload:
         assert set(function_entry.keys()) == {"name", "total_cyclomatic_complexity"}
+    assert "function_count" not in request_payload["project_data"]
+    assert "fuzzer_count" not in request_payload["project_data"]
+    assert "has_coverage_data" not in request_payload["project_data"]
+
+
+def test_native_proxy_runtime_cov_payload_is_plugin_minimal() -> None:
+    proxy = analysis.NativePluginProxy()
+    payload = proxy._build_payload_bytes(
+        _make_full_fake_proj_profile(["alpha"]),
+        [],
+        ("runtime_coverage_analysis",),
+    )
+
+    request_payload = json.loads(payload)
+    function_entry = request_payload["project_data"]["functions"][0]
+    assert set(function_entry.keys()) == {
+        "name",
+        "hitcount",
+        "new_unreached_complexity",
+        "total_cyclomatic_complexity",
+        "reached_by_fuzzers",
+    }
+    assert "runtime_coverage_percent" not in function_entry
+    assert "function_count" not in request_payload["project_data"]
+    assert "fuzzer_count" not in request_payload["project_data"]
+    assert "has_coverage_data" not in request_payload["project_data"]
+
+
+def test_native_proxy_sink_payload_includes_only_sink_and_target_lang_fields() -> None:
+    proxy = analysis.NativePluginProxy()
+
+    proj_profile = _make_full_fake_proj_profile(["sink_fn"])
+    proj_profile.target_lang = "python"
+    proj_profile.all_functions["sink_fn"].reached_by_fuzzers = ["fuzzA"]
+    proj_profile.all_functions["sink_fn"].incoming_references = ["caller_a"]
+
+    payload = proxy._build_payload_bytes(
+        proj_profile,
+        [],
+        ("sink_coverage_analysis",),
+    )
+
+    request_payload = json.loads(payload)
+    assert request_payload["project_data"]["target_lang"] == "python"
+    function_entry = request_payload["project_data"]["functions"][0]
+    assert set(function_entry.keys()) == {
+        "name",
+        "source_file",
+        "incoming_references",
+        "reached_by_fuzzers",
+    }
+
+
+def test_native_proxy_payload_cache_key_includes_plugin_set_identity() -> None:
+    proxy = analysis.NativePluginProxy()
+    proj_profile = _make_full_fake_proj_profile(["alpha"])
+
+    payload_one = proxy._build_payload_bytes(
+        proj_profile,
+        [],
+        ("function_table",),
+    )
+    payload_two = proxy._build_payload_bytes(
+        proj_profile,
+        [],
+        ("function_table", "unknown_plugin"),
+    )
+
+    assert payload_one != payload_two
+    assert len(proxy._serialized_payload_cache) == 2
 
 
 def test_native_proxy_caches_results_for_repeated_calls(monkeypatch) -> None:
@@ -554,19 +624,14 @@ def test_native_proxy_caches_results_for_repeated_calls(monkeypatch) -> None:
     assert run_mock.call_count == 1
 
 
-def test_native_proxy_prefetches_once_and_reuses_cached_plugin_results(
+def test_native_proxy_runs_per_requested_plugin_set(
     monkeypatch,
 ) -> None:
-    """First full-plugin call prefetches native plugins and caches follow-up calls."""
+    """Distinct plugin sets trigger distinct native dispatches."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
 
-    fake_proc = _make_native_proc(
-        {
-            **_make_optimal_targets_native_result(["alpha"]),
-            **_make_runtime_cov_native_result(["alpha"]),
-            **_make_calltree_native_result(10, 1, 9, 10.0),
-        }
-    )
+    first_proc = _make_native_proc(_make_optimal_targets_native_result(["alpha"]))
+    second_proc = _make_native_proc(_make_runtime_cov_native_result(["alpha"]))
     proj_profile = _make_full_fake_proj_profile(["alpha"], has_coverage=True)
     proxy = analysis.NativePluginProxy()
 
@@ -578,7 +643,7 @@ def test_native_proxy_prefetches_once_and_reuses_cached_plugin_results(
         ),
         mock.patch(
             "fuzz_introspector.analysis.subprocess.run",
-            return_value=fake_proc,
+            side_effect=[first_proc, second_proc],
         ) as run_mock,
     ):
         first = proxy.run_analysis(proj_profile, [], ["optimal_targets"])
@@ -586,7 +651,7 @@ def test_native_proxy_prefetches_once_and_reuses_cached_plugin_results(
 
     assert "optimal_targets" in first
     assert "runtime_coverage_analysis" in second
-    assert run_mock.call_count == 1
+    assert run_mock.call_count == 2
 
 
 def test_get_native_plugin_proxy_returns_shared_instance() -> None:
@@ -618,6 +683,7 @@ def _make_fake_func_profile(function_name="some_func"):
     fp.reached_by_fuzzers = []
     fp.cov_init_graph_percentage = 0.0
     fp.function_source_file = "foo.c"
+    fp.incoming_references = []
     return fp
 
 

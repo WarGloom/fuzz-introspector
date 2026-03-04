@@ -95,76 +95,99 @@ _PYTHON_NAME_TO_NATIVE_KEY: dict[str, str] = {
 }
 
 
-def _serialize_project_for_native(
+_NATIVE_PLUGIN_REQUIRED_FUNCTION_FIELDS: dict[str, frozenset[str]] = {
+    "function_table": frozenset({
+        "name",
+        "total_cyclomatic_complexity",
+    }),
+    "optimal_targets": frozenset({
+        "name",
+        "hitcount",
+        "arg_count",
+        "cyclomatic_complexity",
+        "total_cyclomatic_complexity",
+        "new_unreached_complexity",
+        "bb_count",
+        "functions_reached_count",
+        "source_file",
+    }),
+    "runtime_coverage_analysis": frozenset({
+        "name",
+        "hitcount",
+        "new_unreached_complexity",
+        "total_cyclomatic_complexity",
+        "reached_by_fuzzers",
+    }),
+    "calltree_analysis": frozenset({
+        "hitcount",
+    }),
+    "sink_coverage_analysis": frozenset({
+        "name",
+        "source_file",
+        "incoming_references",
+        "reached_by_fuzzers",
+    }),
+}
+
+_NATIVE_PLUGIN_REQUIRES_TARGET_LANG: frozenset[str] = frozenset({
+    "calltree_analysis",
+    "sink_coverage_analysis",
+})
+
+
+def _normalize_plugin_names(plugin_names: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    return tuple(sorted(set(plugin_names)))
+
+
+def _serialize_project_for_native_plugins(
     proj_profile_obj: "project_profile.MergedProjectProfile",
-    profiles_list: "List[fuzzer_profile.FuzzerProfile]",
-) -> dict:
-    """Build a JSON-serialisable summary of project data for the Rust plugins.
+    plugin_names: tuple[str, ...],
+) -> dict[str, Any]:
+    """Build a plugin-specific JSON payload for Rust native analysis plugins."""
+    required_function_fields: set[str] = set()
+    include_target_lang = False
+    for plugin_name in plugin_names:
+        required_function_fields.update(
+            _NATIVE_PLUGIN_REQUIRED_FUNCTION_FIELDS.get(plugin_name, frozenset()))
+        include_target_lang = (include_target_lang
+                               or plugin_name in _NATIVE_PLUGIN_REQUIRES_TARGET_LANG)
 
-    Passes the full function table so that optimal_targets,
-    runtime_coverage_analysis, and calltree_analysis have real data to work
-    with.  Any attribute access that may fail on older profile objects is
-    guarded with ``getattr`` fallbacks.
-    """
+    project_data: dict[str, Any] = {}
+    if include_target_lang:
+        project_data["target_lang"] = proj_profile_obj.target_lang
+
     functions = []
-    for fname, fp in proj_profile_obj.all_functions.items():
-        functions.append({
-            "name":
-            fname,
-            "hitcount":
-            fp.hitcount,
-            "arg_count":
-            fp.arg_count,
-            "cyclomatic_complexity":
-            fp.cyclomatic_complexity,
-            "total_cyclomatic_complexity":
-            fp.total_cyclomatic_complexity,
-            "new_unreached_complexity":
-            fp.new_unreached_complexity,
-            "bb_count":
-            fp.bb_count,
-            "functions_reached_count":
-            len(fp.functions_reached),
-            "reached_by_fuzzers":
-            list(fp.reached_by_fuzzers),
-            "runtime_coverage_percent":
-            (getattr(fp, "cov_init_graph_percentage", 0.0) or 0.0),
-            "source_file": (getattr(fp, "function_source_file", "") or ""),
-            "incoming_references":
-            list(getattr(fp, "incoming_references", []) or []),
-        })
+    if required_function_fields:
+        for fname, fp in proj_profile_obj.all_functions.items():
+            function_entry: dict[str, Any] = {}
+            if "name" in required_function_fields:
+                function_entry["name"] = fname
+            if "hitcount" in required_function_fields:
+                function_entry["hitcount"] = fp.hitcount
+            if "arg_count" in required_function_fields:
+                function_entry["arg_count"] = fp.arg_count
+            if "cyclomatic_complexity" in required_function_fields:
+                function_entry["cyclomatic_complexity"] = fp.cyclomatic_complexity
+            if "total_cyclomatic_complexity" in required_function_fields:
+                function_entry["total_cyclomatic_complexity"] = fp.total_cyclomatic_complexity
+            if "new_unreached_complexity" in required_function_fields:
+                function_entry["new_unreached_complexity"] = fp.new_unreached_complexity
+            if "bb_count" in required_function_fields:
+                function_entry["bb_count"] = fp.bb_count
+            if "functions_reached_count" in required_function_fields:
+                function_entry["functions_reached_count"] = len(fp.functions_reached)
+            if "reached_by_fuzzers" in required_function_fields:
+                function_entry["reached_by_fuzzers"] = list(fp.reached_by_fuzzers)
+            if "source_file" in required_function_fields:
+                function_entry["source_file"] = (getattr(fp, "function_source_file", "")
+                                                 or "")
+            if "incoming_references" in required_function_fields:
+                function_entry["incoming_references"] = list(
+                    getattr(fp, "incoming_references", []) or [])
+            functions.append(function_entry)
 
-    return {
-        "function_count":
-        len(proj_profile_obj.all_functions),
-        "fuzzer_count":
-        len(profiles_list),
-        "target_lang":
-        proj_profile_obj.target_lang,
-        "has_coverage_data": (proj_profile_obj.has_coverage_data() if callable(
-            getattr(proj_profile_obj, "has_coverage_data", None)) else False),
-        "functions":
-        functions,
-    }
-
-
-def _serialize_project_for_native_function_table(
-    proj_profile_obj: "project_profile.MergedProjectProfile", ) -> dict:
-    """Build a slim payload for function-table ordering-only requests."""
-    functions = []
-    for fname, fp in proj_profile_obj.all_functions.items():
-        functions.append({
-            "name":
-            fname,
-            "total_cyclomatic_complexity":
-            fp.total_cyclomatic_complexity,
-        })
-
-    return {
-        "function_count": len(proj_profile_obj.all_functions),
-        "target_lang": proj_profile_obj.target_lang,
-        "functions": functions,
-    }
+    project_data["functions"] = functions
+    return project_data
 
 
 class NativePluginProxy:
@@ -179,16 +202,11 @@ class NativePluginProxy:
     NATIVE_BINARY = "native_analysis_plugins_rust"
     SCHEMA_VERSION = 1
     TIMEOUT_SECONDS = 300
-    _FULL_PAYLOAD_PLUGIN_NAMES: tuple[str, ...] = (
-        "optimal_targets",
-        "runtime_coverage_analysis",
-        "calltree_analysis",
-        "sink_coverage_analysis",
-    )
 
     def __init__(self) -> None:
-        self._serialized_payload_cache: dict[tuple[str, int, tuple[int, ...]],
-                                             bytes] = {}
+        self._serialized_payload_cache: dict[
+            tuple[int, int, tuple[int, ...], tuple[str, ...]], bytes
+        ] = {}
         self._result_cache_by_plugin_set: dict[tuple[int, tuple[int, ...],
                                                      tuple[str, ...]],
                                                dict[str, dict[str, Any]]] = {}
@@ -238,21 +256,20 @@ class NativePluginProxy:
         profiles_list: "List[fuzzer_profile.FuzzerProfile]",
         plugin_names: tuple[str, ...],
     ) -> bytes:
-        use_function_table_slim_payload = plugin_names == ("function_table", )
+        normalized_plugin_names = _normalize_plugin_names(plugin_names)
         project_key = self._project_cache_key(proj_profile_obj, profiles_list)
         payload_key = (
-            "function_table" if use_function_table_slim_payload else "full",
+            self.SCHEMA_VERSION,
             project_key[0],
             project_key[1],
+            normalized_plugin_names,
         )
         project_data_bytes = self._serialized_payload_cache.get(payload_key)
         if project_data_bytes is None:
-            if use_function_table_slim_payload:
-                project_data = _serialize_project_for_native_function_table(
-                    proj_profile_obj)
-            else:
-                project_data = _serialize_project_for_native(
-                    proj_profile_obj, profiles_list)
+            project_data = _serialize_project_for_native_plugins(
+                proj_profile_obj,
+                normalized_plugin_names,
+            )
             project_data_bytes = json.dumps(project_data).encode()
             self._serialized_payload_cache[payload_key] = project_data_bytes
 
@@ -260,7 +277,7 @@ class NativePluginProxy:
             b'{"schema_version":',
             str(self.SCHEMA_VERSION).encode(),
             b',"plugins":',
-            json.dumps(list(plugin_names)).encode(),
+            json.dumps(list(normalized_plugin_names)).encode(),
             b',"project_data":',
             project_data_bytes,
             b"}",
@@ -374,37 +391,6 @@ class NativePluginProxy:
             collected[plugin_name] = plugin_result
         return collected
 
-    def _maybe_prefetch_full_payload_plugins(
-        self,
-        native_bin: str,
-        proj_profile_obj: "project_profile.MergedProjectProfile",
-        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
-        plugin_names: tuple[str, ...],
-    ) -> None:
-        project_key = self._project_cache_key(proj_profile_obj, profiles_list)
-        if project_key in self._prefetch_done_for_project:
-            return
-
-        requires_full_payload = any(name != "function_table"
-                                    for name in plugin_names)
-        if not requires_full_payload:
-            return
-
-        prefetch_results = self._dispatch_to_native(
-            native_bin,
-            proj_profile_obj,
-            profiles_list,
-            self._FULL_PAYLOAD_PLUGIN_NAMES,
-        )
-        self._prefetch_done_for_project.add(project_key)
-        if prefetch_results:
-            self._cache_results(
-                proj_profile_obj,
-                profiles_list,
-                self._FULL_PAYLOAD_PLUGIN_NAMES,
-                prefetch_results,
-            )
-
     def run_analysis(
         self,
         proj_profile_obj: "project_profile.MergedProjectProfile",
@@ -419,7 +405,7 @@ class NativePluginProxy:
         if not plugin_names:
             return {}
 
-        normalized_plugin_names = tuple(plugin_names)
+        normalized_plugin_names = _normalize_plugin_names(tuple(plugin_names))
         cached_results = self._get_cached_plugin_results(
             proj_profile_obj, profiles_list, normalized_plugin_names)
         if cached_results is not None:
@@ -433,15 +419,6 @@ class NativePluginProxy:
                 self.NATIVE_BINARY,
             )
             return {}
-
-        self._maybe_prefetch_full_payload_plugins(native_bin, proj_profile_obj,
-                                                  profiles_list,
-                                                  normalized_plugin_names)
-
-        cached_results = self._get_cached_plugin_results(
-            proj_profile_obj, profiles_list, normalized_plugin_names)
-        if cached_results is not None:
-            return cached_results
 
         results = self._dispatch_to_native(
             native_bin,
