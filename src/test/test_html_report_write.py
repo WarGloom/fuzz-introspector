@@ -16,13 +16,13 @@
 import os
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../")
 
-from fuzz_introspector import constants, html_report, styling  # noqa: E402
+from fuzz_introspector import constants, html_helpers, html_report, styling  # noqa: E402
 
 
 def test_write_content_to_html_files_skips_prettify_when_disabled(
@@ -174,3 +174,69 @@ def test_create_fuzzer_detailed_section_skips_bitmap_for_large_calltree(
         "Skipping calltree overview bitmap" in record.message
         for record in caplog.records
     )
+
+
+def test_create_horisontal_calltree_image_uses_agg_when_backend_not_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    use_calls: list[str] = []
+    fake_matplotlib = ModuleType("matplotlib")
+    fake_pyplot = ModuleType("matplotlib.pyplot")
+    fake_patches = ModuleType("matplotlib.patches")
+
+    def fake_use(backend: str) -> None:
+        use_calls.append(backend)
+
+    fake_matplotlib.use = fake_use
+    fake_patches.Rectangle = object
+
+    monkeypatch.delenv("MPLBACKEND", raising=False)
+    monkeypatch.setitem(sys.modules, "matplotlib", fake_matplotlib)
+    monkeypatch.setitem(sys.modules, "matplotlib.pyplot", fake_pyplot)
+    monkeypatch.setitem(sys.modules, "matplotlib.patches", fake_patches)
+    monkeypatch.setattr(
+        html_helpers,
+        "_create_horisontal_calltree_image_impl",
+        lambda *_args, **_kwargs: ["green"],
+    )
+
+    profile = SimpleNamespace(get_callsites=lambda: [])
+    colors = html_helpers.create_horisontal_calltree_image(
+        "test.png", profile, False, "/tmp"
+    )
+
+    assert colors == ["green"]
+    assert use_calls == ["Agg"]
+
+
+def test_create_horisontal_calltree_image_preserves_explicit_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    use_calls: list[str] = []
+    fake_matplotlib = ModuleType("matplotlib")
+    fake_pyplot = ModuleType("matplotlib.pyplot")
+    fake_patches = ModuleType("matplotlib.patches")
+
+    def fake_use(backend: str) -> None:
+        use_calls.append(backend)
+
+    fake_matplotlib.use = fake_use
+    fake_patches.Rectangle = object
+
+    monkeypatch.setenv("MPLBACKEND", "TkAgg")
+    monkeypatch.setitem(sys.modules, "matplotlib", fake_matplotlib)
+    monkeypatch.setitem(sys.modules, "matplotlib.pyplot", fake_pyplot)
+    monkeypatch.setitem(sys.modules, "matplotlib.patches", fake_patches)
+    monkeypatch.setattr(
+        html_helpers,
+        "_create_horisontal_calltree_image_impl",
+        lambda *_args, **_kwargs: ["yellow"],
+    )
+
+    profile = SimpleNamespace(get_callsites=lambda: [])
+    colors = html_helpers.create_horisontal_calltree_image(
+        "test.png", profile, False, "/tmp"
+    )
+
+    assert colors == ["yellow"]
+    assert use_calls == []

@@ -83,13 +83,16 @@ class StubParallelAnalysisOne(analysis.AnalysisInterface):
         out_dir: str,
     ) -> str:
         _write_pid_marker(out_dir, self.get_name())
-        table_of_contents.add_entry("Stub One", "stub-one",
-                                    html_helpers.HTML_HEADING.H2)
+        table_of_contents.add_entry(
+            "Stub One", "stub-one", html_helpers.HTML_HEADING.H2
+        )
         tables.append(f"stubTable{len(tables)}")
         conclusions.append(
-            html_helpers.HTMLConclusion(9, "Stub One", "Parallel stub one"))
-        json_report.add_analysis_dict_to_json_report(self.get_name(),
-                                                     {"value": "one"}, out_dir)
+            html_helpers.HTMLConclusion(9, "Stub One", "Parallel stub one")
+        )
+        json_report.add_analysis_dict_to_json_report(
+            self.get_name(), {"value": "one"}, out_dir
+        )
         return "<div>Stub One</div>"
 
 
@@ -121,13 +124,16 @@ class StubParallelAnalysisTwo(analysis.AnalysisInterface):
         out_dir: str,
     ) -> str:
         _write_pid_marker(out_dir, self.get_name())
-        table_of_contents.add_entry("Stub Two", "stub-two",
-                                    html_helpers.HTML_HEADING.H2)
+        table_of_contents.add_entry(
+            "Stub Two", "stub-two", html_helpers.HTML_HEADING.H2
+        )
         tables.append(f"stubTable{len(tables)}")
         conclusions.append(
-            html_helpers.HTMLConclusion(8, "Stub Two", "Parallel stub two"))
-        json_report.add_analysis_dict_to_json_report(self.get_name(),
-                                                     {"value": "two"}, out_dir)
+            html_helpers.HTMLConclusion(8, "Stub Two", "Parallel stub two")
+        )
+        json_report.add_analysis_dict_to_json_report(
+            self.get_name(), {"value": "two"}, out_dir
+        )
         return "<div>Stub Two</div>"
 
 
@@ -159,14 +165,14 @@ class StubSerialOnlyAnalysis(analysis.AnalysisInterface):
         out_dir: str,
     ) -> str:
         PARALLEL_EXECUTION_LOG.append((self.get_name(), os.getpid()))
-        table_of_contents.add_entry("Stub Serial", "stub-serial",
-                                    html_helpers.HTML_HEADING.H2)
+        table_of_contents.add_entry(
+            "Stub Serial", "stub-serial", html_helpers.HTML_HEADING.H2
+        )
         tables.append(f"stubTable{len(tables)}")
-        conclusions.append(
-            html_helpers.HTMLConclusion(7, "Stub Serial", "Serial stub"))
-        json_report.add_analysis_dict_to_json_report(self.get_name(),
-                                                     {"value": "serial"},
-                                                     out_dir)
+        conclusions.append(html_helpers.HTMLConclusion(7, "Stub Serial", "Serial stub"))
+        json_report.add_analysis_dict_to_json_report(
+            self.get_name(), {"value": "serial"}, out_dir
+        )
         return "<div>Stub Serial</div>"
 
 
@@ -197,12 +203,14 @@ class StubParallelOrderAnalysis(analysis.AnalysisInterface):
         conclusions: List[html_helpers.HTMLConclusion],
         out_dir: str,
     ) -> str:
-        table_of_contents.add_entry("Order Parallel", "order-parallel",
-                                    html_helpers.HTML_HEADING.H2)
+        table_of_contents.add_entry(
+            "Order Parallel", "order-parallel", html_helpers.HTML_HEADING.H2
+        )
         table_id = "order_parallel_table"
         tables.append(table_id)
         conclusions.append(
-            html_helpers.HTMLConclusion(5, "Order Parallel", "Parallel order"))
+            html_helpers.HTMLConclusion(5, "Order Parallel", "Parallel order")
+        )
         return f'<table id="{table_id}"></table>'
 
 
@@ -233,12 +241,14 @@ class StubSerialOrderAnalysis(analysis.AnalysisInterface):
         conclusions: List[html_helpers.HTMLConclusion],
         out_dir: str,
     ) -> str:
-        table_of_contents.add_entry("Order Serial", "order-serial",
-                                    html_helpers.HTML_HEADING.H2)
+        table_of_contents.add_entry(
+            "Order Serial", "order-serial", html_helpers.HTML_HEADING.H2
+        )
         table_id = "order_serial_table"
         tables.append(table_id)
         conclusions.append(
-            html_helpers.HTMLConclusion(4, "Order Serial", "Serial order"))
+            html_helpers.HTMLConclusion(4, "Order Serial", "Serial order")
+        )
         return f'<table id="{table_id}"></table>'
 
 
@@ -249,21 +259,19 @@ class TestPR6SerialCompatibility:
     def test_project(self, tmp_path: Path) -> analysis.IntrospectionProject:
         """Create a minimal test project."""
         # Create a minimal project with dummy data
-        proj = analysis.IntrospectionProject(constants.LANGUAGES.CPP,
-                                             str(tmp_path), "")
+        proj = analysis.IntrospectionProject(constants.LANGUAGES.CPP, str(tmp_path), "")
         proj.proj_profile = {
             "project_name": "test-project",
-            "fuzzers": [{
-                "id": "fuzzer1"
-            }],
+            "fuzzers": [{"id": "fuzzer1"}],
         }
         proj.profiles = {}
         proj.optional_analyses = []
         return proj
 
     @pytest.fixture
-    def test_data(self, test_project: analysis.IntrospectionProject,
-                  tmp_path: Path) -> Dict[str, Any]:
+    def test_data(
+        self, test_project: analysis.IntrospectionProject, tmp_path: Path
+    ) -> Dict[str, Any]:
         """Create test data for analyses."""
         return {
             "table_of_contents": html_helpers.HtmlTableOfContents(),
@@ -276,8 +284,7 @@ class TestPR6SerialCompatibility:
             "out_dir": str(tmp_path / "output"),
         }
 
-    def test_serial_compatibility_parity(self, test_data: Dict[str,
-                                                               Any]) -> None:
+    def test_serial_compatibility_parity(self, test_data: Dict[str, Any]) -> None:
         """Test that serial compatibility mode produces same output as baseline."""
         # Run analyses in serial mode (worker count = 1)
         # This is the baseline implementation
@@ -311,12 +318,14 @@ class TestPR6SerialCompatibility:
 
         # Verify HTML parity
         assert baseline_html == pr6_html, (
-            "Serial compatibility mode must produce identical HTML output")
+            "Serial compatibility mode must produce identical HTML output"
+        )
 
         # Verify JSON parity by checking that the same analyses were run
         # and produced equivalent results
         assert baseline_html == pr6_html, (
-            "Serial JSON output must match baseline for same analyses")
+            "Serial JSON output must match baseline for same analyses"
+        )
 
 
 class TestPR6JSONDeterminism:
@@ -326,13 +335,10 @@ class TestPR6JSONDeterminism:
     def deterministic_test_data(self, tmp_path: Path) -> Dict[str, Any]:
         """Create test data for determinism tests."""
         # Create a project with deterministic data
-        proj = analysis.IntrospectionProject(constants.LANGUAGES.CPP,
-                                             str(tmp_path), "")
+        proj = analysis.IntrospectionProject(constants.LANGUAGES.CPP, str(tmp_path), "")
         proj.proj_profile = {
             "project_name": "deterministic-test",
-            "fuzzers": [{
-                "id": "fuzzer1"
-            }],
+            "fuzzers": [{"id": "fuzzer1"}],
         }
         proj.profiles = {}
         proj.optional_analyses = []
@@ -349,7 +355,8 @@ class TestPR6JSONDeterminism:
         }
 
     def test_json_determinism_three_runs(
-            self, deterministic_test_data: Dict[str, Any]) -> None:
+        self, deterministic_test_data: Dict[str, Any]
+    ) -> None:
         """Test that JSON output is deterministic across 3 runs."""
         out_dir = deterministic_test_data["out_dir"]
         os.makedirs(out_dir, exist_ok=True)
@@ -382,7 +389,8 @@ class TestPR6JSONDeterminism:
         # Compare all three runs
         for i in range(1, 3):
             assert results[0] == results[i], (
-                f"Run {i} must produce identical deterministic artifacts")
+                f"Run {i} must produce identical deterministic artifacts"
+            )
 
     def _collect_deterministic_artifacts(self, out_dir: str) -> Dict[str, str]:
         """Collect deterministic artifacts and return their hashes."""
@@ -403,15 +411,14 @@ class TestPR6JSONDeterminism:
         return artifacts
 
     def test_deterministic_json_serialization(
-            self, deterministic_test_data: Dict[str, Any]) -> None:
+        self, deterministic_test_data: Dict[str, Any]
+    ) -> None:
         """Test that JSON serialization is deterministic."""
         # Create test data that will be serialized
         test_data = {
             "key1": "value1",
             "key2": [3, 2, 1],
-            "key3": {
-                "nested": "value"
-            },
+            "key3": {"nested": "value"},
         }
 
         # Serialize with stable key ordering
@@ -419,7 +426,8 @@ class TestPR6JSONDeterminism:
         json_str2 = json.dumps(test_data, sort_keys=True)
 
         assert json_str1 == json_str2, (
-            "JSON serialization must be deterministic with sort_keys=True")
+            "JSON serialization must be deterministic with sort_keys=True"
+        )
 
         # Without sort_keys, it should still be deterministic for the same Python version
         json_str3 = json.dumps(test_data)
@@ -433,13 +441,10 @@ class TestPR6ParallelExecution:
 
     @pytest.fixture
     def parallel_test_data(self, tmp_path: Path) -> Dict[str, Any]:
-        proj = analysis.IntrospectionProject(constants.LANGUAGES.CPP,
-                                             str(tmp_path), "")
+        proj = analysis.IntrospectionProject(constants.LANGUAGES.CPP, str(tmp_path), "")
         proj.proj_profile = {
             "project_name": "parallel-test",
-            "fuzzers": [{
-                "id": "fuzzer1"
-            }],
+            "fuzzers": [{"id": "fuzzer1"}],
         }
         proj.profiles = []
         proj.optional_analyses = []
@@ -488,12 +493,9 @@ class TestPR6ParallelExecution:
             analyses_registry,
             "analysis_parallel_compatibility",
             {
-                StubParallelAnalysisOne:
-                analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
-                StubSerialOnlyAnalysis:
-                analyses_registry.PARALLEL_COMPATIBILITY_SERIAL_ONLY,
-                StubParallelAnalysisTwo:
-                analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+                StubParallelAnalysisOne: analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+                StubSerialOnlyAnalysis: analyses_registry.PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+                StubParallelAnalysisTwo: analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
             },
         )
 
@@ -527,30 +529,30 @@ class TestPR6ParallelExecution:
         assert "Stub Serial" in toc_titles
         assert len(parallel_test_data["tables"]) == 3
 
-        assert PARALLEL_EXECUTION_LOG == [(StubSerialOnlyAnalysis.get_name(),
-                                           os.getpid())]
+        assert PARALLEL_EXECUTION_LOG == [
+            (StubSerialOnlyAnalysis.get_name(), os.getpid())
+        ]
 
         for analysis_name in (
-                StubParallelAnalysisOne.get_name(),
-                StubParallelAnalysisTwo.get_name(),
+            StubParallelAnalysisOne.get_name(),
+            StubParallelAnalysisTwo.get_name(),
         ):
-            pid_path = os.path.join(parallel_test_data["out_dir"],
-                                    f"{analysis_name}.pid")
+            pid_path = os.path.join(
+                parallel_test_data["out_dir"], f"{analysis_name}.pid"
+            )
             with open(pid_path, "r") as pid_file:
                 worker_pid = int(pid_file.read().strip())
             assert worker_pid != os.getpid()
 
-        summary_path = os.path.join(parallel_test_data["out_dir"],
-                                    constants.SUMMARY_FILE)
+        summary_path = os.path.join(
+            parallel_test_data["out_dir"], constants.SUMMARY_FILE
+        )
         with open(summary_path, "r") as summary_file:
             summary_contents = json.load(summary_file)
         assert "analyses" in summary_contents
-        assert StubParallelAnalysisOne.get_name(
-        ) in summary_contents["analyses"]
-        assert StubParallelAnalysisTwo.get_name(
-        ) in summary_contents["analyses"]
-        assert StubSerialOnlyAnalysis.get_name(
-        ) in summary_contents["analyses"]
+        assert StubParallelAnalysisOne.get_name() in summary_contents["analyses"]
+        assert StubParallelAnalysisTwo.get_name() in summary_contents["analyses"]
+        assert StubSerialOnlyAnalysis.get_name() in summary_contents["analyses"]
 
     def test_parallel_table_ids_unique(
         self,
@@ -579,10 +581,8 @@ class TestPR6ParallelExecution:
             analyses_registry,
             "analysis_parallel_compatibility",
             {
-                StubParallelAnalysisOne:
-                analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
-                StubParallelAnalysisTwo:
-                analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+                StubParallelAnalysisOne: analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+                StubParallelAnalysisTwo: analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
             },
         )
 
@@ -603,8 +603,9 @@ class TestPR6ParallelExecution:
         )
 
         table_ids = parallel_test_data["tables"]
-        assert len(table_ids) == len(
-            set(table_ids)), ("Parallel table IDs must be globally unique")
+        assert len(table_ids) == len(set(table_ids)), (
+            "Parallel table IDs must be globally unique"
+        )
 
     def test_parallel_merge_respects_canonical_order(
         self,
@@ -633,10 +634,8 @@ class TestPR6ParallelExecution:
             analyses_registry,
             "analysis_parallel_compatibility",
             {
-                StubParallelOrderAnalysis:
-                analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
-                StubSerialOrderAnalysis:
-                analyses_registry.PARALLEL_COMPATIBILITY_SERIAL_ONLY,
+                StubParallelOrderAnalysis: analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE,
+                StubSerialOrderAnalysis: analyses_registry.PARALLEL_COMPATIBILITY_SERIAL_ONLY,
             },
         )
 
@@ -661,8 +660,7 @@ class TestPR6ParallelExecution:
             for entry in parallel_test_data["table_of_contents"].entries
         ]
         filtered_titles = [
-            title for title in toc_titles
-            if title != "Analyses and suggestions"
+            title for title in toc_titles if title != "Analyses and suggestions"
         ]
         assert filtered_titles == ["Order Parallel", "Order Serial"]
         assert parallel_test_data["tables"] == [
@@ -677,13 +675,10 @@ class TestPR6RetryConflictPathSafety:
     @pytest.fixture
     def conflict_test_data(self, tmp_path: Path) -> Dict[str, Any]:
         """Create test data for conflict and retry tests."""
-        proj = analysis.IntrospectionProject(constants.LANGUAGES.CPP,
-                                             str(tmp_path), "")
+        proj = analysis.IntrospectionProject(constants.LANGUAGES.CPP, str(tmp_path), "")
         proj.proj_profile = {
             "project_name": "conflict-test",
-            "fuzzers": [{
-                "id": "fuzzer1"
-            }],
+            "fuzzers": [{"id": "fuzzer1"}],
         }
         proj.profiles = {}
         proj.optional_analyses = []
@@ -700,14 +695,16 @@ class TestPR6RetryConflictPathSafety:
         }
 
     def test_retry_policy_single_retry(
-            self, conflict_test_data: Dict[str, Any]) -> None:
+        self, conflict_test_data: Dict[str, Any]
+    ) -> None:
         """Test that retry policy allows exactly one retry."""
         # This is a placeholder - actual retry logic would be in the envelope
         # processing code which needs to be implemented first
         pass
 
     def test_conflict_detection_duplicate_analysis(
-            self, conflict_test_data: Dict[str, Any]) -> None:
+        self, conflict_test_data: Dict[str, Any]
+    ) -> None:
         """Test that duplicate analysis envelopes cause failure."""
         # This test will verify that the system detects when the same analysis
         # is run twice and produces a conflict
@@ -730,20 +727,19 @@ class TestPR6RetryConflictPathSafety:
         assert any(
             error.get("analysis_name") == "OptimalTargets"
             and "Duplicate analysis envelope" in error.get("error", "")
-            for error in
-            merged["errors"]), "Duplicate analysis error must be reported"
+            for error in merged["errors"]
+        ), "Duplicate analysis error must be reported"
 
     def test_conflict_detection_artifact_hash_mismatch(
-            self, conflict_test_data: Dict[str, Any]) -> None:
+        self, conflict_test_data: Dict[str, Any]
+    ) -> None:
         """Test that artifact hash mismatches are detected as conflicts."""
         out_dir = conflict_test_data["out_dir"]
         os.makedirs(out_dir, exist_ok=True)
 
         coordinator = merge_coordinator.MergeCoordinator(out_dir)
-        intent_one = self._make_artifact_intent("reports/output.json",
-                                                b"first")
-        intent_two = self._make_artifact_intent("reports/output.json",
-                                                b"second")
+        intent_one = self._make_artifact_intent("reports/output.json", b"first")
+        intent_two = self._make_artifact_intent("reports/output.json", b"second")
 
         coordinator.add_analysis_result(
             "OptimalTargets",
@@ -769,20 +765,19 @@ class TestPR6RetryConflictPathSafety:
         assert any(
             conflict.get("type") == "artifact_conflict"
             and conflict.get("relative_path") == "reports/output.json"
-            for conflict in merged.get(
-                "conflicts", [])), "Artifact conflict must be reported"
+            for conflict in merged.get("conflicts", [])
+        ), "Artifact conflict must be reported"
 
     def test_artifact_conflict_does_not_write_partial(
-            self, conflict_test_data: Dict[str, Any]) -> None:
+        self, conflict_test_data: Dict[str, Any]
+    ) -> None:
         """Test that artifacts are not written when merge fails."""
         out_dir = conflict_test_data["out_dir"]
         os.makedirs(out_dir, exist_ok=True)
 
         coordinator = merge_coordinator.MergeCoordinator(out_dir)
-        intent_one = self._make_artifact_intent("reports/output.json",
-                                                b"first")
-        intent_two = self._make_artifact_intent("reports/output.json",
-                                                b"second")
+        intent_one = self._make_artifact_intent("reports/output.json", b"first")
+        intent_two = self._make_artifact_intent("reports/output.json", b"second")
 
         coordinator.add_analysis_result(
             "OptimalTargets",
@@ -806,14 +801,14 @@ class TestPR6RetryConflictPathSafety:
         success, merged = coordinator.merge_results()
         assert not success, "Artifact conflicts must fail merge"
         assert any(
-            conflict.get("type") == "artifact_conflict" for conflict in
-            merged.get("conflicts", [])), "Artifact conflict must be reported"
-        assert not os.path.exists(os.path.join(
-            out_dir, "reports/output.json")), (
-                "Artifacts must not be written when merge fails")
+            conflict.get("type") == "artifact_conflict"
+            for conflict in merged.get("conflicts", [])
+        ), "Artifact conflict must be reported"
+        assert not os.path.exists(os.path.join(out_dir, "reports/output.json")), (
+            "Artifacts must not be written when merge fails"
+        )
 
-    def test_path_safety_checks(self, conflict_test_data: Dict[str,
-                                                               Any]) -> None:
+    def test_path_safety_checks(self, conflict_test_data: Dict[str, Any]) -> None:
         """Test that path safety checks prevent directory traversal attacks."""
         out_dir = conflict_test_data["out_dir"]
         os.makedirs(out_dir, exist_ok=True)
@@ -868,22 +863,26 @@ class TestPR6RetryConflictPathSafety:
             success, merged = coordinator.merge_results()
             assert success, f"Safe path must merge: {safe_path}"
             assert not merged.get("conflicts"), (
-                f"Safe path must not conflict: {safe_path}")
-            assert os.path.isfile(os.path.join(
-                out_dir,
-                safe_path)), (f"Safe path must be written: {safe_path}")
+                f"Safe path must not conflict: {safe_path}"
+            )
+            assert os.path.isfile(os.path.join(out_dir, safe_path)), (
+                f"Safe path must be written: {safe_path}"
+            )
 
     def test_json_upsert_conflict_detection(
-            self, conflict_test_data: Dict[str, Any]) -> None:
+        self, conflict_test_data: Dict[str, Any]
+    ) -> None:
         """Test that JSON upsert conflicts are detected."""
         out_dir = conflict_test_data["out_dir"]
         os.makedirs(out_dir, exist_ok=True)
 
         coordinator = merge_coordinator.MergeCoordinator(out_dir)
         conflict_one = merge_intents.create_json_upsert_intent(
-            "analyses.OptimalTargets", {"key": "value1"})
+            "analyses.OptimalTargets", {"key": "value1"}
+        )
         conflict_two = merge_intents.create_json_upsert_intent(
-            "analyses.OptimalTargets", {"key": "value2"})
+            "analyses.OptimalTargets", {"key": "value2"}
+        )
 
         coordinator.add_analysis_result(
             "OptimalTargets",
@@ -909,14 +908,16 @@ class TestPR6RetryConflictPathSafety:
         assert any(
             conflict.get("type") == "json_upsert_conflict"
             and conflict.get("target_path") == "analyses.OptimalTargets"
-            for conflict in merged.get(
-                "conflicts", [])), "JSON upsert conflict must be reported"
+            for conflict in merged.get("conflicts", [])
+        ), "JSON upsert conflict must be reported"
 
         coordinator = merge_coordinator.MergeCoordinator(out_dir)
         identical_one = merge_intents.create_json_upsert_intent(
-            "analyses.MetadataAnalysis", {"metadata": "test"})
+            "analyses.MetadataAnalysis", {"metadata": "test"}
+        )
         identical_two = merge_intents.create_json_upsert_intent(
-            "analyses.MetadataAnalysis", {"metadata": "test"})
+            "analyses.MetadataAnalysis", {"metadata": "test"}
+        )
 
         coordinator.add_analysis_result(
             "OptimalTargets",
@@ -940,11 +941,12 @@ class TestPR6RetryConflictPathSafety:
         success, merged = coordinator.merge_results()
         assert success, "Identical JSON upserts must not conflict"
         assert not merged.get("conflicts"), (
-            "No conflicts expected for identical JSON upserts")
+            "No conflicts expected for identical JSON upserts"
+        )
 
     def test_json_upsert_preserves_dotted_fuzzer_keys(
-            self, conflict_test_data: Dict[str, Any],
-            monkeypatch: pytest.MonkeyPatch) -> None:
+        self, conflict_test_data: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         out_dir = conflict_test_data["out_dir"]
         os.makedirs(out_dir, exist_ok=True)
         monkeypatch.setattr(constants, "should_dump_files", True)
@@ -978,19 +980,24 @@ class TestPR6RetryConflictPathSafety:
 
         summary_contents = coordinator.merged_json_report
         fuzzers = summary_contents.get("fuzzers", {})
-        assert ("/usr/lib/gcc/x86_64-linux-gnu/9/../../../../include/c++/9/"
-                "bits/stl_vector.h") in fuzzers
+        assert (
+            "/usr/lib/gcc/x86_64-linux-gnu/9/../../../../include/c++/9/"
+            "bits/stl_vector.h"
+        ) in fuzzers
 
         summary_path = os.path.join(out_dir, constants.SUMMARY_FILE)
         with open(summary_path, "r", encoding="utf-8") as summary_file:
             summary_json = json.load(summary_file)
         assert "/usr/lib/gcc/x86_64-linux-gnu/9/" not in summary_json
         assert "fuzzers" in summary_json
-        assert ("/usr/lib/gcc/x86_64-linux-gnu/9/../../../../include/c++/9/"
-                "bits/stl_vector.h") in summary_json["fuzzers"]
+        assert (
+            "/usr/lib/gcc/x86_64-linux-gnu/9/../../../../include/c++/9/"
+            "bits/stl_vector.h"
+        ) in summary_json["fuzzers"]
 
-    def _make_artifact_intent(self, relative_path: str,
-                              content: bytes) -> Dict[str, Any]:
+    def _make_artifact_intent(
+        self, relative_path: str, content: bytes
+    ) -> Dict[str, Any]:
         """Create a valid artifact_write intent for tests."""
         return {
             "type": "artifact_write",
