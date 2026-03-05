@@ -16,7 +16,7 @@
 ################################################################################
 # Native backend build script for OSS-Fuzz integration.
 # Builds Rust native binaries and sets FI_NATIVE_BACKENDS=rust.
-# See docs/perf/native_migration_plan_2026-03.md for architecture details.
+# See docs/perf/native_rewrite_execution_plan_2026-03-04.md for execution details.
 
 set -euo pipefail
 

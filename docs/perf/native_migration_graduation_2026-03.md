@@ -201,7 +201,7 @@ final baseline recording; all graduation numbers reflect the correct, fully-nati
 
 - Python baseline: `.work/baselines/cgserver-full_baseline.json`
 - Rust baseline: `.work/baselines/cgserver-full_rust_baseline.json`
-- Migration plan and gate definitions: `docs/perf/native_migration_plan_2026-03.md` §"Graduation Gate"
+- Execution plan and gate definitions: `docs/perf/native_rewrite_execution_plan_2026-03-04.md` (§"Ordered Board" and §"FINAL-GATE Acceptance Criteria")
 - OSS-Fuzz patch: `oss-fuzz-patches.diff`
 - Build script: `build_native_post_processing.sh`
 - Stage marker implementation: `src/fuzz_introspector/stage_markers.py`

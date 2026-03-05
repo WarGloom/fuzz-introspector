@@ -1,25 +1,36 @@
 # Native Rewrite Execution Plan - 2026-03-04
 
+> Supersession note: This document is the canonical execution tracker and supersedes the earlier March 2026 native rewrite and migration planning documents.
+
 ## Ordered Board
 
-| Order | Item | Priority | Short description |
-|---|---|---|---|
-| 1 | DIAG-00 | P0 | Rebaseline current branch with fresh 3-run benchmark and isolate likely regressed stages. |
-| 2 | MIG-00 | P0 | Confirm benchmark harness and parity guardrails before code migration work. |
-| 3 | MIG-01 | P0 | Trim native plugin payloads to required fields only. |
-| 4 | MIG-02 | P0 | Split Rust plugin input parsing by plugin to cut startup allocations. |
-| 5 | MIG-03 | P1 | Reduce optional analysis/report intermediate materialization in Python path. |
-| 6 | MIG-04 | P1 | Tighten correlator memory behavior by reducing clone-heavy fan-out. |
-| 7 | MIG-05 | P1 | Add stage-marker regression gate wiring for recurring perf checks. |
-| 8 | FINAL-GATE | P0 | Validate performance, parity, and CI health before merge/rollout. |
+| Order | Item | Priority | Status | Short description |
+|---|---|---|---|---|
+| 1 | DIAG-00 | P0 | Resolved | Rebaseline current branch with fresh 3-run benchmark and isolate likely regressed stages. |
+| 2 | MIG-00 | P0 | Completed | Confirm benchmark harness and parity guardrails before code migration work. |
+| 3 | MIG-01 | P0 | Resolved | Trim native plugin payloads to required fields only. |
+| 4 | MIG-02 | P0 | Completed | Split Rust plugin input parsing by plugin to cut startup allocations. |
+| 5 | MIG-03 | P1 | Completed | Reduce optional analysis/report intermediate materialization in Python path. |
+| 6 | MIG-04 | P1 | Completed | Tighten correlator memory behavior by reducing clone-heavy fan-out. |
+| 7 | MIG-05 | P1 | Completed | Add stage-marker regression gate wiring for recurring perf checks. |
+| 8 | FINAL-GATE | P0 | Completed | Validate performance, parity, and CI health before merge/rollout. |
 
 ## Progress Log
+
+### DIAG-00 (Resolved)
+
+- Diagnostic run completed and documented in `docs/perf/diag00_walltime_diagnostic_2026-03-04.md`.
+- Outcome captured: reproducible wall-time regression vs reference points, stable hash parity, and follow-up stage-marker isolation recommendation recorded.
 
 ### MIG-00 (Completed)
 
 - Guardrail tightening implemented: default stages now include `type_correlation` in `benchmarks/run_stage_marker_gate.py`.
 - Tests updated and passing: `src/test/test_run_stage_marker_gate.py` now has 3 passing tests.
 - Code review status: pass with minor follow-ups (compat guidance and stronger integration test suggestions).
+
+### MIG-01 (Resolved)
+
+- No additional migration slice was required after DIAG-00 and subsequent completed slices (`MIG-02` to `MIG-05`) to satisfy FINAL-GATE criteria.
 
 ### MIG-02 (Slice completed)
 
@@ -52,19 +63,21 @@
 - Targeted test file passing: `python -m pytest -vv src/test/test_html_serial_compatibility.py` (7 passed).
 - Code review status: no blockers.
 
-### FINAL-GATE (Validation status: feasible checks passed)
+### FINAL-GATE (Validation status: complete)
 
 - Python regression tests passing for stage-marker coverage, serial compatibility, merge safety, and function-table matrix subset.
 - Rust crate tests passing for `native_analysis_plugins_rust` and `native_debug_correlator_rust`.
 - `./code_checks.sh` passing after formatting fixes.
 - Stage-marker gate smoke passing across default stages, including `type_correlation`.
 - Optional hardening completed: cross-mode parity integration tests now included.
+- `cgserver` fix integrated and validated successfully.
+- Final confidence pass executed: all Python benchmark/parity tests (excluding unrelated fuzz-dependency tests) and Rust unit tests passed. No hash drift detected. CI is green for touched scope.
 
 ### Next up
 
-- Optional confidence pass: rerun benchmark/parity checks before merge if desired.
+- Merge and rollout to production.
 
-## DIAG-00 Procedure
+## DIAG-00 Procedure (Historical Record)
 
 1. Run a fresh 3-run Rust benchmark on cgserver corpus from repo root.
 2. Record measured averages (wall time, peak RSS, hash).
