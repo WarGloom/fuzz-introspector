@@ -18,6 +18,7 @@ import bisect
 import collections
 import concurrent.futures
 import contextlib
+import copy
 import json
 import logging
 import os
@@ -2792,6 +2793,106 @@ def _correlate_introspection_functions_to_debug_info_python(
             if_func["debug_function_info"] = {}
 
 
+def _build_if_debug_correlator_native_payload(
+    all_functions_json_report,
+    debug_all_functions,
+    proj_lang,
+    report_dict,
+):
+    payload = {
+        "stage": _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
+        "introspection_functions": all_functions_json_report,
+        "debug_functions": debug_all_functions,
+        "project_language": proj_lang,
+    }
+    if isinstance(report_dict, dict):
+        all_files_in_project = report_dict.get("all_files_in_project")
+        if isinstance(all_files_in_project, list):
+            payload["all_files_in_project"] = all_files_in_project
+    return payload
+
+
+def _apply_if_debug_correlator_native_updates(
+    all_functions_json_report,
+    native_response,
+) -> int:
+    artifacts = native_response.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise ValueError("native correlator response artifacts must be a dictionary")
+
+    function_updates = artifacts.get("function_updates")
+    if not isinstance(function_updates, list):
+        raise ValueError("native correlator artifacts.function_updates must be a list")
+
+    expected_row_indexes = set(range(len(all_functions_json_report)))
+    seen_row_indexes = set()
+    for raw_update in function_updates:
+        if not isinstance(raw_update, dict):
+            raise ValueError("native correlator update item must be a dictionary")
+
+        row_idx = _safe_int(raw_update.get("row_idx"), default=None)
+        if row_idx is None or row_idx not in expected_row_indexes:
+            raise ValueError(f"native correlator returned invalid row_idx={row_idx!r}")
+
+        function_signature = raw_update.get("function_signature")
+        if not isinstance(function_signature, str):
+            raise ValueError(
+                "native correlator update function_signature must be a string"
+            )
+
+        debug_function_info = raw_update.get("debug_function_info", {})
+        if not isinstance(debug_function_info, dict):
+            raise ValueError(
+                "native correlator update debug_function_info must be a dict"
+            )
+
+        all_functions_json_report[row_idx]["function_signature"] = function_signature
+        all_functions_json_report[row_idx]["debug_function_info"] = debug_function_info
+        seen_row_indexes.add(row_idx)
+
+    if seen_row_indexes != expected_row_indexes:
+        missing_row_indexes = sorted(expected_row_indexes - seen_row_indexes)
+        raise ValueError(
+            "native correlator updates do not cover all rows "
+            f"(missing={missing_row_indexes[:5]})"
+        )
+
+    return len(function_updates)
+
+
+def _run_if_debug_correlator_native(
+    all_functions_json_report,
+    debug_all_functions,
+    proj_lang,
+    report_dict,
+) -> tuple[bool, str]:
+    payload = _build_if_debug_correlator_native_payload(
+        all_functions_json_report,
+        debug_all_functions,
+        proj_lang,
+        report_dict,
+    )
+    native_result = backend_loaders.run_correlator_backend(
+        payload=payload,
+        command_env_prefix="FI_IF_DEBUG_CORRELATOR",
+        timeout_env="FI_IF_DEBUG_CORRELATOR_TIMEOUT_SEC",
+        selected_backend=backend_loaders.BACKEND_RUST,
+        strict_mode=False,
+    )
+
+    if native_result.response is None:
+        return False, native_result.reason_code or "native_execution_failed"
+
+    if native_result.selected_backend != backend_loaders.BACKEND_RUST:
+        return False, native_result.reason_code or "native_unavailable"
+
+    _apply_if_debug_correlator_native_updates(
+        all_functions_json_report,
+        native_result.response,
+    )
+    return True, ""
+
+
 def correlate_introspection_functions_to_debug_info(
     all_functions_json_report,
     debug_all_functions,
@@ -2801,8 +2902,7 @@ def correlate_introspection_functions_to_debug_info(
 ):
     """Correlate introspection functions to debug metadata/signatures.
 
-    Rust backend selection is default, with Python as authoritative fallback
-    until the native implementation is wired for this stage.
+    Rust backend selection is default, with Python as authoritative fallback.
     """
     configured_backend = _parse_if_debug_correlator_backend_env()
     shadow_mode = _parse_bool_env(FI_IF_DEBUG_CORRELATOR_SHADOW_ENV, False)
@@ -2813,31 +2913,7 @@ def correlate_introspection_functions_to_debug_info(
     error_message = ""
     fallback_reason = ""
 
-    if configured_backend == backend_loaders.BACKEND_RUST:
-        fallback_reason = "native_not_implemented"
-        if strict_mode:
-            status = "error"
-            error_message = (
-                "FI_IF_DEBUG_CORRELATOR_BACKEND=rust requested for "
-                "introspection<->debug signature correlation, but the rust backend "
-                "is not implemented for this stage"
-            )
-            effective_backend = "unavailable"
-        else:
-            logger.warning(
-                "FI_IF_DEBUG_CORRELATOR_BACKEND=rust requested for %s, but native "
-                "backend is not implemented; falling back to Python authoritative "
-                "path",
-                _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
-            )
-
-    if shadow_mode:
-        logger.info(
-            "%s enabled for %s, but shadow execution is metadata-only/no-op for "
-            "this stage",
-            FI_IF_DEBUG_CORRELATOR_SHADOW_ENV,
-            _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
-        )
+    native_shadow_result = None
 
     stage_markers.emit(
         out_dir,
@@ -2851,6 +2927,58 @@ def correlate_introspection_functions_to_debug_info(
     )
 
     try:
+        if configured_backend == backend_loaders.BACKEND_RUST:
+            native_target = all_functions_json_report
+            if shadow_mode:
+                native_target = copy.deepcopy(all_functions_json_report)
+
+            try:
+                native_success, native_reason = _run_if_debug_correlator_native(
+                    native_target,
+                    debug_all_functions,
+                    proj_lang,
+                    report_dict,
+                )
+            except Exception as native_err:
+                native_success = False
+                native_reason = f"native_schema_mismatch:{native_err}"
+
+            if native_success:
+                if shadow_mode:
+                    native_shadow_result = [
+                        (
+                            func.get("function_signature"),
+                            func.get("debug_function_info", {}),
+                        )
+                        for func in native_target
+                    ]
+                    logger.info(
+                        "%s enabled for %s; native backend executed and Python "
+                        "authoritative path will run for comparison",
+                        FI_IF_DEBUG_CORRELATOR_SHADOW_ENV,
+                        _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
+                    )
+                else:
+                    effective_backend = backend_loaders.BACKEND_RUST
+                    return
+            else:
+                fallback_reason = native_reason
+                if strict_mode:
+                    status = "error"
+                    effective_backend = "unavailable"
+                    error_message = (
+                        "FI_IF_DEBUG_CORRELATOR strict mode requires native success "
+                        f"for {_IF_DEBUG_SIGNATURE_CORRELATION_STAGE}; "
+                        f"reason={native_reason}"
+                    )
+                else:
+                    logger.warning(
+                        "Native backend failed for %s (%s); falling back to Python "
+                        "authoritative path",
+                        _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
+                        native_reason,
+                    )
+
         if status == "error":
             raise FuzzIntrospectorError(error_message)
 
@@ -2860,6 +2988,18 @@ def correlate_introspection_functions_to_debug_info(
             proj_lang,
             report_dict=report_dict,
         )
+        if native_shadow_result is not None:
+            mismatch_count = 0
+            for idx, if_func in enumerate(all_functions_json_report):
+                native_sig, _ = native_shadow_result[idx]
+                python_sig = if_func.get("function_signature")
+                if native_sig != python_sig:
+                    mismatch_count += 1
+            logger.info(
+                "Shadow comparison for %s completed with %d signature mismatches",
+                _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
+                mismatch_count,
+            )
     except Exception:
         status = "error"
         raise

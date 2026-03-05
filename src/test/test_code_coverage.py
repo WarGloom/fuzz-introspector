@@ -24,7 +24,7 @@ sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../")
 from fuzz_introspector import code_coverage  # noqa: E402
 from fuzz_introspector.datatypes import function_profile  # noqa: E402
 
-TEST_DATA_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
+TEST_DATA_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data")
 
 
 @pytest.fixture
@@ -65,7 +65,7 @@ def sample_jvm_coverage_xml():
 
 def test_load_llvm_coverage():
     """Tests loading llvm coverage from a .covreport file."""
-    cov_profile = code_coverage.load_llvm_coverage(TEST_DATA_PATH, 'sample_cov')
+    cov_profile = code_coverage.load_llvm_coverage(TEST_DATA_PATH, "sample_cov")
     assert len(cov_profile.covmap) > 0
     assert len(cov_profile.file_map) == 0
     assert len(cov_profile.branch_cov_map) > 0
@@ -73,24 +73,35 @@ def test_load_llvm_coverage():
     assert len(cov_profile.coverage_files) == 1
     assert len(cov_profile.dual_file_map) == 0
 
-    assert cov_profile.covmap['BZ2_bzCompress'][0] == (408, 4680)
-    assert cov_profile.covmap['BZ2_bzCompress'][7] == (416, 9360)
-    assert cov_profile.covmap['BZ2_bzCompress'][10] == (420, 0)
-    assert cov_profile.covmap['add_pair_to_block'][0] == (217, 36000000)
-    assert cov_profile.covmap['add_pair_to_block'][4] == (221, 144000000)
-    assert cov_profile.covmap['add_pair_to_block'][11] == (228, 3510000)
-    assert cov_profile.covmap['fromtext_md'][1] == (21, 38)
-    assert cov_profile.covmap['fromtext_md'][-2] == (40, 13)
-    assert cov_profile.covmap['fallbackQSort3'][1] == (136, 1620000000)
+    assert cov_profile.covmap["BZ2_bzCompress"][0] == (408, 4680)
+    assert cov_profile.covmap["BZ2_bzCompress"][7] == (416, 9360)
+    assert cov_profile.covmap["BZ2_bzCompress"][10] == (420, 0)
+    assert cov_profile.covmap["add_pair_to_block"][0] == (217, 36000000)
+    assert cov_profile.covmap["add_pair_to_block"][4] == (221, 144000000)
+    assert cov_profile.covmap["add_pair_to_block"][11] == (228, 3510000)
+    assert cov_profile.covmap["fromtext_md"][1] == (21, 38)
+    assert cov_profile.covmap["fromtext_md"][-2] == (40, 13)
+    assert cov_profile.covmap["fallbackQSort3"][1] == (136, 1620000000)
 
-    assert cov_profile.branch_cov_map['BZ2_bzCompress:411,8'] == [0, 4680]
-    assert cov_profile.branch_cov_map['BZ2_bzCompress:414,8'] == [0, 4680]
-    assert cov_profile.branch_cov_map['BZ2_bzCompress:417,4'] == [0, 9360, 0, 4680, 0, 4680]
-    assert cov_profile.branch_cov_map['BZ2_bzCompress:425,20'] == [0, 0]
-    assert cov_profile.branch_cov_map['BZ2_bzCompress:443,14'] == [0, 0]
-    assert cov_profile.branch_cov_map['add_pair_to_block:220,16'] == [144000000, 36000000]
-    assert cov_profile.branch_cov_map['add_pair_to_block:224,4'] == (
-        [3260, 36000000, 3260, 3510000, 1570000])
+    assert cov_profile.branch_cov_map["BZ2_bzCompress:411,8"] == [0, 4680]
+    assert cov_profile.branch_cov_map["BZ2_bzCompress:414,8"] == [0, 4680]
+    assert cov_profile.branch_cov_map["BZ2_bzCompress:417,4"] == [
+        0,
+        9360,
+        0,
+        4680,
+        0,
+        4680,
+    ]
+    assert cov_profile.branch_cov_map["BZ2_bzCompress:425,20"] == [0, 0]
+    assert cov_profile.branch_cov_map["BZ2_bzCompress:443,14"] == [0, 0]
+    assert cov_profile.branch_cov_map["add_pair_to_block:220,16"] == [
+        144000000,
+        36000000,
+    ]
+    assert cov_profile.branch_cov_map["add_pair_to_block:224,4"] == (
+        [3260, 36000000, 3260, 3510000, 1570000]
+    )
 
 
 def write_coverage_file(tmpdir, coverage_file):
@@ -105,21 +116,21 @@ def generate_temp_function_profile(name, source):
     elem["functionName"] = name
     elem["functionSourceFile"] = source
     elem["functionLinenumber"] = 13
-    elem['linkageType'] = None
-    elem['returnType'] = None
-    elem['argCount'] = None
-    elem['argTypes'] = None
-    elem['argNames'] = None
-    elem['BBCount'] = None
-    elem['ICount'] = None
-    elem['EdgeCount'] = None
-    elem['CyclomaticComplexity'] = None
-    elem['functionsReached'] = []
-    elem['functionUses'] = None
-    elem['functionDepth'] = None
-    elem['constantsTouched'] = None
-    elem['BranchProfiles'] = []
-    elem['Callsites'] = []
+    elem["linkageType"] = None
+    elem["returnType"] = None
+    elem["argCount"] = None
+    elem["argTypes"] = None
+    elem["argNames"] = None
+    elem["BBCount"] = None
+    elem["ICount"] = None
+    elem["EdgeCount"] = None
+    elem["CyclomaticComplexity"] = None
+    elem["functionsReached"] = []
+    elem["functionUses"] = None
+    elem["functionDepth"] = None
+    elem["constantsTouched"] = None
+    elem["BranchProfiles"] = []
+    elem["Callsites"] = []
 
     return function_profile.FunctionProfile(elem)
 
@@ -141,10 +152,14 @@ def test_jvm_coverage(tmpdir, sample_jvm_coverage_xml):
     # Ensure the coverage map result is correct
     assert len(cp.covmap) == 2
     assert "[BASE64EncoderStreamFuzzer].<init>()" in cp.covmap
-    assert "[BASE64EncoderStreamFuzzer].fuzzerTestOneInput(FuzzedDataProvider)" in cp.covmap
+    assert (
+        "[BASE64EncoderStreamFuzzer].fuzzerTestOneInput(FuzzedDataProvider)"
+        in cp.covmap
+    )
     assert cp.covmap["[BASE64EncoderStreamFuzzer].<init>()"] == [(23, 0)]
     assert cp.covmap[
-        "[BASE64EncoderStreamFuzzer].fuzzerTestOneInput(FuzzedDataProvider)"] == [(25, 3), (27, 6)]
+        "[BASE64EncoderStreamFuzzer].fuzzerTestOneInput(FuzzedDataProvider)"
+    ] == [(25, 3), (27, 6)]
 
 
 def test_get_hit_details_skips_transform_chain_for_direct_hit(monkeypatch):
@@ -198,10 +213,15 @@ def test_get_hit_details_negative_cache_avoids_repeated_transform_work(monkeypat
 
     monkeypatch.setattr(code_coverage.utils, "demangle_cpp_func", tracked_demangle_cpp)
     monkeypatch.setattr(code_coverage.utils, "normalise_str", tracked_normalise)
-    monkeypatch.setattr(code_coverage.utils, "remove_jvm_generics",
-                        tracked_remove_jvm_generics)
-    monkeypatch.setattr(code_coverage.utils, "demangle_rust_func", tracked_demangle_rust)
-    monkeypatch.setattr(code_coverage.utils, "locate_rust_fuzz_key", tracked_locate_rust)
+    monkeypatch.setattr(
+        code_coverage.utils, "remove_jvm_generics", tracked_remove_jvm_generics
+    )
+    monkeypatch.setattr(
+        code_coverage.utils, "demangle_rust_func", tracked_demangle_rust
+    )
+    monkeypatch.setattr(
+        code_coverage.utils, "locate_rust_fuzz_key", tracked_locate_rust
+    )
 
     assert cp.get_hit_details("missing") == []
     assert cp.get_hit_details("missing") == []
@@ -227,13 +247,42 @@ def test_get_hit_details_negative_cache_invalidates_on_covmap_growth(monkeypatch
     monkeypatch.setattr(code_coverage.utils, "normalise_str", lambda value: value)
     monkeypatch.setattr(code_coverage.utils, "remove_jvm_generics", lambda value: value)
     monkeypatch.setattr(code_coverage.utils, "demangle_rust_func", lambda value: value)
-    monkeypatch.setattr(code_coverage.utils, "locate_rust_fuzz_key",
-                        lambda value, covmap: None)
+    monkeypatch.setattr(
+        code_coverage.utils, "locate_rust_fuzz_key", lambda value, covmap: None
+    )
 
     assert cp.get_hit_details("missing") == []
     cp.covmap["missing"] = [(99, 5)]
     assert cp.get_hit_details("missing") == [(99, 5)]
     assert call_count["demangle_cpp_func"] == 1
+
+
+def test_get_hit_summary_counts_only_positive_hits() -> None:
+    cp = code_coverage.CoverageProfile()
+    cp.covmap = {
+        "target": [
+            (10, 5),
+            (11, 0),
+            (12, -3),
+            (13, 1),
+        ]
+    }
+
+    assert cp.get_hit_summary("target") == (4, 2)
+
+
+def test_get_hit_summary_handles_empty_function_coverage() -> None:
+    cp = code_coverage.CoverageProfile()
+    cp.covmap = {"empty": []}
+
+    assert cp.get_hit_summary("empty") == (0, 0)
+
+
+def test_get_hit_summary_returns_none_pair_for_missing_function() -> None:
+    cp = code_coverage.CoverageProfile()
+    cp.covmap = {"known": [(1, 1)]}
+
+    assert cp.get_hit_summary("unknown") == (None, None)
 
 
 def test_load_llvm_coverage_reuses_cached_parse_result(monkeypatch, tmp_path):
@@ -242,8 +291,7 @@ def test_load_llvm_coverage_reuses_cached_parse_result(monkeypatch, tmp_path):
 
     cov_path = tmp_path / "target.covreport"
     cov_path.write_text(
-        "func_a:\n"
-        "  10| 2| return 1;\n",
+        "func_a:\n  10| 2| return 1;\n",
         encoding="utf-8",
     )
 
@@ -275,8 +323,7 @@ def test_load_llvm_coverage_cache_can_be_disabled(monkeypatch, tmp_path):
 
     cov_path = tmp_path / "target.covreport"
     cov_path.write_text(
-        "func_b:\n"
-        "  12| 3| return 2;\n",
+        "func_b:\n  12| 3| return 2;\n",
         encoding="utf-8",
     )
 

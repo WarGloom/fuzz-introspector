@@ -349,29 +349,150 @@ def test_if_debug_correlator_rust_non_strict_falls_back_to_python(
     )
 
 
-def test_if_debug_correlator_shadow_mode_logs_metadata_only_noop(
+def test_if_debug_correlator_rust_invokes_native_branch_when_available(monkeypatch):
+    monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, "rust")
+    monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_STRICT_ENV, raising=False)
+    monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_SHADOW_ENV, raising=False)
+
+    llvm_functions = [
+        {
+            "Func name": "native_target",
+            "Functions filename": "/src/project/native_target.cc",
+            "source_line_begin": "10",
+        }
+    ]
+
+    captured_payload = {}
+
+    def fake_run_correlator_backend(**kwargs):
+        captured_payload.update(kwargs)
+        return analysis.backend_loaders.CorrelatorBackendResult(
+            selected_backend=analysis.backend_loaders.BACKEND_RUST,
+            strict_mode=False,
+            response={
+                "schema_version": analysis.backend_loaders.CORRELATOR_SCHEMA_VERSION,
+                "status": "success",
+                "counters": {},
+                "artifacts": {
+                    "function_updates": [
+                        {
+                            "row_idx": 0,
+                            "function_signature": "sig::native",
+                            "debug_function_info": {"name": "native_target"},
+                        }
+                    ]
+                },
+                "timings": {},
+            },
+        )
+
+    def _python_fallback_must_not_run(*_args, **_kwargs):
+        raise AssertionError("python fallback should not run after native success")
+
+    monkeypatch.setattr(
+        analysis.backend_loaders,
+        "run_correlator_backend",
+        fake_run_correlator_backend,
+    )
+    monkeypatch.setattr(
+        analysis,
+        "_correlate_introspection_functions_to_debug_info_python",
+        _python_fallback_must_not_run,
+    )
+
+    analysis.correlate_introspection_functions_to_debug_info(
+        llvm_functions,
+        [],
+        "c-cpp",
+        report_dict={"all_files_in_project": []},
+    )
+
+    assert llvm_functions[0]["function_signature"] == "sig::native"
+    assert llvm_functions[0]["debug_function_info"]["name"] == "native_target"
+    assert captured_payload["command_env_prefix"] == "FI_IF_DEBUG_CORRELATOR"
+    assert captured_payload["selected_backend"] == analysis.backend_loaders.BACKEND_RUST
+
+
+def test_if_debug_correlator_shadow_mode_runs_native_and_logs_comparison(
     monkeypatch,
     caplog,
 ):
-    monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, raising=False)
+    monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, "rust")
     monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_SHADOW_ENV, "1")
+
+    llvm_functions = [
+        {
+            "Func name": "target_without_exact_name_match",
+            "Functions filename": "/src/project/target.cc",
+            "source_line_begin": "invalid-line",
+        }
+    ]
+
+    def fake_run_correlator_backend(**_kwargs):
+        return analysis.backend_loaders.CorrelatorBackendResult(
+            selected_backend=analysis.backend_loaders.BACKEND_RUST,
+            strict_mode=False,
+            response={
+                "schema_version": analysis.backend_loaders.CORRELATOR_SCHEMA_VERSION,
+                "status": "success",
+                "counters": {},
+                "artifacts": {
+                    "function_updates": [
+                        {
+                            "row_idx": 0,
+                            "function_signature": "sig::native-shadow",
+                            "debug_function_info": {},
+                        }
+                    ]
+                },
+                "timings": {},
+            },
+        )
+
+    monkeypatch.setattr(
+        analysis.backend_loaders,
+        "run_correlator_backend",
+        fake_run_correlator_backend,
+    )
 
     with caplog.at_level(logging.INFO):
         analysis.correlate_introspection_functions_to_debug_info(
-            [],
+            llvm_functions,
             [],
             "c-cpp",
             report_dict={"all_files_in_project": []},
         )
 
-    assert any("metadata-only/no-op" in record.message for record in caplog.records)
+    assert any(
+        "native backend executed and Python authoritative path will run for comparison"
+        in record.message
+        for record in caplog.records
+    )
+    assert any("Shadow comparison" in record.message for record in caplog.records)
 
 
-def test_if_debug_correlator_rust_strict_raises(monkeypatch):
+def test_if_debug_correlator_rust_strict_raises_on_native_failure(monkeypatch):
     monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, "rust")
     monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_STRICT_ENV, "1")
 
-    with pytest.raises(FuzzIntrospectorError, match="not implemented for this stage"):
+    def fake_run_correlator_backend(**_kwargs):
+        return analysis.backend_loaders.CorrelatorBackendResult(
+            selected_backend=analysis.backend_loaders.BACKEND_PYTHON,
+            strict_mode=False,
+            response=None,
+            reason_code=analysis.backend_loaders.FI_CORR_COMMAND_MISSING,
+            reason_details={"backend": "rust"},
+        )
+
+    monkeypatch.setattr(
+        analysis.backend_loaders,
+        "run_correlator_backend",
+        fake_run_correlator_backend,
+    )
+
+    with pytest.raises(
+        FuzzIntrospectorError, match="strict mode requires native success"
+    ):
         analysis.correlate_introspection_functions_to_debug_info(
             [],
             [],
@@ -407,3 +528,50 @@ def test_if_debug_correlator_stage_marker_metadata_has_configured_and_effective_
     assert stage_events[0].metadata["effective_backend"] == "python"
     assert stage_events[1].metadata["configured_backend"] == "rust"
     assert stage_events[1].metadata["effective_backend"] == "python"
+
+
+def test_if_debug_correlator_stage_marker_uses_rust_when_native_succeeds(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, "rust")
+    monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_STRICT_ENV, raising=False)
+    monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_SHADOW_ENV, raising=False)
+    monkeypatch.delenv("FI_STAGE_MARKERS", raising=False)
+
+    def fake_run_correlator_backend(**_kwargs):
+        return analysis.backend_loaders.CorrelatorBackendResult(
+            selected_backend=analysis.backend_loaders.BACKEND_RUST,
+            strict_mode=False,
+            response={
+                "schema_version": analysis.backend_loaders.CORRELATOR_SCHEMA_VERSION,
+                "status": "success",
+                "counters": {},
+                "artifacts": {"function_updates": []},
+                "timings": {},
+            },
+        )
+
+    monkeypatch.setattr(
+        analysis.backend_loaders,
+        "run_correlator_backend",
+        fake_run_correlator_backend,
+    )
+
+    analysis.correlate_introspection_functions_to_debug_info(
+        [],
+        [],
+        "c-cpp",
+        report_dict={"all_files_in_project": []},
+        out_dir=str(tmp_path),
+    )
+
+    events = stage_markers.parse_stage_marker_file(str(tmp_path / "stage_markers.log"))
+    stage_events = [
+        event
+        for event in events
+        if event.stage == analysis._IF_DEBUG_SIGNATURE_CORRELATION_STAGE
+    ]
+    assert [event.event for event in stage_events] == ["start", "end"]
+    assert stage_events[1].metadata["configured_backend"] == "rust"
+    assert stage_events[1].metadata["effective_backend"] == "rust"
