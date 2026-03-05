@@ -144,7 +144,7 @@ def test_parse_all_functions_rows_backend_and_flags(
     monkeypatch.delenv("FI_ALL_FUNCTIONS_ROWS_BACKEND", raising=False)
     monkeypatch.delenv("FI_ALL_FUNCTIONS_ROWS_SHADOW", raising=False)
     monkeypatch.delenv("FI_ALL_FUNCTIONS_ROWS_STRICT", raising=False)
-    assert html_report._parse_all_functions_rows_backend() == "python"
+    assert html_report._parse_all_functions_rows_backend() == "rust"
     assert html_report._parse_all_functions_rows_shadow() is False
     assert html_report._parse_all_functions_rows_strict() is False
 
@@ -156,11 +156,11 @@ def test_parse_all_functions_rows_backend_and_flags(
     assert html_report._parse_all_functions_rows_strict() is True
 
 
-def test_parse_all_functions_rows_backend_invalid_defaults_to_python(
+def test_parse_all_functions_rows_backend_invalid_defaults_to_rust(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("FI_ALL_FUNCTIONS_ROWS_BACKEND", "invalid-backend")
-    assert html_report._parse_all_functions_rows_backend() == "python"
+    assert html_report._parse_all_functions_rows_backend() == "rust"
 
 
 def test_create_all_function_table_rust_backend_falls_back_to_python(
@@ -244,10 +244,10 @@ def test_create_all_function_table_emits_materialization_stage_markers(
     assert emitted_markers[0][1] == "all_functions_materialization"
     assert emitted_markers[0][2] == "start"
     assert emitted_markers[0][3]["backend"] == "python"
-    assert emitted_markers[0][3]["configured_backend"] == "python"
+    assert emitted_markers[0][3]["configured_backend"] == "rust"
     assert emitted_markers[1][1] == "all_functions_materialization"
     assert emitted_markers[1][2] == "end"
-    assert emitted_markers[1][3]["configured_backend"] == "python"
+    assert emitted_markers[1][3]["configured_backend"] == "rust"
     assert emitted_markers[1][3]["rows"] == 1
     assert emitted_markers[1][3]["status"] == "success"
     assert emitted_markers[1][3]["error_type"] == ""

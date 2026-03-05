@@ -281,7 +281,7 @@ def test_if_debug_correlator_env_defaults(monkeypatch):
 
     assert (
         analysis._parse_if_debug_correlator_backend_env()
-        == analysis.backend_loaders.BACKEND_PYTHON
+        == analysis.backend_loaders.BACKEND_RUST
     )
     assert (
         analysis._parse_bool_env(analysis.FI_IF_DEBUG_CORRELATOR_SHADOW_ENV, False)
@@ -310,7 +310,7 @@ def test_if_debug_correlator_env_invalid_values_fall_back(
             analysis.FI_IF_DEBUG_CORRELATOR_STRICT_ENV, False
         )
 
-    assert backend == analysis.backend_loaders.BACKEND_PYTHON
+    assert backend == analysis.backend_loaders.BACKEND_RUST
     assert shadow is False
     assert strict is False
     assert any(

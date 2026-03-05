@@ -639,16 +639,16 @@ def _parse_if_debug_correlator_backend_env() -> str:
     """Parse backend selector for introspection<->debug signature correlation."""
     raw_value = os.environ.get(FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, "").strip().lower()
     if not raw_value:
-        return backend_loaders.BACKEND_PYTHON
+        return backend_loaders.BACKEND_RUST
     if raw_value in (backend_loaders.BACKEND_PYTHON, backend_loaders.BACKEND_RUST):
         return raw_value
     logger.warning(
         "Invalid %s=%r; defaulting to %s",
         FI_IF_DEBUG_CORRELATOR_BACKEND_ENV,
         raw_value,
-        backend_loaders.BACKEND_PYTHON,
+        backend_loaders.BACKEND_RUST,
     )
-    return backend_loaders.BACKEND_PYTHON
+    return backend_loaders.BACKEND_RUST
 
 
 def _parse_stage_warn_seconds() -> int:
@@ -2801,7 +2801,8 @@ def correlate_introspection_functions_to_debug_info(
 ):
     """Correlate introspection functions to debug metadata/signatures.
 
-    Python remains the authoritative path for this stage.
+    Rust backend selection is default, with Python as authoritative fallback
+    until the native implementation is wired for this stage.
     """
     configured_backend = _parse_if_debug_correlator_backend_env()
     shadow_mode = _parse_bool_env(FI_IF_DEBUG_CORRELATOR_SHADOW_ENV, False)
