@@ -1545,13 +1545,13 @@ def _build_overlay_native_payload(
             "type":
             profile.coverage.get_type(),
             "covmap": {
-                func_name:
-                [[line_no, hit_count] for line_no, hit_count in hits]
+                func_name: [[line_no, hit_count]
+                            for line_no, hit_count in hits]
                 for func_name, hits in sorted(profile.coverage.covmap.items())
             },
             "file_map": {
-                file_name:
-                [[line_no, hit_count] for line_no, hit_count in hits]
+                file_name: [[line_no, hit_count]
+                            for line_no, hit_count in hits]
                 for file_name, hits in sorted(
                     profile.coverage.file_map.items())
             },

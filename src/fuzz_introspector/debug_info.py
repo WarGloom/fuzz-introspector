@@ -42,9 +42,15 @@ from fuzz_introspector import backend_loaders
 
 logger = logging.getLogger(name=__name__)
 _T = TypeVar("_T")
-DebugPayload = tuple[str, dict[str, dict[str, str]], dict[str, dict[str, Any]],
-                     dict[str, dict[str, Any]], dict[str, dict[str, Any]],
-                     dict[str, str], str | None, ]
+DebugPayload = tuple[
+    str,
+    dict[str, dict[str, str]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, str],
+    str | None,
+]
 CORRELATOR_SHADOW_SAMPLE_SIZE_DEFAULT = 256
 _BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
 _BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
@@ -2209,7 +2215,8 @@ def correlate_debugged_function_to_debug_types(
                         _correlate_function_slice_multiproc,
                         chunk,
                         debug_type_dictionary,
-                    ): idx
+                    ):
+                    idx
                     for idx, chunk in enumerate(indexed_chunks)
                 }
                 for future in as_completed(future_to_idx):
