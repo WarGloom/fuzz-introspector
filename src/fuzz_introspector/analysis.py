@@ -2896,16 +2896,17 @@ def correlate_introspection_functions_to_debug_info(
 
     native_shadow_result = None
 
-    stage_markers.emit(
-        out_dir,
-        _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
-        "start",
-        configured_backend=configured_backend,
-        effective_backend=effective_backend,
-        shadow_mode=shadow_mode,
-        strict_mode=strict_mode,
-        fallback_reason=fallback_reason,
-    )
+    if out_dir is not None:
+        stage_markers.emit(
+            out_dir,
+            _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
+            "start",
+            configured_backend=configured_backend,
+            effective_backend=effective_backend,
+            shadow_mode=shadow_mode,
+            strict_mode=strict_mode,
+            fallback_reason=fallback_reason,
+        )
 
     try:
         if configured_backend == backend_loaders.BACKEND_RUST:
@@ -2981,17 +2982,18 @@ def correlate_introspection_functions_to_debug_info(
         status = "error"
         raise
     finally:
-        stage_markers.emit(
-            out_dir,
-            _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
-            "end",
-            configured_backend=configured_backend,
-            effective_backend=effective_backend,
-            shadow_mode=shadow_mode,
-            strict_mode=strict_mode,
-            fallback_reason=fallback_reason,
-            status=status,
-        )
+        if out_dir is not None:
+            stage_markers.emit(
+                out_dir,
+                _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
+                "end",
+                configured_backend=configured_backend,
+                effective_backend=effective_backend,
+                shadow_mode=shadow_mode,
+                strict_mode=strict_mode,
+                fallback_reason=fallback_reason,
+                status=status,
+            )
 
 
 def extract_all_sources(
