@@ -176,6 +176,120 @@ def test_create_fuzzer_detailed_section_skips_bitmap_for_large_calltree(
     )
 
 
+def test_create_fuzzer_detailed_section_does_not_embed_stale_bitmap_when_skipped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class DummyCalltreeAnalysis:
+        def __init__(self):
+            self.dump_files = False
+
+        def create_calltree(self, _profile, out_dir):
+            return os.path.join(out_dir, "calltree_view_0.html")
+
+    class DummyProfile:
+        identifier = "my/fuzzer"
+        branch_blockers = []
+
+        def get_callsites(self):
+            return [
+                SimpleNamespace(cov_color="red"),
+                SimpleNamespace(cov_color="green"),
+                SimpleNamespace(cov_color="yellow"),
+            ]
+
+    stale_colormap = tmp_path / "my_fuzzer_colormap.png"
+    stale_colormap.write_bytes(b"stale")
+
+    monkeypatch.setenv("FI_CALLTREE_BITMAP_MAX_NODES", "2")
+    monkeypatch.setattr(
+        "fuzz_introspector.analyses.calltree_analysis.FuzzCalltreeAnalysis",
+        DummyCalltreeAnalysis,
+    )
+    monkeypatch.setattr(
+        html_report.html_helpers,
+        "create_horisontal_calltree_image",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("bitmap generation should be skipped")
+        ),
+    )
+
+    html = html_report.create_fuzzer_detailed_section(
+        proj_profile=SimpleNamespace(has_coverage_data=lambda: False),
+        profile=DummyProfile(),
+        table_of_contents=html_report.html_helpers.HtmlTableOfContents(),
+        tables=[],
+        profile_idx=0,
+        conclusions=[],
+        extract_conclusion=False,
+        fuzzer_table_data={},
+        dump_files=True,
+        out_dir=str(tmp_path),
+    )
+
+    assert "Call tree overview bitmap omitted" in html
+    assert '<img class="colormap"' not in html
+
+
+def test_create_runtime_coverage_section_reuses_cov_metrics(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    counter = {"calls": 0}
+    cov_metrics = {
+        "func-hit": (8, 4, 50.0),
+        "func-miss": (5, 0, 0.0),
+        "func-unknown": (None, None, None),
+    }
+
+    class DummyProfile:
+        identifier = "dummy-fuzzer"
+        coverage = SimpleNamespace(covmap={"func-hit": object(), "func-miss": object()})
+        functions_reached_by_fuzzer = {"func-hit", "func-unknown"}
+
+        @staticmethod
+        def get_cov_metrics(funcname: str):
+            counter["calls"] += 1
+            return cov_metrics[funcname]
+
+    monkeypatch.setattr(
+        html_report.json_report,
+        "add_fuzzer_key_value_to_report",
+        lambda *_args, **_kwargs: None,
+    )
+
+    fuzzer_table_data: dict[str, list[dict[str, object]]] = {}
+    html = html_report.create_fuzzer_profile_runtime_coverage_section(
+        proj_profile=SimpleNamespace(),
+        profile=DummyProfile(),
+        table_of_contents=html_report.html_helpers.HtmlTableOfContents(),
+        profile_idx=0,
+        fuzzer_table_data=fuzzer_table_data,
+        extract_conclusion=False,
+        conclusions=[],
+        tables=[],
+        out_dir=str(tmp_path),
+    )
+
+    assert 2 <= counter["calls"] <= 3
+    assert "Covered functions" in html
+    assert "Functions that are reachable but not covered" in html
+    assert "Reachable functions" in html
+    assert "50.0%" in html
+    assert fuzzer_table_data["myTable0"] == [
+        {
+            "Function name": "func-hit",
+            "source code lines": 8,
+            "source lines hit": 4,
+            "percentage hit": "50.0%",
+        },
+        {
+            "Function name": "func-miss",
+            "source code lines": 5,
+            "source lines hit": 0,
+            "percentage hit": "0.0%",
+        },
+    ]
+
+
 def test_create_horisontal_calltree_image_uses_agg_when_backend_not_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

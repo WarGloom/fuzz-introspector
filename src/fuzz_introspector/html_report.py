@@ -1054,13 +1054,15 @@ def create_fuzzer_profile_runtime_coverage_section(
     tables,
     out_dir,
 ) -> str:
-    html_string = ""
+    html_parts: List[str] = []
     # Table with all functions hit by this fuzzer
-    html_string += html_helpers.html_add_header_with_link(
-        "Runtime coverage analysis",
-        html_helpers.HTML_HEADING.H3,
-        table_of_contents,
-        link=f"functions_cov_hit_{profile_idx}",
+    html_parts.append(
+        html_helpers.html_add_header_with_link(
+            "Runtime coverage analysis",
+            html_helpers.HTML_HEADING.H3,
+            table_of_contents,
+            link=f"functions_cov_hit_{profile_idx}",
+        )
     )
     table_name = f"myTable{len(tables)}"
 
@@ -1068,8 +1070,7 @@ def create_fuzzer_profile_runtime_coverage_section(
     fuzzer_table_data[table_name] = []
 
     tables.append(table_name)
-    func_hit_table_string = ""
-    func_hit_table_string += html_helpers.html_create_table_head(
+    func_hit_table_string = html_helpers.html_create_table_head(
         tables[-1],
         [
             ("Function name", ""),
@@ -1082,16 +1083,20 @@ def create_fuzzer_profile_runtime_coverage_section(
     )
 
     total_hit_functions = 0
+    get_cov_metrics = profile.get_cov_metrics
+    coverage_metrics: Dict[
+        str, Tuple[Optional[int], Optional[int], Optional[float]]
+    ] = {}
+    table_rows = fuzzer_table_data[table_name]
     if profile.coverage is not None:
         for funcname in profile.coverage.covmap:
-            (total_func_lines, hit_lines, hit_percentage) = profile.get_cov_metrics(
-                funcname
-            )
+            total_func_lines, hit_lines, hit_percentage = get_cov_metrics(funcname)
+            coverage_metrics[funcname] = (total_func_lines, hit_lines, hit_percentage)
 
             if hit_percentage is not None:
                 if hit_lines and hit_lines > 0:
                     total_hit_functions += 1
-                fuzzer_table_data[table_name].append(
+                table_rows.append(
                     {
                         "Function name": funcname,
                         "source code lines": total_func_lines,
@@ -1104,7 +1109,15 @@ def create_fuzzer_profile_runtime_coverage_section(
     func_hit_table_string += "</table>"
 
     # Get how many functions are covered relative to reachability
-    uncovered_reachable_funcs = len(profile.get_cov_uncovered_reachable_funcs())
+    uncovered_reachable_funcs = 0
+    if profile.coverage is not None:
+        for funcname in profile.functions_reached_by_fuzzer:
+            metrics = coverage_metrics.get(funcname)
+            if metrics is None:
+                metrics = get_cov_metrics(funcname)
+            total_func_lines, hit_lines, _ = metrics
+            if total_func_lines is None or hit_lines == 0:
+                uncovered_reachable_funcs += 1
     reachable_funcs = len(profile.functions_reached_by_fuzzer)
     reached_funcs = reachable_funcs - uncovered_reachable_funcs
     try:
@@ -1138,29 +1151,33 @@ def create_fuzzer_profile_runtime_coverage_section(
                 )
             )
 
-    html_string += '<div style="display: flex; margin-bottom: 10px;">'
-    html_string += html_helpers.get_simple_box(
-        "Covered functions", str(total_hit_functions)
+    html_parts.append('<div style="display: flex; margin-bottom: 10px;">')
+    html_parts.append(
+        html_helpers.get_simple_box("Covered functions", str(total_hit_functions))
     )
-    html_string += html_helpers.get_simple_box(
-        "Functions that are reachable but not covered", str(uncovered_reachable_funcs)
+    html_parts.append(
+        html_helpers.get_simple_box(
+            "Functions that are reachable but not covered",
+            str(uncovered_reachable_funcs),
+        )
     )
-
-    html_string += html_helpers.get_simple_box(
-        "Reachable functions", str(reachable_funcs)
+    html_parts.append(
+        html_helpers.get_simple_box("Reachable functions", str(reachable_funcs))
     )
-    html_string += html_helpers.get_simple_box(
-        "Percentage of reachable functions covered",
-        "%s%%" % str(round(cov_reach_proportion, 2)),
+    html_parts.append(
+        html_helpers.get_simple_box(
+            "Percentage of reachable functions covered",
+            "%s%%" % str(round(cov_reach_proportion, 2)),
+        )
     )
-    html_string += "</div>"
-    html_string += html_constants.INFO_SUM_OF_COVERED_FUNCS_EQ_REACHABLE_FUNCS
+    html_parts.append("</div>")
+    html_parts.append(html_constants.INFO_SUM_OF_COVERED_FUNCS_EQ_REACHABLE_FUNCS)
 
     if total_hit_functions > reachable_funcs:
-        html_string += html_constants.WARNING_TOTAL_FUNC_OVER_REACHABLE_FUNC
+        html_parts.append(html_constants.WARNING_TOTAL_FUNC_OVER_REACHABLE_FUNC)
 
-    html_string += func_hit_table_string
-    return html_string
+    html_parts.append(func_hit_table_string)
+    return "".join(html_parts)
 
 
 def create_fuzzer_detailed_section(
@@ -1175,17 +1192,22 @@ def create_fuzzer_detailed_section(
     dump_files: bool,
     out_dir,
 ) -> str:
-    html_string = ""
-    html_string += html_helpers.html_add_header_with_link(
-        f"Fuzzer: {profile.identifier}", html_helpers.HTML_HEADING.H2, table_of_contents
-    )
+    html_parts: List[str] = [
+        html_helpers.html_add_header_with_link(
+            f"Fuzzer: {profile.identifier}",
+            html_helpers.HTML_HEADING.H2,
+            table_of_contents,
+        )
+    ]
 
     # Calltree fixed-width image
-    html_string += html_helpers.html_add_header_with_link(
-        "Call tree",
-        html_helpers.HTML_HEADING.H3,
-        table_of_contents,
-        link=f"call_tree_{profile_idx}",
+    html_parts.append(
+        html_helpers.html_add_header_with_link(
+            "Call tree",
+            html_helpers.HTML_HEADING.H3,
+            table_of_contents,
+            link=f"call_tree_{profile_idx}",
+        )
     )
 
     from fuzz_introspector.analyses import calltree_analysis as cta
@@ -1194,13 +1216,16 @@ def create_fuzzer_detailed_section(
     calltree_analysis.dump_files = dump_files
     calltree_file_name = calltree_analysis.create_calltree(profile, out_dir)
 
-    html_string += "<p class='no-top-margin'>"
-    html_string += html_constants.INFO_CALLTREE_DESCRIPTION
-    html_string += html_constants.INFO_CALLTREE_LINK_BUTTON.format(
-        os.path.basename(calltree_file_name)
+    html_parts.extend(
+        [
+            "<p class='no-top-margin'>",
+            html_constants.INFO_CALLTREE_DESCRIPTION,
+            html_constants.INFO_CALLTREE_LINK_BUTTON.format(
+                os.path.basename(calltree_file_name)
+            ),
+            "<p class='no-top-margin'>Call tree overview bitmap:</p>",
+        ]
     )
-
-    html_string += "<p class='no-top-margin'>Call tree overview bitmap:</p>"
 
     colormap_file_prefix = profile.identifier
     if "/" in colormap_file_prefix:
@@ -1242,11 +1267,11 @@ def create_fuzzer_detailed_section(
             image_name, profile, dump_files, out_dir
         )
 
-    if dump_files and os.path.exists(image_path):
-        html_string += f'<img class="colormap" src="{image_name}">'
+    if should_generate_bitmap and os.path.exists(image_path):
+        html_parts.append(f'<img class="colormap" src="{image_name}">')
     else:
         if bitmap_skip_reason in ("configured_off", "threshold_exceeded"):
-            html_string += (
+            html_parts.append(
                 "<p class='no-top-margin'>Call tree overview bitmap omitted "
                 "for this fuzzer due to configured size limits.</p>"
             )
@@ -1256,7 +1281,7 @@ def create_fuzzer_detailed_section(
                 profile.identifier,
             )
         else:
-            html_string += (
+            html_parts.append(
                 "<p class='no-top-margin'>Call tree overview bitmap is "
                 "unavailable in this environment.</p>"
             )
@@ -1274,46 +1299,52 @@ def create_fuzzer_detailed_section(
     # in that it's all dependent on code coverage. As such we exit early
     # if there is none.
     if not proj_profile.has_coverage_data():
-        html_string += (
+        html_parts.append(
             "<p>The project has no code coverage. Will not display blockers "
             "as blockers depend on code coverage.</p>"
         )
-        return html_string
+        return "".join(html_parts)
 
     # Show the distribution of colors in the calltree.
-    html_string += html_helpers.create_calltree_color_distribution_table(color_list)
+    html_parts.append(html_helpers.create_calltree_color_distribution_table(color_list))
 
     # Create fuzz blocker section
-    html_string += create_fuzzer_profile_section_blocker_table(
-        profile,
-        profile_idx,
-        tables,
-        calltree_file_name,
-        table_of_contents,
-        calltree_analysis,
+    html_parts.append(
+        create_fuzzer_profile_section_blocker_table(
+            profile,
+            profile_idx,
+            tables,
+            calltree_file_name,
+            table_of_contents,
+            calltree_analysis,
+        )
     )
 
     profile.write_stats_to_summary_file(out_dir)
 
     # Runtime code coverage section
-    html_string += create_fuzzer_profile_runtime_coverage_section(
-        proj_profile,
-        profile,
-        table_of_contents,
-        profile_idx,
-        fuzzer_table_data,
-        extract_conclusion,
-        conclusions,
-        tables,
-        out_dir,
+    html_parts.append(
+        create_fuzzer_profile_runtime_coverage_section(
+            proj_profile,
+            profile,
+            table_of_contents,
+            profile_idx,
+            fuzzer_table_data,
+            extract_conclusion,
+            conclusions,
+            tables,
+            out_dir,
+        )
     )
 
     # Section about files hit by fuzzers.
-    html_string += create_fuzzer_profile_section_files_hit(
-        profile, profile_idx, table_of_contents, tables
+    html_parts.append(
+        create_fuzzer_profile_section_files_hit(
+            profile, profile_idx, table_of_contents, tables
+        )
     )
 
-    return html_string
+    return "".join(html_parts)
 
 
 def create_fuzzer_profile_section_blocker_table(
@@ -1541,28 +1572,31 @@ def create_section_fuzzer_detailed_section(
 ):
     """Section with details about each fuzzer, including calltree."""
     logger.info(" - Creating section with details about each fuzzer")
-    html_report_core = '<div class="report-box">'
-    html_report_core += html_helpers.html_add_header_with_link(
-        "Fuzzer details", html_helpers.HTML_HEADING.H1, table_of_contents
-    )
-
-    html_report_core += '<div class="collapsible">'
+    html_report_parts: List[str] = [
+        '<div class="report-box">',
+        html_helpers.html_add_header_with_link(
+            "Fuzzer details", html_helpers.HTML_HEADING.H1, table_of_contents
+        ),
+        '<div class="collapsible">',
+    ]
     for profile_idx, harness_profile in enumerate(introspection_proj.profiles):
-        html_report_core += create_fuzzer_detailed_section(
-            introspection_proj.proj_profile,
-            harness_profile,
-            table_of_contents,
-            tables,
-            profile_idx,
-            conclusions,
-            True,
-            fuzzer_table_data,
-            dump_files,
-            out_dir,
+        html_report_parts.append(
+            create_fuzzer_detailed_section(
+                introspection_proj.proj_profile,
+                harness_profile,
+                table_of_contents,
+                tables,
+                profile_idx,
+                conclusions,
+                True,
+                fuzzer_table_data,
+                dump_files,
+                out_dir,
+            )
         )
-    html_report_core += "</div>"  # .collapsible
-    html_report_core += "</div>"  # report box
-    return html_report_core
+    html_report_parts.append("</div>")  # .collapsible
+    html_report_parts.append("</div>")  # report box
+    return "".join(html_report_parts)
 
 
 def create_section_all_functions(
