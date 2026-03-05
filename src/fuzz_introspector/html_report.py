@@ -86,7 +86,8 @@ def _parse_parallel_worker_count() -> int:
         )
         return os.cpu_count() or 1
 
-    flag_value = os.environ.get(PR6_PARALLEL_ANALYSIS_FLAG_ENV, "").strip().lower()
+    flag_value = os.environ.get(PR6_PARALLEL_ANALYSIS_FLAG_ENV,
+                                "").strip().lower()
     if worker_count < 1:
         logger.warning(
             "Invalid %s=%r; defaulting to 1",
@@ -96,18 +97,16 @@ def _parse_parallel_worker_count() -> int:
         return 1
 
     if flag_value and flag_value in ("0", "false", "no", "off"):
-        logger.info(
-            "PR6 parallel analyses disabled; %s not set", PR6_PARALLEL_ANALYSIS_FLAG_ENV
-        )
+        logger.info("PR6 parallel analyses disabled; %s not set",
+                    PR6_PARALLEL_ANALYSIS_FLAG_ENV)
         return 1
 
     return min(worker_count, os.cpu_count() or 1)
 
 
 def _parse_parallel_backend() -> str:
-    backend = os.environ.get(
-        PR6_PARALLEL_ANALYSIS_BACKEND_ENV, PR6_PARALLEL_ANALYSIS_DEFAULT_BACKEND
-    )
+    backend = os.environ.get(PR6_PARALLEL_ANALYSIS_BACKEND_ENV,
+                             PR6_PARALLEL_ANALYSIS_DEFAULT_BACKEND)
     backend = backend.strip().lower()
     if backend in ("thread", "process"):
         return backend
@@ -136,9 +135,8 @@ def _parse_bool_env(name: str, default: bool = False) -> bool:
 
 
 def _parse_all_functions_rows_backend() -> str:
-    backend = os.environ.get(
-        ALL_FUNCTIONS_ROWS_BACKEND_ENV, ALL_FUNCTIONS_ROWS_DEFAULT_BACKEND
-    )
+    backend = os.environ.get(ALL_FUNCTIONS_ROWS_BACKEND_ENV,
+                             ALL_FUNCTIONS_ROWS_DEFAULT_BACKEND)
     backend = backend.strip().lower()
     if backend in ("python", "rust"):
         return backend
@@ -229,9 +227,9 @@ def _get_rss_mb() -> float:
     return usage.ru_maxrss / 1024.0
 
 
-def _log_stage_telemetry(
-    stage_name: str, start_time: float | None = None, warn_after_seconds: int = 0
-) -> None:
+def _log_stage_telemetry(stage_name: str,
+                         start_time: float | None = None,
+                         warn_after_seconds: int = 0) -> None:
     elapsed = ""
     if start_time is not None:
         elapsed_seconds = time.monotonic() - start_time
@@ -243,15 +241,15 @@ def _log_stage_telemetry(
                 warn_after_seconds,
                 elapsed_seconds,
             )
-    logger.info(
-        "Stage telemetry: %s, rss_max=%.2fMB%s", stage_name, _get_rss_mb(), elapsed
-    )
+    logger.info("Stage telemetry: %s, rss_max=%.2fMB%s", stage_name,
+                _get_rss_mb(), elapsed)
 
 
 def _get_parallel_compatibility_by_name() -> dict[str, str]:
     return {
         analysis_cls.get_name(): compatibility
-        for analysis_cls, compatibility in analyses_registry.analysis_parallel_compatibility.items()
+        for analysis_cls, compatibility in
+        analyses_registry.analysis_parallel_compatibility.items()
     }
 
 
@@ -263,44 +261,36 @@ def _get_canonical_analysis_order(analyses_to_run: List[str]) -> List[str]:
     ]
 
 
-def _build_table_id_offsets(
-    analysis_order: List[str], base_offset: int
-) -> Dict[str, int]:
+def _build_table_id_offsets(analysis_order: List[str],
+                            base_offset: int) -> Dict[str, int]:
     table_id_offsets = {}
     for index, analysis_name in enumerate(analysis_order):
-        table_id_offsets[analysis_name] = base_offset + (index * TABLE_ID_STRIDE)
+        table_id_offsets[analysis_name] = base_offset + (index *
+                                                         TABLE_ID_STRIDE)
     return table_id_offsets
 
 
 def _serialize_toc_entries(
     table_of_contents: html_helpers.HtmlTableOfContents,
 ) -> List[Dict[str, Any]]:
-    return [
-        {
-            "entry_title": entry.entry_title,
-            "href_link": entry.href_link,
-            "heading_type": entry.heading_type.value,
-        }
-        for entry in table_of_contents.entries
-    ]
+    return [{
+        "entry_title": entry.entry_title,
+        "href_link": entry.href_link,
+        "heading_type": entry.heading_type.value,
+    } for entry in table_of_contents.entries]
 
 
 def _serialize_conclusions(
-    conclusions: List[html_helpers.HTMLConclusion],
-) -> List[Dict[str, Any]]:
-    return [
-        {
-            "severity": conclusion.severity,
-            "title": conclusion.title,
-            "description": conclusion.description,
-        }
-        for conclusion in conclusions
-    ]
+    conclusions: List[html_helpers.HTMLConclusion], ) -> List[Dict[str, Any]]:
+    return [{
+        "severity": conclusion.severity,
+        "title": conclusion.title,
+        "description": conclusion.description,
+    } for conclusion in conclusions]
 
 
 def _deserialize_conclusions(
-    conclusions: List[Any],
-) -> List[html_helpers.HTMLConclusion]:
+    conclusions: List[Any], ) -> List[html_helpers.HTMLConclusion]:
     deserialized: List[html_helpers.HTMLConclusion] = []
     for conclusion in conclusions:
         if isinstance(conclusion, html_helpers.HTMLConclusion):
@@ -313,8 +303,7 @@ def _deserialize_conclusions(
                 severity=conclusion.get("severity", 0),
                 title=conclusion.get("title", ""),
                 description=conclusion.get("description", ""),
-            )
-        )
+            ))
     return deserialized
 
 
@@ -324,9 +313,8 @@ def _apply_toc_entries(
 ) -> None:
     for toc_entry in toc_entries:
         heading_type = html_helpers.HTML_HEADING(toc_entry["heading_type"])
-        table_of_contents.add_entry(
-            toc_entry["entry_title"], toc_entry["href_link"], heading_type
-        )
+        table_of_contents.add_entry(toc_entry["entry_title"],
+                                    toc_entry["href_link"], heading_type)
 
 
 def _build_failure_envelope(
@@ -369,7 +357,8 @@ def _run_analysis_worker(
     diagnostics: List[str] = []
 
     try:
-        analysis_instance = analysis.instantiate_analysis_interface(analysis_interface)
+        analysis_instance = analysis.instantiate_analysis_interface(
+            analysis_interface)
         analysis_instance.dump_files = dump_files
         analysis_instance.set_display_html(display_html)
         with merge_intents.merge_intent_context(intent_collector):
@@ -397,7 +386,8 @@ def _run_analysis_worker(
         status=status,
         display_html=display_html,
         html_fragment=html_fragment,
-        conclusions=(_serialize_conclusions(local_conclusions) if display_html else []),
+        conclusions=(_serialize_conclusions(local_conclusions)
+                     if display_html else []),
         table_specs=[],
         merge_intents=intent_collector.get_intents(),
         diagnostics=diagnostics,
@@ -405,7 +395,8 @@ def _run_analysis_worker(
         worker_pid=os.getpid(),
     )
     envelope = worker_result.to_envelope()
-    envelope["toc_entries"] = _serialize_toc_entries(local_toc) if display_html else []
+    envelope["toc_entries"] = _serialize_toc_entries(
+        local_toc) if display_html else []
     envelope["table_ids"] = list(local_tables) if display_html else []
     safe_name = analysis_name.replace("/", "_")
     result_path = os.path.join(result_dir, f"{safe_name}.{os.getpid()}.json")
@@ -439,9 +430,8 @@ def _run_parallel_analyses(
         result_dir = tempfile.mkdtemp(prefix="fi-pr6-worker-results-")
         processes: List[Tuple[Any, str]] = []
         thread_worker_args: Dict[str, Tuple[Any, ...]] = {}
-        process_ctx = (
-            multiprocessing.get_context("fork") if backend == "process" else None
-        )
+        process_ctx = (multiprocessing.get_context("fork")
+                       if backend == "process" else None)
         for analysis_interface in batch:
             analysis_name = analysis_interface.get_name()
             display_html = analysis_name in analyses_to_run
@@ -458,7 +448,8 @@ def _run_parallel_analyses(
             )
             if backend == "process":
                 if process_ctx is None:
-                    raise FuzzIntrospectorError("Parallel process backend unavailable")
+                    raise FuzzIntrospectorError(
+                        "Parallel process backend unavailable")
                 process = process_ctx.Process(
                     target=_run_analysis_worker,
                     args=worker_args,
@@ -471,8 +462,10 @@ def _run_parallel_analyses(
         if backend != "process" and thread_worker_args:
             with ThreadPoolExecutor(max_workers=total_workers) as executor:
                 thread_futures = {
-                    analysis_name: executor.submit(_run_analysis_worker, *worker_args)
-                    for analysis_name, worker_args in thread_worker_args.items()
+                    analysis_name:
+                    executor.submit(_run_analysis_worker, *worker_args)
+                    for analysis_name, worker_args in
+                    thread_worker_args.items()
                 }
                 for analysis_name, future in thread_futures.items():
                     try:
@@ -482,10 +475,11 @@ def _run_parallel_analyses(
                             _build_failure_envelope(
                                 analysis_name,
                                 "retryable_error",
-                                [f"Thread worker failed for {analysis_name}: {exc}"],
+                                [
+                                    f"Thread worker failed for {analysis_name}: {exc}"
+                                ],
                                 worker_pid=os.getpid(),
-                            )
-                        )
+                            ))
 
         returned_names: set[str] = set()
 
@@ -516,8 +510,7 @@ def _run_parallel_analyses(
                         "retryable_error",
                         diagnostics,
                         worker_pid=process.pid,
-                    )
-                )
+                    ))
         else:
             expected_names = [
                 analysis_interface.get_name() for analysis_interface in batch
@@ -535,8 +528,7 @@ def _run_parallel_analyses(
                         "retryable_error",
                         diagnostics,
                         worker_pid=os.getpid(),
-                    )
-                )
+                    ))
 
         shutil.rmtree(result_dir, ignore_errors=True)
 
@@ -562,7 +554,8 @@ def _run_serial_analysis_with_envelope(
     start_time = time.monotonic()
 
     try:
-        analysis_instance = analysis.instantiate_analysis_interface(analysis_interface)
+        analysis_instance = analysis.instantiate_analysis_interface(
+            analysis_interface)
         analysis_instance.dump_files = dump_files
         analysis_instance.set_display_html(display_html)
         with merge_intents.merge_intent_context(intent_collector):
@@ -590,7 +583,8 @@ def _run_serial_analysis_with_envelope(
         status=status,
         display_html=display_html,
         html_fragment=html_fragment,
-        conclusions=(_serialize_conclusions(local_conclusions) if display_html else []),
+        conclusions=(_serialize_conclusions(local_conclusions)
+                     if display_html else []),
         table_specs=[],
         merge_intents=intent_collector.get_intents(),
         diagnostics=diagnostics,
@@ -598,33 +592,31 @@ def _run_serial_analysis_with_envelope(
         worker_pid=os.getpid(),
     )
     envelope = worker_result.to_envelope()
-    envelope["toc_entries"] = _serialize_toc_entries(local_toc) if display_html else []
+    envelope["toc_entries"] = _serialize_toc_entries(
+        local_toc) if display_html else []
     envelope["table_ids"] = list(local_tables) if display_html else []
     return envelope
 
 
 def create_overview_table(
-    tables: List[str], introspection_proj: analysis.IntrospectionProject
-) -> str:
+        tables: List[str],
+        introspection_proj: analysis.IntrospectionProject) -> str:
     """Table with an overview of all the fuzzers"""
     html_string = html_helpers.html_create_table_head(
-        tables[-1], html_constants.FUZZER_OVERVIEW_TABLE_COLUMNS
-    )
+        tables[-1], html_constants.FUZZER_OVERVIEW_TABLE_COLUMNS)
     for profile in introspection_proj.profiles:  # Create a row for each fuzzer.
         fuzzer_filename = profile.fuzzer_source_file
-        html_string += html_helpers.html_table_add_row(
-            [
-                profile.identifier,
-                fuzzer_filename,
-                len(profile.functions_reached_by_fuzzer),
-                len(profile.functions_unreached_by_fuzzer),
-                profile.max_func_call_depth,
-                len(profile.file_targets),
-                profile.total_basic_blocks,
-                profile.total_cyclomatic_complexity,
-                fuzzer_filename.replace(" ", "").split("/")[-1],
-            ]
-        )
+        html_string += html_helpers.html_table_add_row([
+            profile.identifier,
+            fuzzer_filename,
+            len(profile.functions_reached_by_fuzzer),
+            len(profile.functions_unreached_by_fuzzer),
+            profile.max_func_call_depth,
+            len(profile.file_targets),
+            profile.total_basic_blocks,
+            profile.total_cyclomatic_complexity,
+            fuzzer_filename.replace(" ", "").split("/")[-1],
+        ])
     html_string += "\n</tbody></table>"
     return html_string
 
@@ -642,8 +634,7 @@ def _get_native_function_table_order(
         return None
     try:
         native_result = analysis.get_native_plugin_proxy().run_analysis(
-            proj_profile, [], ["function_table"]
-        )
+            proj_profile, [], ["function_table"])
         function_table_result = native_result.get("function_table", {})
         function_table_tables = function_table_result.get("tables", {})
 
@@ -661,8 +652,7 @@ def _get_native_function_table_order(
         rows = function_table_tables.get("all_functions_table", [])
         if rows:
             ordered = [
-                row["name"]
-                for row in rows
+                row["name"] for row in rows
                 if isinstance(row, dict) and isinstance(row.get("name"), str)
             ]
             logger.debug(
@@ -682,8 +672,7 @@ def _get_cached_native_function_table_order(
     cache_key = id(proj_profile)
     if cache_key not in _NATIVE_FUNCTION_TABLE_ORDER_CACHE:
         _NATIVE_FUNCTION_TABLE_ORDER_CACHE[cache_key] = (
-            _get_native_function_table_order(proj_profile)
-        )
+            _get_native_function_table_order(proj_profile))
     return _NATIVE_FUNCTION_TABLE_ORDER_CACHE[cache_key]
 
 
@@ -697,8 +686,7 @@ def create_all_function_table(
     """Table for all functions in the project. Contains many details about each
     function"""
     random_suffix = "_" + "".join(
-        random.choices(string.ascii_lowercase + string.ascii_uppercase, k=7)
-    )
+        random.choices(string.ascii_lowercase + string.ascii_uppercase, k=7))
     if table_id is None:
         table_id = tables[-1]
 
@@ -724,10 +712,8 @@ def create_all_function_table(
     if native_order is not None:
         # Iterate in native sort order, skipping names absent from the source map.
         func_items: typing.Iterable[typing.Tuple[str, Any]] = (
-            (name, all_funcs_with_source[name])
-            for name in native_order
-            if name in all_funcs_with_source
-        )
+            (name, all_funcs_with_source[name]) for name in native_order
+            if name in all_funcs_with_source)
     else:
         func_items = all_funcs_with_source.items()
 
@@ -739,8 +725,7 @@ def create_all_function_table(
         if strict:
             strict_backend_error = (
                 f"{ALL_FUNCTIONS_ROWS_STRICT_ENV}=1 requires an available "
-                "rust all-functions materialization backend"
-            )
+                "rust all-functions materialization backend")
             effective_backend = "unavailable"
         else:
             logger.info(
@@ -772,13 +757,13 @@ def create_all_function_table(
 
         for fd_k, fd in func_items:
             if proj_profile.target_lang == "rust":
-                demangled_func_name = utils.demangle_rust_func(fd.function_name)
+                demangled_func_name = utils.demangle_rust_func(
+                    fd.function_name)
             else:
                 demangled_func_name = utils.demangle_cpp_func(fd.function_name)
 
             func_total_lines, hit_lines = proj_profile.runtime_coverage.get_hit_summary(
-                fd.function_name
-            )
+                fd.function_name)
             if hit_lines is None or func_total_lines is None:
                 hit_percentage = 0.0
             else:
@@ -800,14 +785,14 @@ def create_all_function_table(
                 func_hit_at_runtime_row = "no"
 
             func_name_row = html_helpers.wrap_link(
-                func_cov_url, html_helpers.create_coded_text(demangled_func_name)
-            )
+                func_cov_url,
+                html_helpers.create_coded_text(demangled_func_name))
 
             collapsible_id = demangled_func_name + random_suffix
             if fd.hitcount > 0:
                 reached_by_fuzzers_row = html_helpers.create_collapsible_element(
-                    str(fd.hitcount), str(fd.reached_by_fuzzers), collapsible_id
-                )
+                    str(fd.hitcount), str(fd.reached_by_fuzzers),
+                    collapsible_id)
             else:
                 reached_by_fuzzers_row = "0"
 
@@ -818,8 +803,7 @@ def create_all_function_table(
                         str(fd.hitcount_runtime),
                         str(fd.reached_by_fuzzers_runtime),
                         collapsible_id + "10",
-                    )
-                )
+                    ))
             else:
                 reached_by_fuzzers_runtime_row = "0"
 
@@ -829,15 +813,13 @@ def create_all_function_table(
                         str(fd.hitcount_combined),
                         str(fd.reached_by_fuzzers_combined),
                         collapsible_id + "21",
-                    )
-                )
+                    ))
             else:
                 reached_by_fuzzers_combined_row = "0"
 
             if fd.arg_count > 0:
                 args_row = html_helpers.create_collapsible_element(
-                    str(fd.arg_count), str(fd.arg_types), collapsible_id + "2"
-                )
+                    str(fd.arg_count), str(fd.arg_types), collapsible_id + "2")
             else:
                 args_row = "0"
 
@@ -858,7 +840,8 @@ def create_all_function_table(
                 "Cyclomatic complexity": fd.cyclomatic_complexity,
                 "Functions reached": len(fd.functions_reached),
                 "Reached by functions": len(fd.incoming_references),
-                "Accumulated cyclomatic complexity": fd.total_cyclomatic_complexity,
+                "Accumulated cyclomatic complexity":
+                fd.total_cyclomatic_complexity,
                 "Undiscovered complexity": fd.new_unreached_complexity,
                 "asserts": fd.assert_list,
             }
@@ -888,7 +871,8 @@ def create_all_function_table(
                 "Cyclomatic complexity": fd.cyclomatic_complexity,
                 "Functions reached": len(fd.functions_reached),
                 "Reached by functions": len(fd.incoming_references),
-                "Accumulated cyclomatic complexity": fd.total_cyclomatic_complexity,
+                "Accumulated cyclomatic complexity":
+                fd.total_cyclomatic_complexity,
                 "Undiscovered complexity": fd.new_unreached_complexity,
                 "asserts": fd.assert_list,
             }
@@ -910,7 +894,8 @@ def create_all_function_table(
             report_row["exceptions"] = fd.exceptions
             table_rows_json_report.append(report_row)
 
-        logger.info("Assembled a total of %d entries" % (len(table_rows_json_report)))
+        logger.info("Assembled a total of %d entries" %
+                    (len(table_rows_json_report)))
         html_string += "</table>\n"
         return html_string, table_rows_json_html, table_rows_json_report
     except Exception as error:
@@ -990,13 +975,11 @@ def create_boxed_top_summary_info(
                 severity=0,
                 title="No coverage data was found",
                 description=html_constants.WARNING_NO_COVERAGE,
-            )
-        )
+            ))
     # Add coverage conclusion
     try:
         coverage_percentage = float(
-            len(covered_funcs) / float(proj_profile.total_functions) * 100.0
-        )
+            len(covered_funcs) / float(proj_profile.total_functions) * 100.0)
     except ZeroDivisionError:
         coverage_percentage = 0.0
     if coverage_percentage > 50.0:
@@ -1004,8 +987,9 @@ def create_boxed_top_summary_info(
             f"""Fuzzers reach {"%.5s%%" % (str(coverage_percentage))} code coverage."""
         )
         conclusions.append(
-            html_helpers.HTMLConclusion(severity=8, title=sentence, description="")
-        )
+            html_helpers.HTMLConclusion(severity=8,
+                                        title=sentence,
+                                        description=""))
 
     # Add conclusios about reachability.
     # Avoid Python due to limitations in the callgraph extraction.
@@ -1028,19 +1012,17 @@ def create_reachability_conclusions(
         f"""Fuzzers reach {"%.5s%%" % (str(reached_percentage))} of all functions. """
     )
     conclusions.append(
-        html_helpers.HTMLConclusion(
-            severity=int(reached_percentage * 0.1), title=sentence, description=""
-        )
-    )
+        html_helpers.HTMLConclusion(severity=int(reached_percentage * 0.1),
+                                    title=sentence,
+                                    description=""))
 
     # Complexity reachability
     percentage_str = "%.5s%%" % str(reached_complexity_percentage)
     sentence = f"Fuzzers reach {percentage_str} of cyclomatic complexity. "
     conclusions.append(
-        html_helpers.HTMLConclusion(
-            severity=int(reached_percentage * 0.1), title=sentence, description=""
-        )
-    )
+        html_helpers.HTMLConclusion(severity=int(reached_percentage * 0.1),
+                                    title=sentence,
+                                    description=""))
 
 
 def create_fuzzer_profile_runtime_coverage_section(
@@ -1062,8 +1044,7 @@ def create_fuzzer_profile_runtime_coverage_section(
             html_helpers.HTML_HEADING.H3,
             table_of_contents,
             link=f"functions_cov_hit_{profile_idx}",
-        )
-    )
+        ))
     table_name = f"myTable{len(tables)}"
 
     # Add this table name to fuzzer_table_data
@@ -1084,28 +1065,32 @@ def create_fuzzer_profile_runtime_coverage_section(
 
     total_hit_functions = 0
     get_cov_metrics = profile.get_cov_metrics
-    coverage_metrics: Dict[
-        str, Tuple[Optional[int], Optional[int], Optional[float]]
-    ] = {}
+    coverage_metrics: Dict[str, Tuple[Optional[int], Optional[int],
+                                      Optional[float]]] = {}
     table_rows = fuzzer_table_data[table_name]
     if profile.coverage is not None:
         for funcname in profile.coverage.covmap:
-            total_func_lines, hit_lines, hit_percentage = get_cov_metrics(funcname)
-            coverage_metrics[funcname] = (total_func_lines, hit_lines, hit_percentage)
+            total_func_lines, hit_lines, hit_percentage = get_cov_metrics(
+                funcname)
+            coverage_metrics[funcname] = (total_func_lines, hit_lines,
+                                          hit_percentage)
 
             if hit_percentage is not None:
                 if hit_lines and hit_lines > 0:
                     total_hit_functions += 1
-                table_rows.append(
-                    {
-                        "Function name": funcname,
-                        "source code lines": total_func_lines,
-                        "source lines hit": hit_lines,
-                        "percentage hit": "%.5s" % (str(hit_percentage)) + "%",
-                    }
-                )
+                table_rows.append({
+                    "Function name":
+                    funcname,
+                    "source code lines":
+                    total_func_lines,
+                    "source lines hit":
+                    hit_lines,
+                    "percentage hit":
+                    "%.5s" % (str(hit_percentage)) + "%",
+                })
             else:
-                logger.error("Could not write coverage line for function %s", funcname)
+                logger.error("Could not write coverage line for function %s",
+                             funcname)
     func_hit_table_string += "</table>"
 
     # Get how many functions are covered relative to reachability
@@ -1121,7 +1106,8 @@ def create_fuzzer_profile_runtime_coverage_section(
     reachable_funcs = len(profile.functions_reached_by_fuzzer)
     reached_funcs = reachable_funcs - uncovered_reachable_funcs
     try:
-        cov_reach_proportion = (float(reached_funcs) / float(reachable_funcs)) * 100.0
+        cov_reach_proportion = (float(reached_funcs) /
+                                float(reachable_funcs)) * 100.0
     except Exception:
         logger.info("reachable funcs is 0")
         cov_reach_proportion = 0.0
@@ -1142,39 +1128,36 @@ def create_fuzzer_profile_runtime_coverage_section(
                 html_helpers.HTMLConclusion(
                     2,
                     f"Fuzzer {profile.identifier} is blocked:",
-                    (
-                        f"The runtime code coverage of {profile.identifier} "
-                        f"covers {str_percentage} of its statically reachable code. "
-                        f"This means there is some place that blocks the fuzzer "
-                        f"to continue exploring more code at run time. "
-                    ),
-                )
-            )
+                    (f"The runtime code coverage of {profile.identifier} "
+                     f"covers {str_percentage} of its statically reachable code. "
+                     f"This means there is some place that blocks the fuzzer "
+                     f"to continue exploring more code at run time. "),
+                ))
 
     html_parts.append('<div style="display: flex; margin-bottom: 10px;">')
     html_parts.append(
-        html_helpers.get_simple_box("Covered functions", str(total_hit_functions))
-    )
+        html_helpers.get_simple_box("Covered functions",
+                                    str(total_hit_functions)))
     html_parts.append(
         html_helpers.get_simple_box(
             "Functions that are reachable but not covered",
             str(uncovered_reachable_funcs),
-        )
-    )
+        ))
     html_parts.append(
-        html_helpers.get_simple_box("Reachable functions", str(reachable_funcs))
-    )
+        html_helpers.get_simple_box("Reachable functions",
+                                    str(reachable_funcs)))
     html_parts.append(
         html_helpers.get_simple_box(
             "Percentage of reachable functions covered",
             "%s%%" % str(round(cov_reach_proportion, 2)),
-        )
-    )
+        ))
     html_parts.append("</div>")
-    html_parts.append(html_constants.INFO_SUM_OF_COVERED_FUNCS_EQ_REACHABLE_FUNCS)
+    html_parts.append(
+        html_constants.INFO_SUM_OF_COVERED_FUNCS_EQ_REACHABLE_FUNCS)
 
     if total_hit_functions > reachable_funcs:
-        html_parts.append(html_constants.WARNING_TOTAL_FUNC_OVER_REACHABLE_FUNC)
+        html_parts.append(
+            html_constants.WARNING_TOTAL_FUNC_OVER_REACHABLE_FUNC)
 
     html_parts.append(func_hit_table_string)
     return "".join(html_parts)
@@ -1207,8 +1190,7 @@ def create_fuzzer_detailed_section(
             html_helpers.HTML_HEADING.H3,
             table_of_contents,
             link=f"call_tree_{profile_idx}",
-        )
-    )
+        ))
 
     from fuzz_introspector.analyses import calltree_analysis as cta
 
@@ -1216,16 +1198,13 @@ def create_fuzzer_detailed_section(
     calltree_analysis.dump_files = dump_files
     calltree_file_name = calltree_analysis.create_calltree(profile, out_dir)
 
-    html_parts.extend(
-        [
-            "<p class='no-top-margin'>",
-            html_constants.INFO_CALLTREE_DESCRIPTION,
-            html_constants.INFO_CALLTREE_LINK_BUTTON.format(
-                os.path.basename(calltree_file_name)
-            ),
-            "<p class='no-top-margin'>Call tree overview bitmap:</p>",
-        ]
-    )
+    html_parts.extend([
+        "<p class='no-top-margin'>",
+        html_constants.INFO_CALLTREE_DESCRIPTION,
+        html_constants.INFO_CALLTREE_LINK_BUTTON.format(
+            os.path.basename(calltree_file_name)),
+        "<p class='no-top-margin'>Call tree overview bitmap:</p>",
+    ])
 
     colormap_file_prefix = profile.identifier
     if "/" in colormap_file_prefix:
@@ -1264,8 +1243,7 @@ def create_fuzzer_detailed_section(
 
     if should_generate_bitmap:
         color_list = html_helpers.create_horisontal_calltree_image(
-            image_name, profile, dump_files, out_dir
-        )
+            image_name, profile, dump_files, out_dir)
 
     if should_generate_bitmap and os.path.exists(image_path):
         html_parts.append(f'<img class="colormap" src="{image_name}">')
@@ -1273,8 +1251,7 @@ def create_fuzzer_detailed_section(
         if bitmap_skip_reason in ("configured_off", "threshold_exceeded"):
             html_parts.append(
                 "<p class='no-top-margin'>Call tree overview bitmap omitted "
-                "for this fuzzer due to configured size limits.</p>"
-            )
+                "for this fuzzer due to configured size limits.</p>")
         elif bitmap_skip_reason == "dump_files_disabled":
             logger.debug(
                 "Skipping calltree overview bitmap for %s because dump_files is disabled",
@@ -1283,8 +1260,7 @@ def create_fuzzer_detailed_section(
         else:
             html_parts.append(
                 "<p class='no-top-margin'>Call tree overview bitmap is "
-                "unavailable in this environment.</p>"
-            )
+                "unavailable in this environment.</p>")
             logger.info(
                 "Calltree overview bitmap not embedded for %s because file %s does not exist",
                 profile.identifier,
@@ -1301,12 +1277,12 @@ def create_fuzzer_detailed_section(
     if not proj_profile.has_coverage_data():
         html_parts.append(
             "<p>The project has no code coverage. Will not display blockers "
-            "as blockers depend on code coverage.</p>"
-        )
+            "as blockers depend on code coverage.</p>")
         return "".join(html_parts)
 
     # Show the distribution of colors in the calltree.
-    html_parts.append(html_helpers.create_calltree_color_distribution_table(color_list))
+    html_parts.append(
+        html_helpers.create_calltree_color_distribution_table(color_list))
 
     # Create fuzz blocker section
     html_parts.append(
@@ -1317,8 +1293,7 @@ def create_fuzzer_detailed_section(
             calltree_file_name,
             table_of_contents,
             calltree_analysis,
-        )
-    )
+        ))
 
     profile.write_stats_to_summary_file(out_dir)
 
@@ -1334,15 +1309,12 @@ def create_fuzzer_detailed_section(
             conclusions,
             tables,
             out_dir,
-        )
-    )
+        ))
 
     # Section about files hit by fuzzers.
     html_parts.append(
-        create_fuzzer_profile_section_files_hit(
-            profile, profile_idx, table_of_contents, tables
-        )
-    )
+        create_fuzzer_profile_section_files_hit(profile, profile_idx,
+                                                table_of_contents, tables))
 
     return "".join(html_parts)
 
@@ -1361,13 +1333,11 @@ def create_fuzzer_profile_section_blocker_table(
     if profile.branch_blockers:
         # Populate branch blocker table
         html_fuzz_blocker_table = calltree_analysis.create_branch_blocker_table(
-            profile, tables, calltree_file_name, 12
-        )
+            profile, tables, calltree_file_name, 12)
     else:
         # Fuzz blocker table based on calltree
         html_fuzz_blocker_table = calltree_analysis.create_fuzz_blocker_table(
-            profile, tables, calltree_file_name, file_link=calltree_file_name
-        )
+            profile, tables, calltree_file_name, file_link=calltree_file_name)
     if html_fuzz_blocker_table is not None:
         html_string += html_helpers.html_add_header_with_link(
             "Fuzz blockers",
@@ -1379,9 +1349,8 @@ def create_fuzzer_profile_section_blocker_table(
     return html_string
 
 
-def create_fuzzer_profile_section_files_hit(
-    profile, profile_idx, table_of_contents, tables
-):
+def create_fuzzer_profile_section_files_hit(profile, profile_idx,
+                                            table_of_contents, tables):
     html_string = ""
     # Table showing which files this fuzzer hits.
     html_string += html_helpers.html_add_header_with_link(
@@ -1391,13 +1360,12 @@ def create_fuzzer_profile_section_files_hit(
         link=f"files_hit_{profile_idx}",
     )
     tables.append(f"myTable{len(tables)}")
-    html_string += html_helpers.html_create_table_head(
-        tables[-1], [("filename", ""), ("functions hit", "")]
-    )
+    html_string += html_helpers.html_create_table_head(tables[-1],
+                                                       [("filename", ""),
+                                                        ("functions hit", "")])
     for file_target, functions_hit_in_file in profile.file_targets.items():
         html_string += html_helpers.html_table_add_row(
-            [file_target, len(functions_hit_in_file)]
-        )
+            [file_target, len(functions_hit_in_file)])
     html_string += "</table>\n"
     return html_string
 
@@ -1426,9 +1394,8 @@ def create_html_footer(tables):
     return html_footer
 
 
-def write_content_to_html_files(
-    html_full_doc, all_functions_json_html, fuzzer_table_data, out_dir
-):
+def write_content_to_html_files(html_full_doc, all_functions_json_html,
+                                fuzzer_table_data, out_dir):
     """Writes the content of the HTML static website to the relevant files.
 
     :param html_full_doc: content of the main fuzz_report.html file
@@ -1461,13 +1428,12 @@ def write_content_to_html_files(
         )
     max_prettify_bytes = max_prettify_mb * 1024 * 1024
     disable_prettify_values = {"1", "true", "yes", "on"}
-    disable_prettify = (
-        os.environ.get("FI_DISABLE_HTML_PRETTIFY", "").lower()
-        in disable_prettify_values
-    )
+    disable_prettify = (os.environ.get("FI_DISABLE_HTML_PRETTIFY", "").lower()
+                        in disable_prettify_values)
 
     if disable_prettify:
-        logger.info("Skipping HTML prettify because FI_DISABLE_HTML_PRETTIFY is set")
+        logger.info(
+            "Skipping HTML prettify because FI_DISABLE_HTML_PRETTIFY is set")
         rendered_html = html_full_doc
     elif html_size_bytes > max_prettify_bytes:
         logger.info(
@@ -1482,37 +1448,36 @@ def write_content_to_html_files(
         logger.info("Finished prettifying report HTML")
 
     # Dump the HTML report.
-    with open(os.path.join(out_dir, constants.HTML_REPORT), "w") as report_file:
+    with open(os.path.join(out_dir, constants.HTML_REPORT),
+              "w") as report_file:
         report_file.write(rendered_html)
 
     # Dump function data to the relevant javascript file.
-    with open(
-        os.path.join(out_dir, constants.ALL_FUNCTION_JS), "w"
-    ) as all_function_file:
+    with open(os.path.join(out_dir, constants.ALL_FUNCTION_JS),
+              "w") as all_function_file:
         all_function_file.write("var all_functions_table_data = ")
         json.dump(all_functions_json_html, all_function_file)
 
     # Dump table data to relevant javascript file.
-    with open(os.path.join(out_dir, constants.FUZZER_TABLE_JS), "w") as js_file_fd:
+    with open(os.path.join(out_dir, constants.FUZZER_TABLE_JS),
+              "w") as js_file_fd:
         js_file_fd.write("var fuzzer_table_data = ")
         json.dump(fuzzer_table_data, js_file_fd)
 
     # Copy all of the styling into the directory.
     styling.copy_style_files(out_dir)
-    logger.info(
-        "Finished dumping report artifacts in %.2fs", time.monotonic() - start_time
-    )
+    logger.info("Finished dumping report artifacts in %.2fs",
+                time.monotonic() - start_time)
 
 
 def create_section_fuzzers_overview(
-    table_of_contents, tables, introspection_proj: analysis.IntrospectionProject
-) -> str:
+        table_of_contents, tables,
+        introspection_proj: analysis.IntrospectionProject) -> str:
     """Section with table with overview of all fuzzers."""
     logger.info(" - Creating table with overview of all fuzzers")
     html_report_core = '<div class="report-box">'
     html_report_core += html_helpers.html_add_header_with_link(
-        "Fuzzers overview", html_helpers.HTML_HEADING.H1, table_of_contents
-    )
+        "Fuzzers overview", html_helpers.HTML_HEADING.H1, table_of_contents)
     html_report_core += '<div class="collapsible">'
     tables.append(f"myTable{len(tables)}")
     html_report_core += create_overview_table(tables, introspection_proj)
@@ -1523,9 +1488,8 @@ def create_section_fuzzers_overview(
     return html_report_core
 
 
-def create_section_project_overview(
-    table_of_contents, proj_profile, conclusions, report_name
-):
+def create_section_project_overview(table_of_contents, proj_profile,
+                                    conclusions, report_name):
     html_overview = '<div class="report-box">'
     html_overview += html_helpers.html_get_report_creation_tag()
     html_overview += html_helpers.html_add_header_with_link(
@@ -1540,8 +1504,8 @@ def create_section_project_overview(
     # Section with high level suggestions
     #############################################
     html_report_top = html_helpers.html_add_header_with_link(
-        "High level conclusions", html_helpers.HTML_HEADING.H2, table_of_contents
-    )
+        "High level conclusions", html_helpers.HTML_HEADING.H2,
+        table_of_contents)
 
     #############################################
     # Reachability overview
@@ -1574,9 +1538,9 @@ def create_section_fuzzer_detailed_section(
     logger.info(" - Creating section with details about each fuzzer")
     html_report_parts: List[str] = [
         '<div class="report-box">',
-        html_helpers.html_add_header_with_link(
-            "Fuzzer details", html_helpers.HTML_HEADING.H1, table_of_contents
-        ),
+        html_helpers.html_add_header_with_link("Fuzzer details",
+                                               html_helpers.HTML_HEADING.H1,
+                                               table_of_contents),
         '<div class="collapsible">',
     ]
     for profile_idx, harness_profile in enumerate(introspection_proj.profiles):
@@ -1592,37 +1556,35 @@ def create_section_fuzzer_detailed_section(
                 fuzzer_table_data,
                 dump_files,
                 out_dir,
-            )
-        )
+            ))
     html_report_parts.append("</div>")  # .collapsible
     html_report_parts.append("</div>")  # report box
     return "".join(html_report_parts)
 
 
-def create_section_all_functions(
-    table_of_contents, tables, proj_profile, coverage_url, basefolder, out_dir
-):
+def create_section_all_functions(table_of_contents, tables, proj_profile,
+                                 coverage_url, basefolder, out_dir):
     """Table with details about all functions in the target project."""
-    logger.info(" - Creating table with information about all functions in target")
+    logger.info(
+        " - Creating table with information about all functions in target")
     html_report_core = '<div class="report-box">'
     html_report_core += html_helpers.html_add_header_with_link(
-        "Project functions overview", html_helpers.HTML_HEADING.H1, table_of_contents
-    )
+        "Project functions overview", html_helpers.HTML_HEADING.H1,
+        table_of_contents)
     html_report_core += '<div class="collapsible">'
     html_report_core += html_constants.INFO_ALL_FUNCTION_OVERVIEW_TEXT
 
     table_id = "fuzzers_overview_table"
     tables.append(table_id)
     marker_out_dir = out_dir if out_dir else basefolder
-    (all_function_table, all_functions_json_html, all_functions_json_report) = (
-        create_all_function_table(
-            tables,
-            proj_profile,
-            coverage_url,
-            marker_out_dir,
-            table_id,
-        )
-    )
+    (all_function_table, all_functions_json_html,
+     all_functions_json_report) = (create_all_function_table(
+         tables,
+         proj_profile,
+         coverage_url,
+         marker_out_dir,
+         table_id,
+     ))
     html_report_core += all_function_table
     html_report_core += "</div>"  # .collapsible
     html_report_core += "</div>"  # report box
@@ -1684,10 +1646,9 @@ def _create_section_optional_analyses_impl(
     logger.info(" - Handling optional analyses")
     html_report_parts.append('<div class="report-box">')
     html_report_parts.append(
-        html_helpers.html_add_header_with_link(
-            "Analyses and suggestions", html_helpers.HTML_HEADING.H1, table_of_contents
-        )
-    )
+        html_helpers.html_add_header_with_link("Analyses and suggestions",
+                                               html_helpers.HTML_HEADING.H1,
+                                               table_of_contents))
     html_report_parts.append('<div class="collapsible">')
 
     # Combine and distinguish analyser requires output in html or both
@@ -1696,13 +1657,10 @@ def _create_section_optional_analyses_impl(
         x for x in output_json if x not in analyses_to_run
     ]
     native_plugin_scope = analysis.get_native_plugin_keys_for_analyses(
-        combined_analyses
-    )
-    dispatch_scope = (
-        analysis.native_plugin_request_scope(native_plugin_scope)
-        if len(native_plugin_scope) > 1
-        else contextlib.nullcontext()
-    )
+        combined_analyses)
+    dispatch_scope = (analysis.native_plugin_request_scope(native_plugin_scope)
+                      if len(native_plugin_scope) > 1 else
+                      contextlib.nullcontext())
 
     coordinator = merge_coordinator.MergeCoordinator(out_dir)
     parallel_worker_count = _parse_parallel_worker_count()
@@ -1723,10 +1681,8 @@ def _create_section_optional_analyses_impl(
             analysis_name,
             analyses_registry.PARALLEL_COMPATIBILITY_SERIAL_ONLY,
         )
-        if (
-            parallel_worker_count > 1
-            and compatibility == analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE
-        ):
+        if (parallel_worker_count > 1 and compatibility
+                == analyses_registry.PARALLEL_COMPATIBILITY_PARALLEL_SAFE):
             parallel_interfaces.append(analysis_interface)
         else:
             serial_interfaces.append(analysis_interface)
@@ -1741,7 +1697,10 @@ def _create_section_optional_analyses_impl(
             )
             logger.info(
                 " - Parallel analyses: %s",
-                [analysis_cls.get_name() for analysis_cls in parallel_interfaces],
+                [
+                    analysis_cls.get_name()
+                    for analysis_cls in parallel_interfaces
+                ],
             )
             parallel_results = _run_parallel_analyses(
                 parallel_interfaces,
@@ -1760,9 +1719,9 @@ def _create_section_optional_analyses_impl(
                 if status != "success":
                     logger.error("Parallel analysis failed: %s", envelope)
                     raise FuzzIntrospectorError(
-                        "Parallel analysis failed; see logs for details"
-                    )
-                coordinator.add_analysis_result(envelope["analysis_name"], envelope)
+                        "Parallel analysis failed; see logs for details")
+                coordinator.add_analysis_result(envelope["analysis_name"],
+                                                envelope)
         elif parallel_worker_count > 1:
             logger.info(" - No vetted analyses requested; running serial")
 
@@ -1783,17 +1742,16 @@ def _create_section_optional_analyses_impl(
                 if envelope.get("status") != "success":
                     logger.error("Serial analysis failed: %s", envelope)
                     raise FuzzIntrospectorError(
-                        "Serial analysis failed; see logs for details"
-                    )
+                        "Serial analysis failed; see logs for details")
                 coordinator.add_analysis_result(analysis_name, envelope)
             else:
                 analysis_instance = analysis.instantiate_analysis_interface(
-                    analysis_interface
-                )
+                    analysis_interface)
                 analysis_instance.dump_files = dump_files
 
                 # Set display_html flag for the analysis_instance
-                analysis_instance.set_display_html(analysis_name in analyses_to_run)
+                analysis_instance.set_display_html(
+                    analysis_name in analyses_to_run)
 
                 introspection_proj.optional_analyses.append(analysis_instance)
 
@@ -1829,16 +1787,14 @@ def _create_section_optional_analyses_impl(
                     merge_intents=intent_collector.get_intents(),
                     diagnostics=[],
                 )
-                coordinator.add_analysis_result(
-                    analysis_name, worker_result.to_envelope()
-                )
+                coordinator.add_analysis_result(analysis_name,
+                                                worker_result.to_envelope())
 
     success, merged = coordinator.merge_results()
     if not success:
         logger.error("Serial compatibility merge failed: %s", merged)
         raise FuzzIntrospectorError(
-            "Serial compatibility merge failed; see logs for details"
-        )
+            "Serial compatibility merge failed; see logs for details")
 
     for conclusion in merged.get("conclusions", []):
         conclusions.extend(_deserialize_conclusions([conclusion]))
@@ -1861,9 +1817,8 @@ def get_body_script_tags(all_functions_json, fuzzer_table_data) -> str:
     """Add relevant <script> tag at the end of the body."""
     if os.environ.get("FI_INLINE_JS", ""):
         html_script_tags = ""
-        styling_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "styling"
-        )
+        styling_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "styling")
 
         for jsfile in styling.MAIN_JS_FILES:
             with open(os.path.join(styling_dir, jsfile), "r") as f:
@@ -1874,14 +1829,12 @@ def get_body_script_tags(all_functions_json, fuzzer_table_data) -> str:
 
         html_script_tags += "<script>\n"
         html_script_tags += "var all_functions_table_data = %s" % (
-            json.dumps(all_functions_json)
-        )
+            json.dumps(all_functions_json))
         html_script_tags += "</script>\n"
 
         html_script_tags += "<script>\n"
         html_script_tags += "var fuzzer_table_data = %s" % (
-            json.dumps(fuzzer_table_data)
-        )
+            json.dumps(fuzzer_table_data))
         html_script_tags += "</script>\n"
 
     else:
@@ -1893,8 +1846,7 @@ def get_body_script_tags(all_functions_json, fuzzer_table_data) -> str:
         js_files.extend(styling.JAVASCRIPT_REMOTE_SCRIPTS)
         for js_file in js_files:
             html_script_tags += (
-                f'<script type="text/javascript" src="{js_file}"></script>'
-            )
+                f'<script type="text/javascript" src="{js_file}"></script>')
 
     return html_script_tags
 
@@ -1926,8 +1878,7 @@ def create_html_report(
     with contextlib.nullcontext():
         tables: List[str] = []
         table_of_contents: html_helpers.HtmlTableOfContents = (
-            html_helpers.HtmlTableOfContents()
-        )
+            html_helpers.HtmlTableOfContents())
         conclusions: List[html_helpers.HTMLConclusion] = []
 
         # Create html header, which will be used to assemble the doc at the
@@ -1942,22 +1893,22 @@ def create_html_report(
 
         # Create overview section
         stage_started = time.monotonic()
-        (html_overview, html_report_top, html_report_core) = (
-            create_section_project_overview(
-                table_of_contents,
-                introspection_proj.proj_profile,
-                conclusions,
-                report_name,
-            )
-        )
-        _log_stage_telemetry("project_overview", stage_started, stage_warn_seconds)
+        (html_overview, html_report_top,
+         html_report_core) = (create_section_project_overview(
+             table_of_contents,
+             introspection_proj.proj_profile,
+             conclusions,
+             report_name,
+         ))
+        _log_stage_telemetry("project_overview", stage_started,
+                             stage_warn_seconds)
 
         # Create section with overview of all fuzzers
         stage_started = time.monotonic()
         html_report_core += create_section_fuzzers_overview(
-            table_of_contents, tables, introspection_proj
-        )
-        _log_stage_telemetry("fuzzers_overview", stage_started, stage_warn_seconds)
+            table_of_contents, tables, introspection_proj)
+        _log_stage_telemetry("fuzzers_overview", stage_started,
+                             stage_warn_seconds)
 
         # Create section with table of all functions in project.
         stage_started = time.monotonic()
@@ -1975,7 +1926,8 @@ def create_html_report(
             out_dir,
         )
         html_report_core += html_all_function_section
-        _log_stage_telemetry("all_functions_section", stage_started, stage_warn_seconds)
+        _log_stage_telemetry("all_functions_section", stage_started,
+                             stage_warn_seconds)
 
         # Section with details of each fuzzer.
         stage_started = time.monotonic()
@@ -1989,9 +1941,8 @@ def create_html_report(
             dump_files,
             out_dir,
         )
-        _log_stage_telemetry(
-            "fuzzer_detailed_section", stage_started, stage_warn_seconds
-        )
+        _log_stage_telemetry("fuzzer_detailed_section", stage_started,
+                             stage_warn_seconds)
 
         # Generate sections for all optional analyses
         stage_started = time.monotonic()
@@ -2007,16 +1958,16 @@ def create_html_report(
             dump_files,
             out_dir,
         )
-        _log_stage_telemetry("optional_analyses", stage_started, stage_warn_seconds)
+        _log_stage_telemetry("optional_analyses", stage_started,
+                             stage_warn_seconds)
 
         # Create HTML showing the conclusions at the top of the report.
         html_report_top += html_helpers.create_conclusions_box(conclusions)
 
         # Close content-section.
         html_body_end = "</div>\n"
-        html_body_end += get_body_script_tags(
-            all_functions_json_html, fuzzer_table_data
-        )
+        html_body_end += get_body_script_tags(all_functions_json_html,
+                                              fuzzer_table_data)
 
         # Make table of contents. We can first do this now because it should be
         # done after assembling all entires in the table of contents.
@@ -2033,24 +1984,17 @@ def create_html_report(
         html_footer = create_html_footer(tables)
 
         # Assemble the final HTML report and write it to a file.
-        html_full_doc = (
-            html_header
-            + html_content_start
-            + html_toc_string
-            + html_body_start
-            + html_overview
-            + html_report_top
-            + html_report_core
-            + html_body_end
-            + html_content_end
-            + html_footer
-        )
+        html_full_doc = (html_header + html_content_start + html_toc_string +
+                         html_body_start + html_overview + html_report_top +
+                         html_report_core + html_body_end + html_content_end +
+                         html_footer)
 
         # Load debug informaiton because it will be correlated to the
         # introspector functions.
         stage_started = time.monotonic()
         introspection_proj.load_debug_report(out_dir, dump_files=dump_files)
-        _log_stage_telemetry("load_debug_report", stage_started, stage_warn_seconds)
+        _log_stage_telemetry("load_debug_report", stage_started,
+                             stage_warn_seconds)
 
         # Correlate debug info to introspector functions
         stage_started = time.monotonic()
@@ -2061,13 +2005,14 @@ def create_html_report(
             introspection_proj.debug_report,
             out_dir=out_dir,
         )
-        _log_stage_telemetry("correlate_debug_info", stage_started, stage_warn_seconds)
+        _log_stage_telemetry("correlate_debug_info", stage_started,
+                             stage_warn_seconds)
 
         stage_started = time.monotonic()
         all_source_files = analysis.extract_all_sources(
-            introspection_proj.proj_profile.target_lang, exclude_patterns
-        )
-        _log_stage_telemetry("extract_all_sources", stage_started, stage_warn_seconds)
+            introspection_proj.proj_profile.target_lang, exclude_patterns)
+        _log_stage_telemetry("extract_all_sources", stage_started,
+                             stage_warn_seconds)
 
         stage_started = time.monotonic()
         all_test_files = analysis.extract_test_information(
@@ -2077,19 +2022,16 @@ def create_html_report(
             exclude_patterns=exclude_patterns,
             source_files=all_source_files,
         )
-        _log_stage_telemetry(
-            "extract_test_information", stage_started, stage_warn_seconds
-        )
+        _log_stage_telemetry("extract_test_information", stage_started,
+                             stage_warn_seconds)
         if dump_files:
-            with open(
-                os.path.join(out_dir, constants.TEST_FILES_JSON), "w"
-            ) as test_file_fd:
+            with open(os.path.join(out_dir, constants.TEST_FILES_JSON),
+                      "w") as test_file_fd:
                 test_file_fd.write(json.dumps(list(all_test_files)))
 
         if dump_files:
-            with open(
-                os.path.join(out_dir, constants.ALL_SOURCE_FILES), "w"
-            ) as source_fd:
+            with open(os.path.join(out_dir, constants.ALL_SOURCE_FILES),
+                      "w") as source_fd:
                 source_fd.write(json.dumps(list(all_source_files)))
 
         # Write various stats and all-functions data to summary.json
@@ -2097,15 +2039,15 @@ def create_html_report(
 
         # Write all functions to all-fuzz-introspector-functions.json
         if dump_files:
-            json_report.create_all_fi_functions_json(all_functions_json_report, out_dir)
+            json_report.create_all_fi_functions_json(all_functions_json_report,
+                                                     out_dir)
 
         # Write jvm constructor details to all-fuzz-introspector-jvm-constructor.json
-        if (
-            introspection_proj.proj_profile.target_lang == "jvm"
-            and all_functions_json_report
-        ):
+        if (introspection_proj.proj_profile.target_lang == "jvm"
+                and all_functions_json_report):
             jvm_constructor_json_report: List[Dict[str, Any]] = []
-            for fd in introspection_proj.proj_profile.all_constructors.values():
+            for fd in introspection_proj.proj_profile.all_constructors.values(
+            ):
                 json_copy: Dict[str, Any] = {}
                 json_copy["Func name"] = fd.function_name
                 json_copy["func_url"] = "N/A"
@@ -2115,22 +2057,22 @@ def create_html_report(
                 json_copy["ArgNames"] = fd.arg_names
                 json_copy["Function call depth"] = fd.function_depth
                 json_copy["Reached by Fuzzers"] = fd.reached_by_fuzzers
-                json_copy["Runtime reached by Fuzzers"] = fd.reached_by_fuzzers_runtime
+                json_copy[
+                    "Runtime reached by Fuzzers"] = fd.reached_by_fuzzers_runtime
                 json_copy["Combined reached by Fuzzers"] = (
-                    fd.reached_by_fuzzers_combined
-                )
+                    fd.reached_by_fuzzers_combined)
                 json_copy["collapsible_id"] = fd.function_name
                 json_copy["return_type"] = fd.return_type
                 json_copy["raw-function-name"] = fd.raw_function_name
                 json_copy["I Count"] = fd.i_count
                 json_copy["BB Count"] = fd.bb_count
                 json_copy["Cyclomatic complexity"] = fd.cyclomatic_complexity
-                json_copy["Undiscovered complexity"] = fd.new_unreached_complexity
+                json_copy[
+                    "Undiscovered complexity"] = fd.new_unreached_complexity
                 json_copy["Functions reached"] = len(fd.functions_reached)
                 json_copy["Reached by functions"] = len(fd.incoming_references)
                 json_copy["Accumulated cyclomatic complexity"] = (
-                    fd.total_cyclomatic_complexity
-                )
+                    fd.total_cyclomatic_complexity)
                 json_copy["callsites"] = fd.callsite
                 json_copy["source_line_begin"] = fd.function_linenumber
                 json_copy["source_line_end"] = fd.function_line_number_end
@@ -2146,39 +2088,35 @@ def create_html_report(
 
             if jvm_constructor_json_report and dump_files:
                 json_report.create_all_jvm_constructor_json(
-                    jvm_constructor_json_report, out_dir
-                )
+                    jvm_constructor_json_report, out_dir)
 
         if dump_files:
             stage_started = time.monotonic()
-            write_content_to_html_files(
-                html_full_doc, all_functions_json_html, fuzzer_table_data, out_dir
-            )
-            _log_stage_telemetry(
-                "write_report_files", stage_started, stage_warn_seconds
-            )
+            write_content_to_html_files(html_full_doc, all_functions_json_html,
+                                        fuzzer_table_data, out_dir)
+            _log_stage_telemetry("write_report_files", stage_started,
+                                 stage_warn_seconds)
 
             stage_started = time.monotonic()
             introspection_proj.dump_debug_report(out_dir)
-            _log_stage_telemetry("dump_debug_report", stage_started, stage_warn_seconds)
+            _log_stage_telemetry("dump_debug_report", stage_started,
+                                 stage_warn_seconds)
 
             # Double check source files have been copied
-            logger.info(
-                "Verifying copied source files (%d files)", len(all_source_files)
-            )
+            logger.info("Verifying copied source files (%d files)",
+                        len(all_source_files))
             stage_started = time.monotonic()
             for idx, elem in enumerate(all_source_files, 1):
                 if idx % 5000 == 0:
-                    logger.info(
-                        "Verified %d/%d source files", idx, len(all_source_files)
-                    )
-                dst = os.path.join(out_dir, constants.SAVED_SOURCE_FOLDER + "/" + elem)
+                    logger.info("Verified %d/%d source files", idx,
+                                len(all_source_files))
+                dst = os.path.join(out_dir,
+                                   constants.SAVED_SOURCE_FOLDER + "/" + elem)
                 if not os.path.isfile(dst):
                     os.makedirs(os.path.dirname(dst), exist_ok=True)
                     shutil.copy(elem, dst)
-            _log_stage_telemetry(
-                "verify_copied_source_files", stage_started, stage_warn_seconds
-            )
+            _log_stage_telemetry("verify_copied_source_files", stage_started,
+                                 stage_warn_seconds)
 
         # Determine the source files required for the java project
         source_file_list = []
@@ -2187,9 +2125,8 @@ def create_html_report(
                 # Extract full class name from jvm method name
                 # Sample: [Full.class.name].methodName(params)
                 func_item["Func name"].split("].", 1)[0][1:]
-                for func_item in (
-                    all_functions_json_report + jvm_constructor_json_report
-                )
+                for func_item in (all_functions_json_report +
+                                  jvm_constructor_json_report)
             ]
 
             # Also add test sources
@@ -2197,6 +2134,7 @@ def create_html_report(
             logger.debug(source_file_list)
 
         # Copy source files (Only for Java/Python projects)
-        utils.copy_source_files(source_file_list, introspection_proj.language, out_dir)
+        utils.copy_source_files(source_file_list, introspection_proj.language,
+                                out_dir)
         _log_stage_telemetry("create_html_report:done")
         stage_markers.emit(out_dir, "html_report", "end")
