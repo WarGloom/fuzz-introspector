@@ -19,6 +19,7 @@ This module provides functions to parse and extract debug information
 from various sources, including DWARF debug info and other debug formats.
 """
 
+import collections
 import hashlib
 import json
 import logging
@@ -41,15 +42,9 @@ from fuzz_introspector import backend_loaders
 
 logger = logging.getLogger(name=__name__)
 _T = TypeVar("_T")
-DebugPayload = tuple[
-    str,
-    dict[str, dict[str, str]],
-    dict[str, dict[str, Any]],
-    dict[str, dict[str, Any]],
-    dict[str, dict[str, Any]],
-    dict[str, str],
-    str | None,
-]
+DebugPayload = tuple[str, dict[str, dict[str, str]], dict[str, dict[str, Any]],
+                     dict[str, dict[str, Any]], dict[str, dict[str, Any]],
+                     dict[str, str], str | None, ]
 CORRELATOR_SHADOW_SAMPLE_SIZE_DEFAULT = 256
 _BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
 _BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
@@ -1471,12 +1466,13 @@ def create_friendly_debug_types(debug_type_dictionary,
     if not dump_files:
         return
 
-    member_entries_by_scope: dict[int, list[dict[str, Any]]] = {}
+    member_entries_by_scope: dict[int, list[dict[
+        str, Any]]] = collections.defaultdict(list)
     for elem_addr, elem_val in debug_type_dictionary.items():
         if elem_val["tag"] != "DW_TAG_member":
             continue
         scope_addr = int(elem_val["scope"])
-        member_entries_by_scope.setdefault(scope_addr, []).append({
+        member_entries_by_scope[scope_addr].append({
             "addr":
             elem_addr,
             "elem_name":
@@ -2213,8 +2209,7 @@ def correlate_debugged_function_to_debug_types(
                         _correlate_function_slice_multiproc,
                         chunk,
                         debug_type_dictionary,
-                    ):
-                    idx
+                    ): idx
                     for idx, chunk in enumerate(indexed_chunks)
                 }
                 for future in as_completed(future_to_idx):

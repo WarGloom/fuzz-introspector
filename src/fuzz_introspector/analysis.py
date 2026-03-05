@@ -15,6 +15,7 @@
 
 import abc
 import bisect
+import collections
 import concurrent.futures
 import contextlib
 import json
@@ -1544,13 +1545,13 @@ def _build_overlay_native_payload(
             "type":
             profile.coverage.get_type(),
             "covmap": {
-                func_name: [[line_no, hit_count]
-                            for line_no, hit_count in hits]
+                func_name:
+                [[line_no, hit_count] for line_no, hit_count in hits]
                 for func_name, hits in sorted(profile.coverage.covmap.items())
             },
             "file_map": {
-                file_name: [[line_no, hit_count]
-                            for line_no, hit_count in hits]
+                file_name:
+                [[line_no, hit_count] for line_no, hit_count in hits]
                 for file_name, hits in sorted(
                     profile.coverage.file_map.items())
             },
@@ -2547,9 +2548,9 @@ def _safe_int(value, default=None):
 
 def _build_debug_function_indexes(debug_all_functions,
                                   header_index_by_name=None):
-    debug_dict_by_name = {}
-    debug_dict_by_filename = {}
-    debug_lines_by_filename = {}
+    debug_dict_by_name = collections.defaultdict(list)
+    debug_dict_by_filename = collections.defaultdict(list)
+    debug_lines_by_filename = collections.defaultdict(list)
     if header_index_by_name is None:
         header_index_by_name = {}
 
@@ -2564,23 +2565,26 @@ def _build_debug_function_indexes(debug_all_functions,
         parsed_line_number = _safe_int(source_dict.get("source_line", "-1"),
                                        default=None)
 
-        debug_dict_by_name.setdefault(debug_function.get("name", ""),
-                                      []).append(debug_function)
-        debug_dict_by_filename.setdefault(normalized_source_file,
-                                          []).append(debug_function)
+        debug_dict_by_name[debug_function.get("name",
+                                              "")].append(debug_function)
+        debug_dict_by_filename[normalized_source_file].append(debug_function)
         if parsed_line_number is None:
             continue
-        debug_lines_by_filename.setdefault(normalized_source_file, []).append(
+        debug_lines_by_filename[normalized_source_file].append(
             (parsed_line_number, debug_function))
 
+    # Convert debug_lines_by_filename elements to desired dictionary structure
+    # while converting it back to a standard dictionary to match the previous type
+    final_debug_lines_by_filename = {}
     for source_file, line_debug_pairs in debug_lines_by_filename.items():
         line_debug_pairs.sort(key=lambda item: item[0])
-        debug_lines_by_filename[source_file] = {
+        final_debug_lines_by_filename[source_file] = {
             "lines": [line for line, _ in line_debug_pairs],
             "functions": [func for _, func in line_debug_pairs],
         }
 
-    return debug_dict_by_name, debug_dict_by_filename, debug_lines_by_filename
+    return dict(debug_dict_by_name), dict(
+        debug_dict_by_filename), final_debug_lines_by_filename
 
 
 def correlate_introspector_func_to_debug_information(

@@ -16,6 +16,7 @@ reached and with low coverage."""
 import os
 import json
 import logging
+import collections
 
 from typing import (Any, List, Dict, Optional)
 
@@ -230,9 +231,12 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
         if not native_rows:
             return None
 
-        function_map: Dict[str, List[function_profile.FunctionProfile]] = {}
+        function_map: Dict[
+            str,
+            List[function_profile.FunctionProfile]] = collections.defaultdict(
+                list)
         for fd in all_functions:
-            function_map.setdefault(fd.function_name, []).append(fd)
+            function_map[fd.function_name].append(fd)
 
         native_functions: List[function_profile.FunctionProfile] = []
         for row in native_rows:
