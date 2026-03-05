@@ -21,6 +21,7 @@ import pytest
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../")
 
+from fuzz_introspector import html_helpers  # noqa: E402
 from fuzz_introspector import html_report  # noqa: E402
 
 
@@ -177,7 +178,7 @@ def test_create_all_function_table_rust_backend_falls_back_to_python(
             tables=["t0"],
             proj_profile=proj_profile,
             coverage_url="",
-            basefolder="",
+            out_dir="",
             table_id="table_id",
         )
 
@@ -189,8 +190,14 @@ def test_create_all_function_table_rust_backend_falls_back_to_python(
 def test_create_all_function_table_rust_backend_strict_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    emitted_markers = []
+
+    def _record_emit(out_dir: str, stage: str, event: str, **meta) -> None:
+        emitted_markers.append((out_dir, stage, event, meta))
+
     monkeypatch.setenv("FI_ALL_FUNCTIONS_ROWS_BACKEND", "rust")
     monkeypatch.setenv("FI_ALL_FUNCTIONS_ROWS_STRICT", "1")
+    monkeypatch.setattr(html_report.stage_markers, "emit", _record_emit)
     monkeypatch.setattr(
         html_report, "_get_cached_native_function_table_order", lambda _profile: None
     )
@@ -201,9 +208,13 @@ def test_create_all_function_table_rust_backend_strict_raises(
             tables=["t0"],
             proj_profile=proj_profile,
             coverage_url="",
-            basefolder="",
+            out_dir="",
             table_id="table_id",
         )
+
+    assert [event[2] for event in emitted_markers] == ["start", "end"]
+    assert emitted_markers[1][3]["status"] == "error"
+    assert emitted_markers[1][3]["error_type"] == "FuzzIntrospectorError"
 
 
 def test_create_all_function_table_emits_materialization_stage_markers(
@@ -224,7 +235,7 @@ def test_create_all_function_table_emits_materialization_stage_markers(
         tables=["t0"],
         proj_profile=proj_profile,
         coverage_url="",
-        basefolder="/tmp/materialization-markers",
+        out_dir="/tmp/materialization-markers",
         table_id="table_id",
     )
 
@@ -238,6 +249,8 @@ def test_create_all_function_table_emits_materialization_stage_markers(
     assert emitted_markers[1][2] == "end"
     assert emitted_markers[1][3]["configured_backend"] == "python"
     assert emitted_markers[1][3]["rows"] == 1
+    assert emitted_markers[1][3]["status"] == "success"
+    assert emitted_markers[1][3]["error_type"] == ""
 
 
 def test_create_all_function_table_stage_markers_reflect_rust_fallback(
@@ -259,7 +272,7 @@ def test_create_all_function_table_stage_markers_reflect_rust_fallback(
         tables=["t0"],
         proj_profile=proj_profile,
         coverage_url="",
-        basefolder="/tmp/materialization-markers-rust-fallback",
+        out_dir="/tmp/materialization-markers-rust-fallback",
         table_id="table_id",
     )
 
@@ -269,6 +282,72 @@ def test_create_all_function_table_stage_markers_reflect_rust_fallback(
     assert emitted_markers[1][2] == "end"
     assert emitted_markers[1][3]["configured_backend"] == "rust"
     assert emitted_markers[1][3]["backend"] == "python"
+    assert emitted_markers[1][3]["status"] == "success"
+
+
+def test_create_all_function_table_emits_end_marker_on_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted_markers = []
+
+    def _record_emit(out_dir: str, stage: str, event: str, **meta) -> None:
+        emitted_markers.append((out_dir, stage, event, meta))
+
+    def _raise_runtime_error(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(html_report.stage_markers, "emit", _record_emit)
+    monkeypatch.setattr(
+        html_report, "_get_cached_native_function_table_order", lambda _profile: None
+    )
+    proj_profile = _make_fake_project_profile()
+    proj_profile.resolve_coverage_report_link = _raise_runtime_error
+
+    with pytest.raises(RuntimeError, match="boom"):
+        html_report.create_all_function_table(
+            tables=["t0"],
+            proj_profile=proj_profile,
+            coverage_url="",
+            out_dir="/tmp/materialization-markers-error",
+            table_id="table_id",
+        )
+
+    assert [event[2] for event in emitted_markers] == ["start", "end"]
+    assert emitted_markers[1][3]["status"] == "error"
+    assert emitted_markers[1][3]["error_type"] == "RuntimeError"
+
+
+def test_create_section_all_functions_forwards_out_dir_to_table_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_all_function_table_args = {}
+
+    def _fake_create_all_function_table(
+        tables,
+        proj_profile,
+        coverage_url,
+        out_dir,
+        table_id,
+    ):
+        create_all_function_table_args["out_dir"] = out_dir
+        return "table", [], []
+
+    monkeypatch.setattr(
+        html_report,
+        "create_all_function_table",
+        _fake_create_all_function_table,
+    )
+
+    html_report.create_section_all_functions(
+        table_of_contents=html_helpers.HtmlTableOfContents(),
+        tables=[],
+        proj_profile=_make_fake_project_profile(),
+        coverage_url="",
+        basefolder="/tmp/base-folder",
+        out_dir="/tmp/report-out-dir",
+    )
+
+    assert create_all_function_table_args["out_dir"] == "/tmp/report-out-dir"
 
 
 def test_create_all_function_table_coverage_semantics_preserved() -> None:
@@ -287,7 +366,7 @@ def test_create_all_function_table_coverage_semantics_preserved() -> None:
         tables=["t0"],
         proj_profile=proj_profile,
         coverage_url="",
-        basefolder="",
+        out_dir="",
         table_id="table_id",
     )
 
@@ -320,7 +399,7 @@ def test_create_all_function_table_uses_single_hit_summary_lookup_per_function()
         tables=["t0"],
         proj_profile=proj_profile,
         coverage_url="",
-        basefolder="",
+        out_dir="",
         table_id="table_id",
     )
 

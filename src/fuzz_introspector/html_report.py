@@ -691,7 +691,7 @@ def create_all_function_table(
     tables: List[str],
     proj_profile: project_profile.MergedProjectProfile,
     coverage_url: str,
-    basefolder: str,
+    out_dir: str,
     table_id: Optional[str] = None,
 ) -> Tuple[str, List[typing.Dict[str, Any]], List[typing.Dict[str, Any]]]:
     """Table for all functions in the project. Contains many details about each
@@ -734,18 +734,21 @@ def create_all_function_table(
     backend, shadow, strict = _get_all_functions_rows_materialization_config()
     configured_backend = backend
     effective_backend = backend
+    strict_backend_error = ""
     if configured_backend == "rust":
         if strict:
-            raise FuzzIntrospectorError(
+            strict_backend_error = (
                 f"{ALL_FUNCTIONS_ROWS_STRICT_ENV}=1 requires an available "
                 "rust all-functions materialization backend"
             )
-        logger.info(
-            "%s=rust selected, but native row materialization is not "
-            "implemented yet; falling back to python",
-            ALL_FUNCTIONS_ROWS_BACKEND_ENV,
-        )
-        effective_backend = "python"
+            effective_backend = "unavailable"
+        else:
+            logger.info(
+                "%s=rust selected, but native row materialization is not "
+                "implemented yet; falling back to python",
+                ALL_FUNCTIONS_ROWS_BACKEND_ENV,
+            )
+            effective_backend = "python"
     elif shadow:
         logger.debug(
             "%s enabled; python remains authoritative until native path is wired",
@@ -753,7 +756,7 @@ def create_all_function_table(
         )
 
     stage_markers.emit(
-        basefolder,
+        out_dir,
         "all_functions_materialization",
         "start",
         backend=effective_backend,
@@ -761,155 +764,170 @@ def create_all_function_table(
         shadow=shadow,
         strict=strict,
     )
+    status = "success"
+    error_type = ""
+    try:
+        if strict_backend_error:
+            raise FuzzIntrospectorError(strict_backend_error)
 
-    for fd_k, fd in func_items:
-        if proj_profile.target_lang == "rust":
-            demangled_func_name = utils.demangle_rust_func(fd.function_name)
-        else:
-            demangled_func_name = utils.demangle_cpp_func(fd.function_name)
+        for fd_k, fd in func_items:
+            if proj_profile.target_lang == "rust":
+                demangled_func_name = utils.demangle_rust_func(fd.function_name)
+            else:
+                demangled_func_name = utils.demangle_cpp_func(fd.function_name)
 
-        func_total_lines, hit_lines = proj_profile.runtime_coverage.get_hit_summary(
-            fd.function_name
-        )
-        if hit_lines is None or func_total_lines is None:
-            hit_percentage = 0.0
-        else:
-            try:
-                hit_percentage = (hit_lines / func_total_lines) * 100.0
-            except (ZeroDivisionError, TypeError):
+            func_total_lines, hit_lines = proj_profile.runtime_coverage.get_hit_summary(
+                fd.function_name
+            )
+            if hit_lines is None or func_total_lines is None:
                 hit_percentage = 0.0
+            else:
+                try:
+                    hit_percentage = (hit_lines / func_total_lines) * 100.0
+                except (ZeroDivisionError, TypeError):
+                    hit_percentage = 0.0
 
-        func_cov_url = proj_profile.resolve_coverage_report_link(
-            coverage_url,
-            fd.function_source_file,
-            fd.function_linenumber,
-            fd.function_name,
+            func_cov_url = proj_profile.resolve_coverage_report_link(
+                coverage_url,
+                fd.function_source_file,
+                fd.function_linenumber,
+                fd.function_name,
+            )
+
+            if hit_lines is not None and hit_lines > 0:
+                func_hit_at_runtime_row = "yes"
+            else:
+                func_hit_at_runtime_row = "no"
+
+            func_name_row = html_helpers.wrap_link(
+                func_cov_url, html_helpers.create_coded_text(demangled_func_name)
+            )
+
+            collapsible_id = demangled_func_name + random_suffix
+            if fd.hitcount > 0:
+                reached_by_fuzzers_row = html_helpers.create_collapsible_element(
+                    str(fd.hitcount), str(fd.reached_by_fuzzers), collapsible_id
+                )
+            else:
+                reached_by_fuzzers_row = "0"
+
+            collapsible_id = demangled_func_name + random_suffix
+            if fd.hitcount_runtime > 0:
+                reached_by_fuzzers_runtime_row = (
+                    html_helpers.create_collapsible_element(
+                        str(fd.hitcount_runtime),
+                        str(fd.reached_by_fuzzers_runtime),
+                        collapsible_id + "10",
+                    )
+                )
+            else:
+                reached_by_fuzzers_runtime_row = "0"
+
+            if fd.hitcount_combined > 0:
+                reached_by_fuzzers_combined_row = (
+                    html_helpers.create_collapsible_element(
+                        str(fd.hitcount_combined),
+                        str(fd.reached_by_fuzzers_combined),
+                        collapsible_id + "21",
+                    )
+                )
+            else:
+                reached_by_fuzzers_combined_row = "0"
+
+            if fd.arg_count > 0:
+                args_row = html_helpers.create_collapsible_element(
+                    str(fd.arg_count), str(fd.arg_types), collapsible_id + "2"
+                )
+            else:
+                args_row = "0"
+
+            row_element = {
+                "Func name": func_name_row,
+                "func_url": func_cov_url,
+                "Functions filename": fd.function_source_file,
+                "Args": args_row,
+                "Function call depth": fd.function_depth,
+                "Reached by Fuzzers": reached_by_fuzzers_row,
+                "Runtime reached by Fuzzers": reached_by_fuzzers_runtime_row,
+                "Combined reached by Fuzzers": reached_by_fuzzers_combined_row,
+                "collapsible_id": collapsible_id,
+                "Fuzzers runtime hit": func_hit_at_runtime_row,
+                "Func lines hit %": "%.5s" % (str(hit_percentage)) + "%",
+                "I Count": fd.i_count,
+                "BB Count": fd.bb_count,
+                "Cyclomatic complexity": fd.cyclomatic_complexity,
+                "Functions reached": len(fd.functions_reached),
+                "Reached by functions": len(fd.incoming_references),
+                "Accumulated cyclomatic complexity": fd.total_cyclomatic_complexity,
+                "Undiscovered complexity": fd.new_unreached_complexity,
+                "asserts": fd.assert_list,
+            }
+
+            # Add function signature if exist
+            if fd.signature:
+                row_element["function_signature"] = fd.signature
+
+            table_rows_json_html.append(row_element)
+
+            # Add the entry to json list.
+            # Keep raw text values where report JSON expects non-HTML data.
+            report_row = {
+                "Func name": demangled_func_name,
+                "func_url": func_cov_url,
+                "Functions filename": fd.function_source_file,
+                "Args": fd.arg_types,
+                "Function call depth": fd.function_depth,
+                "Reached by Fuzzers": fd.reached_by_fuzzers,
+                "Runtime reached by Fuzzers": fd.reached_by_fuzzers_runtime,
+                "Combined reached by Fuzzers": fd.reached_by_fuzzers_combined,
+                "collapsible_id": collapsible_id,
+                "Fuzzers runtime hit": func_hit_at_runtime_row,
+                "Func lines hit %": "%.5s" % (str(hit_percentage)) + "%",
+                "I Count": fd.i_count,
+                "BB Count": fd.bb_count,
+                "Cyclomatic complexity": fd.cyclomatic_complexity,
+                "Functions reached": len(fd.functions_reached),
+                "Reached by functions": len(fd.incoming_references),
+                "Accumulated cyclomatic complexity": fd.total_cyclomatic_complexity,
+                "Undiscovered complexity": fd.new_unreached_complexity,
+                "asserts": fd.assert_list,
+            }
+
+            if fd.signature:
+                report_row["function_signature"] = fd.signature
+
+            report_row["ArgNames"] = fd.arg_names
+            report_row["return_type"] = fd.return_type
+            report_row["raw-function-name"] = fd.raw_function_name
+            report_row["callsites"] = fd.callsite
+            report_row["source_line_begin"] = fd.function_linenumber
+            report_row["source_line_end"] = fd.function_line_number_end
+            report_row["is_accessible"] = fd.is_accessible
+            report_row["is_jvm_library"] = fd.is_jvm_library
+            report_row["is_enum_class"] = fd.is_enum
+            report_row["is_static"] = fd.is_static
+            report_row["need_close"] = fd.need_close
+            report_row["exceptions"] = fd.exceptions
+            table_rows_json_report.append(report_row)
+
+        logger.info("Assembled a total of %d entries" % (len(table_rows_json_report)))
+        html_string += "</table>\n"
+        return html_string, table_rows_json_html, table_rows_json_report
+    except Exception as error:
+        status = "error"
+        error_type = type(error).__name__
+        raise
+    finally:
+        stage_markers.emit(
+            out_dir,
+            "all_functions_materialization",
+            "end",
+            backend=effective_backend,
+            configured_backend=configured_backend,
+            rows=len(table_rows_json_report),
+            status=status,
+            error_type=error_type,
         )
-
-        if hit_lines is not None and hit_lines > 0:
-            func_hit_at_runtime_row = "yes"
-        else:
-            func_hit_at_runtime_row = "no"
-
-        func_name_row = html_helpers.wrap_link(
-            func_cov_url, html_helpers.create_coded_text(demangled_func_name)
-        )
-
-        collapsible_id = demangled_func_name + random_suffix
-        if fd.hitcount > 0:
-            reached_by_fuzzers_row = html_helpers.create_collapsible_element(
-                str(fd.hitcount), str(fd.reached_by_fuzzers), collapsible_id
-            )
-        else:
-            reached_by_fuzzers_row = "0"
-
-        collapsible_id = demangled_func_name + random_suffix
-        if fd.hitcount_runtime > 0:
-            reached_by_fuzzers_runtime_row = html_helpers.create_collapsible_element(
-                str(fd.hitcount_runtime),
-                str(fd.reached_by_fuzzers_runtime),
-                collapsible_id + "10",
-            )
-        else:
-            reached_by_fuzzers_runtime_row = "0"
-
-        if fd.hitcount_combined > 0:
-            reached_by_fuzzers_combined_row = html_helpers.create_collapsible_element(
-                str(fd.hitcount_combined),
-                str(fd.reached_by_fuzzers_combined),
-                collapsible_id + "21",
-            )
-        else:
-            reached_by_fuzzers_combined_row = "0"
-
-        if fd.arg_count > 0:
-            args_row = html_helpers.create_collapsible_element(
-                str(fd.arg_count), str(fd.arg_types), collapsible_id + "2"
-            )
-        else:
-            args_row = "0"
-
-        row_element = {
-            "Func name": func_name_row,
-            "func_url": func_cov_url,
-            "Functions filename": fd.function_source_file,
-            "Args": args_row,
-            "Function call depth": fd.function_depth,
-            "Reached by Fuzzers": reached_by_fuzzers_row,
-            "Runtime reached by Fuzzers": reached_by_fuzzers_runtime_row,
-            "Combined reached by Fuzzers": reached_by_fuzzers_combined_row,
-            "collapsible_id": collapsible_id,
-            "Fuzzers runtime hit": func_hit_at_runtime_row,
-            "Func lines hit %": "%.5s" % (str(hit_percentage)) + "%",
-            "I Count": fd.i_count,
-            "BB Count": fd.bb_count,
-            "Cyclomatic complexity": fd.cyclomatic_complexity,
-            "Functions reached": len(fd.functions_reached),
-            "Reached by functions": len(fd.incoming_references),
-            "Accumulated cyclomatic complexity": fd.total_cyclomatic_complexity,
-            "Undiscovered complexity": fd.new_unreached_complexity,
-            "asserts": fd.assert_list,
-        }
-
-        # Add function signature if exist
-        if fd.signature:
-            row_element["function_signature"] = fd.signature
-
-        table_rows_json_html.append(row_element)
-
-        # Add the entry to json list.
-        # Keep raw text values where report JSON expects non-HTML data.
-        report_row = {
-            "Func name": demangled_func_name,
-            "func_url": func_cov_url,
-            "Functions filename": fd.function_source_file,
-            "Args": fd.arg_types,
-            "Function call depth": fd.function_depth,
-            "Reached by Fuzzers": fd.reached_by_fuzzers,
-            "Runtime reached by Fuzzers": fd.reached_by_fuzzers_runtime,
-            "Combined reached by Fuzzers": fd.reached_by_fuzzers_combined,
-            "collapsible_id": collapsible_id,
-            "Fuzzers runtime hit": func_hit_at_runtime_row,
-            "Func lines hit %": "%.5s" % (str(hit_percentage)) + "%",
-            "I Count": fd.i_count,
-            "BB Count": fd.bb_count,
-            "Cyclomatic complexity": fd.cyclomatic_complexity,
-            "Functions reached": len(fd.functions_reached),
-            "Reached by functions": len(fd.incoming_references),
-            "Accumulated cyclomatic complexity": fd.total_cyclomatic_complexity,
-            "Undiscovered complexity": fd.new_unreached_complexity,
-            "asserts": fd.assert_list,
-        }
-
-        if fd.signature:
-            report_row["function_signature"] = fd.signature
-
-        report_row["ArgNames"] = fd.arg_names
-        report_row["return_type"] = fd.return_type
-        report_row["raw-function-name"] = fd.raw_function_name
-        report_row["callsites"] = fd.callsite
-        report_row["source_line_begin"] = fd.function_linenumber
-        report_row["source_line_end"] = fd.function_line_number_end
-        report_row["is_accessible"] = fd.is_accessible
-        report_row["is_jvm_library"] = fd.is_jvm_library
-        report_row["is_enum_class"] = fd.is_enum
-        report_row["is_static"] = fd.is_static
-        report_row["need_close"] = fd.need_close
-        report_row["exceptions"] = fd.exceptions
-        table_rows_json_report.append(report_row)
-
-    stage_markers.emit(
-        basefolder,
-        "all_functions_materialization",
-        "end",
-        backend=effective_backend,
-        configured_backend=configured_backend,
-        rows=len(table_rows_json_report),
-    )
-
-    logger.info("Assembled a total of %d entries" % (len(table_rows_json_report)))
-    html_string += "</table>\n"
-    return html_string, table_rows_json_html, table_rows_json_report
 
 
 def create_boxed_top_summary_info(
@@ -1548,7 +1566,7 @@ def create_section_fuzzer_detailed_section(
 
 
 def create_section_all_functions(
-    table_of_contents, tables, proj_profile, coverage_url, basefolder
+    table_of_contents, tables, proj_profile, coverage_url, basefolder, out_dir
 ):
     """Table with details about all functions in the target project."""
     logger.info(" - Creating table with information about all functions in target")
@@ -1561,9 +1579,14 @@ def create_section_all_functions(
 
     table_id = "fuzzers_overview_table"
     tables.append(table_id)
+    marker_out_dir = out_dir if out_dir else basefolder
     (all_function_table, all_functions_json_html, all_functions_json_report) = (
         create_all_function_table(
-            tables, proj_profile, coverage_url, basefolder, table_id
+            tables,
+            proj_profile,
+            coverage_url,
+            marker_out_dir,
+            table_id,
         )
     )
     html_report_core += all_function_table
@@ -1915,6 +1938,7 @@ def create_html_report(
             introspection_proj.proj_profile,
             introspection_proj.proj_profile.coverage_url,
             introspection_proj.proj_profile.basefolder,
+            out_dir,
         )
         html_report_core += html_all_function_section
         _log_stage_telemetry("all_functions_section", stage_started, stage_warn_seconds)
@@ -2001,6 +2025,7 @@ def create_html_report(
             introspection_proj.debug_all_functions,
             introspection_proj.proj_profile.target_lang,
             introspection_proj.debug_report,
+            out_dir=out_dir,
         )
         _log_stage_telemetry("correlate_debug_info", stage_started, stage_warn_seconds)
 

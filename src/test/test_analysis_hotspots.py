@@ -15,10 +15,15 @@
 
 import os
 import sys
+import logging
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)) + "/../")
 
 from fuzz_introspector import analysis  # noqa: E402
+from fuzz_introspector import stage_markers  # noqa: E402
+from fuzz_introspector.exceptions import FuzzIntrospectorError  # noqa: E402
 
 
 def _make_debug_function(name, source_file, source_line):
@@ -35,19 +40,20 @@ def _make_debug_function(name, source_file, source_line):
     }
 
 
-def test_correlate_introspection_functions_prefers_exact_source_line(
-        monkeypatch):
+def test_correlate_introspection_functions_prefers_exact_source_line(monkeypatch):
     monkeypatch.setattr(
         analysis,
         "convert_debug_info_to_signature_v2",
         lambda debug_function, _: f"sig::{debug_function['name']}",
     )
 
-    llvm_functions = [{
-        "Func name": "target",
-        "Functions filename": "/src/project/target.cc",
-        "source_line_begin": "20",
-    }]
+    llvm_functions = [
+        {
+            "Func name": "target",
+            "Functions filename": "/src/project/target.cc",
+            "source_line_begin": "20",
+        }
+    ]
     debug_functions = [
         _make_debug_function("before", "/src/project/target.cc", "10"),
         _make_debug_function("exact", "/src/project/target.cc", "20"),
@@ -64,19 +70,20 @@ def test_correlate_introspection_functions_prefers_exact_source_line(
     assert llvm_functions[0]["debug_function_info"]["name"] == "exact"
 
 
-def test_correlate_introspection_functions_uses_closest_preceding_line(
-        monkeypatch):
+def test_correlate_introspection_functions_uses_closest_preceding_line(monkeypatch):
     monkeypatch.setattr(
         analysis,
         "convert_debug_info_to_signature_v2",
         lambda debug_function, _: f"sig::{debug_function['name']}",
     )
 
-    llvm_functions = [{
-        "Func name": "target",
-        "Functions filename": "/src/project/target.cc",
-        "source_line_begin": "25",
-    }]
+    llvm_functions = [
+        {
+            "Func name": "target",
+            "Functions filename": "/src/project/target.cc",
+            "source_line_begin": "25",
+        }
+    ]
     debug_functions = [
         _make_debug_function("before", "/src/project/target.cc", "10"),
         _make_debug_function("after", "/src/project/target.cc", "30"),
@@ -94,11 +101,13 @@ def test_correlate_introspection_functions_uses_closest_preceding_line(
 
 
 def test_correlate_introspection_functions_handles_invalid_source_line_begin():
-    llvm_functions = [{
-        "Func name": "target_without_exact_name_match",
-        "Functions filename": "/src/project/target.cc",
-        "source_line_begin": "invalid-line",
-    }]
+    llvm_functions = [
+        {
+            "Func name": "target_without_exact_name_match",
+            "Functions filename": "/src/project/target.cc",
+            "source_line_begin": "invalid-line",
+        }
+    ]
     debug_functions = [
         _make_debug_function("target", "/src/project/target.cc", "20"),
     ]
@@ -155,11 +164,13 @@ def test_correlate_introspection_functions_populates_possible_header_files(
     header_path = tmp_path / "target.hpp"
     header_path.write_text("int target(int x);\n", encoding="utf-8")
 
-    llvm_functions = [{
-        "Func name": "target",
-        "Functions filename": "/src/project/target.cc",
-        "source_line_begin": "20",
-    }]
+    llvm_functions = [
+        {
+            "Func name": "target",
+            "Functions filename": "/src/project/target.cc",
+            "source_line_begin": "20",
+        }
+    ]
     debug_functions = [
         _make_debug_function("target", "/src/project/target.cc", "20"),
     ]
@@ -169,22 +180,230 @@ def test_correlate_introspection_functions_populates_possible_header_files(
         debug_functions,
         "c-cpp",
         report_dict={
-            "all_files_in_project": [{
-                "source_file": str(header_path)
-            }],
+            "all_files_in_project": [{"source_file": str(header_path)}],
         },
     )
 
     possible_headers = llvm_functions[0]["debug_function_info"].get(
-        "possible-header-files", [])
+        "possible-header-files", []
+    )
     assert str(header_path) in possible_headers
 
     # Ensure report_dict remains JSON-serializable after correlation.
     import json  # local import to keep test scope tight
 
-    json.dumps({
-        "all_files_in_project": [{
-            "source_file": str(header_path)
-        }],
-        "dummy": "ok",
-    })
+    json.dumps(
+        {
+            "all_files_in_project": [{"source_file": str(header_path)}],
+            "dummy": "ok",
+        }
+    )
+
+
+def test_correlate_introspection_functions_possible_header_files_are_sorted(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        analysis,
+        "convert_debug_info_to_signature_v2",
+        lambda debug_function, _: f"sig::{debug_function['name']}",
+    )
+
+    z_header = tmp_path / "z_target.hpp"
+    a_header = tmp_path / "a_target.hpp"
+    z_header.write_text("int target(int x);\n", encoding="utf-8")
+    a_header.write_text("int target(int x);\n", encoding="utf-8")
+
+    llvm_functions = [
+        {
+            "Func name": "target",
+            "Functions filename": "/src/project/target.cc",
+            "source_line_begin": "20",
+        }
+    ]
+    debug_functions = [_make_debug_function("target", "/src/project/target.cc", "20")]
+
+    analysis.correlate_introspection_functions_to_debug_info(
+        llvm_functions,
+        debug_functions,
+        "c-cpp",
+        report_dict={
+            "all_files_in_project": [
+                {"source_file": str(z_header)},
+                {"source_file": str(a_header)},
+            ],
+        },
+    )
+
+    possible_headers = llvm_functions[0]["debug_function_info"]["possible-header-files"]
+    assert possible_headers == sorted(possible_headers)
+
+
+def test_correlate_introspection_functions_ignores_malformed_all_files_entries(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        analysis,
+        "convert_debug_info_to_signature_v2",
+        lambda debug_function, _: f"sig::{debug_function['name']}",
+    )
+
+    llvm_functions = [
+        {
+            "Func name": "target_without_exact_name_match",
+            "Functions filename": "/src/project/target.cc",
+            "source_line_begin": "invalid-line",
+        }
+    ]
+
+    analysis.correlate_introspection_functions_to_debug_info(
+        llvm_functions,
+        [],
+        "c-cpp",
+        report_dict={
+            "all_files_in_project": [
+                {"source_file": None},
+                {"source_file": 123},
+                {},
+                "not-a-dict",
+            ]
+        },
+    )
+
+    assert llvm_functions[0]["function_signature"] == "N/A"
+
+
+def test_if_debug_correlator_env_defaults(monkeypatch):
+    monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, raising=False)
+    monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_SHADOW_ENV, raising=False)
+    monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_STRICT_ENV, raising=False)
+
+    assert (
+        analysis._parse_if_debug_correlator_backend_env()
+        == analysis.backend_loaders.BACKEND_PYTHON
+    )
+    assert (
+        analysis._parse_bool_env(analysis.FI_IF_DEBUG_CORRELATOR_SHADOW_ENV, False)
+        is False
+    )
+    assert (
+        analysis._parse_bool_env(analysis.FI_IF_DEBUG_CORRELATOR_STRICT_ENV, False)
+        is False
+    )
+
+
+def test_if_debug_correlator_env_invalid_values_fall_back(
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, "nope")
+    monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_SHADOW_ENV, "nope")
+    monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_STRICT_ENV, "nope")
+
+    with caplog.at_level(logging.WARNING):
+        backend = analysis._parse_if_debug_correlator_backend_env()
+        shadow = analysis._parse_bool_env(
+            analysis.FI_IF_DEBUG_CORRELATOR_SHADOW_ENV, False
+        )
+        strict = analysis._parse_bool_env(
+            analysis.FI_IF_DEBUG_CORRELATOR_STRICT_ENV, False
+        )
+
+    assert backend == analysis.backend_loaders.BACKEND_PYTHON
+    assert shadow is False
+    assert strict is False
+    assert any(
+        analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV in record.message
+        for record in caplog.records
+    )
+
+
+def test_if_debug_correlator_rust_non_strict_falls_back_to_python(
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, "rust")
+    monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_STRICT_ENV, raising=False)
+
+    llvm_functions = [
+        {
+            "Func name": "target_without_exact_name_match",
+            "Functions filename": "/src/project/target.cc",
+            "source_line_begin": "invalid-line",
+        }
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        analysis.correlate_introspection_functions_to_debug_info(
+            llvm_functions,
+            [],
+            "c-cpp",
+            report_dict={"all_files_in_project": []},
+        )
+
+    assert llvm_functions[0]["function_signature"] == "N/A"
+    assert any(
+        "falling back to Python authoritative path" in record.message
+        for record in caplog.records
+    )
+
+
+def test_if_debug_correlator_shadow_mode_logs_metadata_only_noop(
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, raising=False)
+    monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_SHADOW_ENV, "1")
+
+    with caplog.at_level(logging.INFO):
+        analysis.correlate_introspection_functions_to_debug_info(
+            [],
+            [],
+            "c-cpp",
+            report_dict={"all_files_in_project": []},
+        )
+
+    assert any("metadata-only/no-op" in record.message for record in caplog.records)
+
+
+def test_if_debug_correlator_rust_strict_raises(monkeypatch):
+    monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, "rust")
+    monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_STRICT_ENV, "1")
+
+    with pytest.raises(FuzzIntrospectorError, match="not implemented for this stage"):
+        analysis.correlate_introspection_functions_to_debug_info(
+            [],
+            [],
+            "c-cpp",
+            report_dict={"all_files_in_project": []},
+        )
+
+
+def test_if_debug_correlator_stage_marker_metadata_has_configured_and_effective_backend(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, "rust")
+    monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_STRICT_ENV, raising=False)
+    monkeypatch.delenv("FI_STAGE_MARKERS", raising=False)
+
+    analysis.correlate_introspection_functions_to_debug_info(
+        [],
+        [],
+        "c-cpp",
+        report_dict={"all_files_in_project": []},
+        out_dir=str(tmp_path),
+    )
+
+    events = stage_markers.parse_stage_marker_file(str(tmp_path / "stage_markers.log"))
+    stage_events = [
+        event
+        for event in events
+        if event.stage == analysis._IF_DEBUG_SIGNATURE_CORRELATION_STAGE
+    ]
+    assert [event.event for event in stage_events] == ["start", "end"]
+    assert stage_events[0].metadata["configured_backend"] == "rust"
+    assert stage_events[0].metadata["effective_backend"] == "python"
+    assert stage_events[1].metadata["configured_backend"] == "rust"
+    assert stage_events[1].metadata["effective_backend"] == "python"
