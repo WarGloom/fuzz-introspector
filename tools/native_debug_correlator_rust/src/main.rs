@@ -342,19 +342,18 @@ fn parse_function_entry(record: &JsonValue, original_row_idx: usize) -> Option<F
 }
 
 fn build_type_index(records: &[JsonValue]) -> TypeIndex {
+    // Parse all records in parallel — order is preserved by rayon.
+    let parsed: Vec<Option<TypeEntry>> =
+        records.par_iter().map(|r| parse_type_entry(r)).collect();
+
+    // Dedup sequentially to preserve insertion-order addr_order.
     let mut index = TypeIndex::default();
-
-    for record in records {
-        let Some(type_entry) = parse_type_entry(record) else {
-            continue;
-        };
-
+    for type_entry in parsed.into_iter().flatten() {
         if !index.entries.contains_key(&type_entry.addr) {
             index.addr_order.push(type_entry.addr);
         }
         index.entries.insert(type_entry.addr, type_entry);
     }
-
     index
 }
 
@@ -496,33 +495,6 @@ fn is_enumeration(param_list: &[String]) -> bool {
         .any(|param| param.as_str() == "DW_TAG_enumeration_type")
 }
 
-fn build_struct_members_for_scope(
-    scope_addr: i128,
-    type_map: &HashMap<i128, TypeEntry>,
-    member_entries_by_scope: &HashMap<i128, Vec<(i128, String, i128)>>,
-    friendly_type_cache: &mut HashMap<i128, Vec<String>>,
-) -> Vec<JsonValue> {
-    let mut struct_members: Vec<JsonValue> = Vec::new();
-    if let Some(entries) = member_entries_by_scope.get(&scope_addr) {
-        for (addr, elem_name, base_type_addr) in entries {
-            let member_friendly_type = if let Some(cached) = friendly_type_cache.get(base_type_addr) {
-                cached.clone()
-            } else {
-                let generated = extract_func_sig_friendly_type_tags(*base_type_addr, type_map);
-                friendly_type_cache.insert(*base_type_addr, generated.clone());
-                generated
-            };
-
-            struct_members.push(json!({
-                "addr": addr,
-                "elem_name": elem_name,
-                "elem_friendly_type": convert_param_list_to_str_v2(&member_friendly_type),
-            }));
-        }
-    }
-    struct_members
-}
-
 fn write_all_friendly_debug_types(index: &TypeIndex, out_dir: &Path) -> Result<String, AppError> {
     fs::create_dir_all(out_dir).map_err(|err| {
         AppError::new(
@@ -532,6 +504,37 @@ fn write_all_friendly_debug_types(index: &TypeIndex, out_dir: &Path) -> Result<S
     })?;
 
     let output_path = out_dir.join("all-friendly-debug-types.json");
+
+    // Pre-pass: build member_entries_by_scope index (sequential, cheap).
+    let mut member_entries_by_scope: HashMap<i128, Vec<(i128, String, i128)>> = HashMap::new();
+    for type_entry in index.entries.values() {
+        if type_entry.tag != "DW_TAG_member" {
+            continue;
+        }
+        member_entries_by_scope
+            .entry(type_entry.scope)
+            .or_default()
+            .push((type_entry.addr, type_entry.name.clone(), type_entry.base_type_addr));
+    }
+
+    // Phase 1: compute friendly-type tag chains for every address in parallel.
+    // Result is an immutable HashMap reused by phase 2.
+    let friendly_types: HashMap<i128, Vec<String>> = index
+        .addr_order
+        .par_iter()
+        .map(|addr| {
+            let tags = extract_func_sig_friendly_type_tags(*addr, &index.entries);
+            (*addr, tags)
+        })
+        .collect();
+
+    // Phases 2+3 interleaved: process addr_order in chunks so at most
+    // WRITE_CHUNK_SIZE computed JsonValue entries are live in memory at once.
+    // Within each chunk, entries are built in parallel; the chunk Vec is dropped
+    // before the next chunk is computed, bounding peak memory to O(chunk_size)
+    // rather than O(all_types) as a single flat collect would require.
+    const WRITE_CHUNK_SIZE: usize = 8_000;
+
     let output_file = File::create(&output_path).map_err(|err| {
         AppError::new(
             "io_error",
@@ -540,106 +543,113 @@ fn write_all_friendly_debug_types(index: &TypeIndex, out_dir: &Path) -> Result<S
     })?;
     let mut writer = BufWriter::new(output_file);
 
-    let mut member_entries_by_scope: HashMap<i128, Vec<(i128, String, i128)>> = HashMap::new();
-    for type_entry in index.entries.values() {
-        if type_entry.tag != "DW_TAG_member" {
-            continue;
-        }
-
-        member_entries_by_scope
-            .entry(type_entry.scope)
-            .or_default()
-            .push((
-                type_entry.addr,
-                type_entry.name.clone(),
-                type_entry.base_type_addr,
-            ));
-    }
-
-    let mut friendly_type_cache: HashMap<i128, Vec<String>> = HashMap::new();
-    let mut struct_members_cache: HashMap<i128, Vec<JsonValue>> = HashMap::new();
-
-    writer
-        .write_all(b"{")
-        .map_err(|err| AppError::new("io_error", format!("failed writing output JSON header: {err}")))?;
+    writer.write_all(b"{").map_err(|err| {
+        AppError::new("io_error", format!("failed writing output JSON header: {err}"))
+    })?;
 
     let mut written_entries = 0usize;
-    for addr in &index.addr_order {
-        let Some(debug_entry) = index.entries.get(addr) else {
-            continue;
-        };
 
-        let friendly_type = if let Some(cached) = friendly_type_cache.get(addr) {
-            cached.clone()
-        } else {
-            let generated = extract_func_sig_friendly_type_tags(*addr, &index.entries);
-            friendly_type_cache.insert(*addr, generated.clone());
-            generated
-        };
+    for chunk in index.addr_order.chunks(WRITE_CHUNK_SIZE) {
+        // Parallel compute for this chunk only — Vec is dropped at end of iteration.
+        let computed: Vec<Option<(i128, JsonValue)>> = chunk
+            .par_iter()
+            .map(|addr| {
+                let debug_entry = index.entries.get(addr)?;
+                let friendly_type =
+                    friendly_types.get(addr).map(Vec::as_slice).unwrap_or(&[]);
+                let is_struct_type = is_struct(friendly_type);
 
-        let is_struct_type = is_struct(&friendly_type);
-        let structure_elems = if is_struct_type {
-            if let Some(cached) = struct_members_cache.get(addr) {
-                cached.clone()
-            } else {
-                let generated = build_struct_members_for_scope(
-                    *addr,
-                    &index.entries,
-                    &member_entries_by_scope,
-                    &mut friendly_type_cache,
-                );
-                struct_members_cache.insert(*addr, generated.clone());
-                generated
+                let structure_elems: Vec<JsonValue> = if is_struct_type {
+                    member_entries_by_scope
+                        .get(addr)
+                        .map(|members| {
+                            members
+                                .iter()
+                                .map(|(member_addr, elem_name, base_type_addr)| {
+                                    let elem_tags: Vec<String> = friendly_types
+                                        .get(base_type_addr)
+                                        .cloned()
+                                        .unwrap_or_else(|| {
+                                            extract_func_sig_friendly_type_tags(
+                                                *base_type_addr,
+                                                &index.entries,
+                                            )
+                                        });
+                                    json!({
+                                        "addr": member_addr,
+                                        "elem_name": elem_name,
+                                        "elem_friendly_type":
+                                            convert_param_list_to_str_v2(&elem_tags),
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+
+                let entry = json!({
+                    "raw_debug_info": debug_entry.raw_debug_info,
+                    "friendly-info": {
+                        "raw-types": friendly_type,
+                        "string_type": convert_param_list_to_str_v2(friendly_type),
+                        "is-struct": is_struct_type,
+                        "struct-elems": structure_elems,
+                        "is-enum": is_enumeration(friendly_type),
+                        "enum-elems": debug_entry.enum_elems,
+                    }
+                });
+
+                Some((*addr, entry))
+            })
+            .collect();
+
+        // Sequential write for this chunk.
+        for maybe_entry in computed {
+            let Some((addr, entry)) = maybe_entry else {
+                continue;
+            };
+            if written_entries > 0 {
+                writer.write_all(b",").map_err(|err| {
+                    AppError::new(
+                        "io_error",
+                        format!("failed writing output JSON separator: {err}"),
+                    )
+                })?;
             }
-        } else {
-            Vec::new()
-        };
-
-        let entry = json!({
-            "raw_debug_info": debug_entry.raw_debug_info,
-            "friendly-info": {
-                "raw-types": friendly_type,
-                "string_type": convert_param_list_to_str_v2(
-                    friendly_type_cache.get(addr).map(Vec::as_slice).unwrap_or(&[]),
-                ),
-                "is-struct": is_struct_type,
-                "struct-elems": structure_elems,
-                "is-enum": is_enumeration(friendly_type_cache.get(addr).map(Vec::as_slice).unwrap_or(&[])),
-                "enum-elems": debug_entry.enum_elems,
-            }
-        });
-
-        if written_entries > 0 {
-            writer
-                .write_all(b",")
-                .map_err(|err| AppError::new("io_error", format!("failed writing output JSON separator: {err}")))?;
+            serde_json::to_writer(&mut writer, &addr.to_string()).map_err(|err| {
+                AppError::new(
+                    "io_error",
+                    format!("failed serializing friendly type key for {addr}: {err}"),
+                )
+            })?;
+            writer.write_all(b":").map_err(|err| {
+                AppError::new(
+                    "io_error",
+                    format!("failed writing output JSON colon: {err}"),
+                )
+            })?;
+            serde_json::to_writer(&mut writer, &entry).map_err(|err| {
+                AppError::new(
+                    "io_error",
+                    format!("failed serializing friendly type entry for {addr}: {err}"),
+                )
+            })?;
+            written_entries += 1;
         }
-
-        serde_json::to_writer(&mut writer, &addr.to_string()).map_err(|err| {
-            AppError::new(
-                "io_error",
-                format!("failed serializing friendly type key for {addr}: {err}"),
-            )
-        })?;
-        writer
-            .write_all(b":")
-            .map_err(|err| AppError::new("io_error", format!("failed writing output JSON colon: {err}")))?;
-        serde_json::to_writer(&mut writer, &entry).map_err(|err| {
-            AppError::new(
-                "io_error",
-                format!("failed serializing friendly type entry for {addr}: {err}"),
-            )
-        })?;
-
-        written_entries += 1;
+        // `computed` Vec is dropped here — memory freed before next chunk.
     }
 
-    writer
-        .write_all(b"}")
-        .map_err(|err| AppError::new("io_error", format!("failed writing output JSON trailer: {err}")))?;
-    writer
-        .flush()
-        .map_err(|err| AppError::new("io_error", format!("failed flushing {}: {err}", output_path.display())))?;
+    writer.write_all(b"}").map_err(|err| {
+        AppError::new("io_error", format!("failed writing output JSON trailer: {err}"))
+    })?;
+    writer.flush().map_err(|err| {
+        AppError::new(
+            "io_error",
+            format!("failed flushing {}: {err}", output_path.display()),
+        )
+    })?;
 
     Ok(output_path.to_string_lossy().into_owned())
 }
@@ -661,59 +671,85 @@ fn correlate_and_write_shards(
 
     let mut result = CorrelationWriteResult::default();
 
+    // Phase 1: parallel type correlation (unchanged).
     let correlate_started = Instant::now();
-    let unique_records = correlate_chunk_parallel_by_index(functions, unique_row_indices, type_map);
+    let unique_records =
+        correlate_chunk_parallel_by_index(functions, unique_row_indices, type_map);
     result.correlate_ms += to_ms(correlate_started.elapsed());
 
-    for (shard_idx, chunk_indices) in row_to_unique_idx.chunks(shard_size).enumerate() {
-        if chunk_indices.is_empty() {
-            continue;
-        }
+    // Phase 2: write every shard in parallel — each shard is an independent file.
+    // rayon's par_chunks preserves chunk order, so correlated_shards is ordered.
+    let write_started = Instant::now();
 
-        let shard_path = output_dir.join(format!("correlated-debug-{:05}.ndjson", shard_idx));
-        let shard_file = File::create(&shard_path).map_err(|err| {
-            AppError::new(
-                "io_error",
-                format!("failed creating shard {}: {err}", shard_path.display()),
-            )
-        })?;
+    // Collect chunks with their index so we can reconstruct the absolute func_idx
+    // inside each parallel task without needing a shared counter.
+    let chunks: Vec<(usize, &[usize])> =
+        row_to_unique_idx.chunks(shard_size).enumerate().collect();
 
-        let write_started = Instant::now();
-        let mut writer = BufWriter::new(shard_file);
-        for (i, &unique_idx) in chunk_indices.iter().enumerate() {
-            let func_idx = shard_idx * shard_size + i;
-            let function = &functions[func_idx];
-            let cached_record = &unique_records[unique_idx];
-            let record = CorrelatedRecord {
-                row_idx: function.original_row_idx,
-                func_signature_elems: cached_record.func_signature_elems.clone(),
-                source: cached_record.source.clone(),
-            };
-            
-            serde_json::to_writer(&mut writer, &record).map_err(|err| {
+    let shard_results: Vec<Result<(String, usize), AppError>> = chunks
+        .par_iter()
+        .map(|(shard_idx, chunk_indices)| {
+            if chunk_indices.is_empty() {
+                return Ok(("".to_string(), 0usize));
+            }
+
+            let shard_path =
+                output_dir.join(format!("correlated-debug-{:05}.ndjson", shard_idx));
+            let shard_file = File::create(&shard_path).map_err(|err| {
                 AppError::new(
                     "io_error",
-                    format!("failed serializing shard record {}: {err}", shard_path.display()),
+                    format!("failed creating shard {}: {err}", shard_path.display()),
                 )
             })?;
-            writer.write_all(b"\n").map_err(|err| {
+            let mut writer = BufWriter::new(shard_file);
+            let mut written = 0usize;
+
+            for (i, &unique_idx) in chunk_indices.iter().enumerate() {
+                let func_idx = shard_idx * shard_size + i;
+                let function = &functions[func_idx];
+                let cached_record = &unique_records[unique_idx];
+                let record = CorrelatedRecord {
+                    row_idx: function.original_row_idx,
+                    func_signature_elems: cached_record.func_signature_elems.clone(),
+                    source: cached_record.source.clone(),
+                };
+                serde_json::to_writer(&mut writer, &record).map_err(|err| {
+                    AppError::new(
+                        "io_error",
+                        format!(
+                            "failed serializing shard record {}: {err}",
+                            shard_path.display()
+                        ),
+                    )
+                })?;
+                writer.write_all(b"\n").map_err(|err| {
+                    AppError::new(
+                        "io_error",
+                        format!("failed writing shard line {}: {err}", shard_path.display()),
+                    )
+                })?;
+                written += 1;
+            }
+            writer.flush().map_err(|err| {
                 AppError::new(
                     "io_error",
-                    format!("failed writing shard line {}: {err}", shard_path.display()),
+                    format!("failed flushing shard {}: {err}", shard_path.display()),
                 )
             })?;
-            result.written_records += 1;
+
+            Ok((shard_path.to_string_lossy().into_owned(), written))
+        })
+        .collect();
+
+    result.write_ms = to_ms(write_started.elapsed());
+
+    // Aggregate results in chunk order (par_iter + collect preserves order).
+    for shard_result in shard_results {
+        let (path, count) = shard_result?;
+        if !path.is_empty() {
+            result.correlated_shards.push(path);
+            result.written_records += count;
         }
-        writer.flush().map_err(|err| {
-            AppError::new(
-                "io_error",
-                format!("failed flushing shard {}: {err}", shard_path.display()),
-            )
-        })?;
-        result.write_ms += to_ms(write_started.elapsed());
-        result
-            .correlated_shards
-            .push(shard_path.to_string_lossy().into_owned());
     }
 
     Ok(result)
@@ -815,7 +851,7 @@ fn run_request(request: Request) -> Result<Response, AppError> {
 
     let type_index = build_type_index(&raw_type_records);
     let parsed_functions: Vec<FunctionEntry> = raw_function_records
-        .iter()
+        .par_iter()
         .enumerate()
         .filter_map(|(row_idx, record)| parse_function_entry(record, row_idx))
         .collect();
