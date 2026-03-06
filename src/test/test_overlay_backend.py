@@ -58,6 +58,9 @@ class _FunctionStub:
 
 
 class _ProfileStub(SimpleNamespace):
+    def get_key(self) -> str:
+        return self.identifier
+
     def resolve_coverage_link(self, _url, source_file, line, function_name):
         return f"{source_file}:{line}:{function_name}"
 
