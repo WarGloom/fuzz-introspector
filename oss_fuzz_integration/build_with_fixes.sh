@@ -72,12 +72,19 @@ cp -rf "$SCRIPT_DIR/src" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-intr
 cp -rf "$SCRIPT_DIR/frontends" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/"
 mkdir -p "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools"
 
-OPTIONAL_NATIVE_RUST_TOOLS=(
+REQUIRED_NATIVE_RUST_TOOLS=(
 	"native_analysis_plugins_rust"
 	"native_reachability_rust"
 	"native_filter_functions_rust"
 	"native_calltree_bitmap_rust"
 )
+
+for tool_dir in "${REQUIRED_NATIVE_RUST_TOOLS[@]}"; do
+	if [ ! -d "$SCRIPT_DIR/tools/$tool_dir" ]; then
+		echo "ERROR: Required native Rust backend directory is missing: $SCRIPT_DIR/tools/$tool_dir" >&2
+		exit 1
+	fi
+done
 
 if command -v rsync &>/dev/null; then
 	RSYNC_EXCLUDES=(
@@ -94,10 +101,8 @@ if command -v rsync &>/dev/null; then
 	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_debug_correlator_rust/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_debug_correlator_rust/"
 	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_overlay_backend_go/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_overlay_backend_go/"
 	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_overlay_backend_rust/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_overlay_backend_rust/"
-	for tool_dir in "${OPTIONAL_NATIVE_RUST_TOOLS[@]}"; do
-		if [ -d "$SCRIPT_DIR/tools/$tool_dir" ]; then
-			rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/$tool_dir/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/$tool_dir/"
-		fi
+	for tool_dir in "${REQUIRED_NATIVE_RUST_TOOLS[@]}"; do
+		rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/$tool_dir/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/$tool_dir/"
 	done
 else
 	echo "rsync not found, falling back to cp -rf for native tools"
@@ -109,17 +114,15 @@ else
 	cp -rf "$SCRIPT_DIR/tools/native_debug_correlator_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
 	cp -rf "$SCRIPT_DIR/tools/native_overlay_backend_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
 	cp -rf "$SCRIPT_DIR/tools/native_overlay_backend_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
-	for tool_dir in "${OPTIONAL_NATIVE_RUST_TOOLS[@]}"; do
-		if [ -d "$SCRIPT_DIR/tools/$tool_dir" ]; then
-			cp -rf "$SCRIPT_DIR/tools/$tool_dir" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
-		fi
+	for tool_dir in "${REQUIRED_NATIVE_RUST_TOOLS[@]}"; do
+		cp -rf "$SCRIPT_DIR/tools/$tool_dir" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
 	done
 fi
 rm -rf "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_yaml_loader_rust/target"
 rm -rf "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_llvm_cov_loader_rust/target"
 rm -rf "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_debug_correlator_rust/target"
 rm -rf "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_overlay_backend_rust/target"
-for tool_dir in "${OPTIONAL_NATIVE_RUST_TOOLS[@]}"; do
+for tool_dir in "${REQUIRED_NATIVE_RUST_TOOLS[@]}"; do
 	rm -rf "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/$tool_dir/target"
 done
 rm -f "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_yaml_loader_go/native_yaml_loader_go"
@@ -214,10 +217,18 @@ awk '
 	print "    cd /fuzz-introspector/tools/native_overlay_backend_go && /usr/local/go/bin/go build -o /opt/fuzz-introspector/bin/native_overlay_backend_go . && \\"
 	print "    cd /fuzz-introspector/tools/native_overlay_backend_rust && /root/.cargo/bin/cargo build --release && \\"
 	print "    cp target/release/native_overlay_backend_rust /opt/fuzz-introspector/bin/native_overlay_backend_rust && \\"
-	print "    if [ -d /fuzz-introspector/tools/native_analysis_plugins_rust ]; then cd /fuzz-introspector/tools/native_analysis_plugins_rust && /root/.cargo/bin/cargo build --release && cp target/release/native_analysis_plugins_rust /opt/fuzz-introspector/bin/native_analysis_plugins_rust; fi && \\"
-	print "    if [ -d /fuzz-introspector/tools/native_reachability_rust ]; then cd /fuzz-introspector/tools/native_reachability_rust && /root/.cargo/bin/cargo build --release && cp target/release/native_reachability_rust /opt/fuzz-introspector/bin/native_reachability_rust; fi && \\"
-	print "    if [ -d /fuzz-introspector/tools/native_filter_functions_rust ]; then cd /fuzz-introspector/tools/native_filter_functions_rust && /root/.cargo/bin/cargo build --release && cp target/release/native_filter_functions_rust /opt/fuzz-introspector/bin/native_filter_functions_rust; fi && \\"
-	print "    if [ -d /fuzz-introspector/tools/native_calltree_bitmap_rust ]; then cd /fuzz-introspector/tools/native_calltree_bitmap_rust && /root/.cargo/bin/cargo build --release && cp target/release/native_calltree_bitmap_rust /opt/fuzz-introspector/bin/native_calltree_bitmap_rust; fi"
+	print "    cd /fuzz-introspector/tools/native_analysis_plugins_rust && /root/.cargo/bin/cargo build --release && \\"
+	print "    test -x target/release/native_analysis_plugins_rust || { echo 'ERROR: Required native backend binary missing after cargo build: native_analysis_plugins_rust' >&2; exit 1; } && \\"
+	print "    cp target/release/native_analysis_plugins_rust /opt/fuzz-introspector/bin/native_analysis_plugins_rust && \\"
+	print "    cd /fuzz-introspector/tools/native_reachability_rust && /root/.cargo/bin/cargo build --release && \\"
+	print "    test -x target/release/native_reachability_rust || { echo 'ERROR: Required native backend binary missing after cargo build: native_reachability_rust' >&2; exit 1; } && \\"
+	print "    cp target/release/native_reachability_rust /opt/fuzz-introspector/bin/native_reachability_rust && \\"
+	print "    cd /fuzz-introspector/tools/native_filter_functions_rust && /root/.cargo/bin/cargo build --release && \\"
+	print "    test -x target/release/native_filter_functions_rust || { echo 'ERROR: Required native backend binary missing after cargo build: native_filter_functions_rust' >&2; exit 1; } && \\"
+	print "    cp target/release/native_filter_functions_rust /opt/fuzz-introspector/bin/native_filter_functions_rust && \\"
+	print "    cd /fuzz-introspector/tools/native_calltree_bitmap_rust && /root/.cargo/bin/cargo build --release && \\"
+	print "    test -x target/release/native_calltree_bitmap_rust || { echo 'ERROR: Required native backend binary missing after cargo build: native_calltree_bitmap_rust' >&2; exit 1; } && \\"
+	print "    cp target/release/native_calltree_bitmap_rust /opt/fuzz-introspector/bin/native_calltree_bitmap_rust"
 	print ""
 	print "ENV FI_DEBUG_YAML_LOADER=rust \\"
 	print "    FI_PROFILE_YAML_LOADER=rust \\"
