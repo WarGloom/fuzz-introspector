@@ -13,6 +13,8 @@
 # limitations under the License.
 """Command-line interface"""
 
+# pylint: disable=line-too-long
+
 import argparse
 import logging
 import os

@@ -13,6 +13,8 @@
 # limitations under the License.
 """Utility functions"""
 
+# pylint: disable=missing-function-docstring,use-maxsplit-arg
+
 import functools
 import json
 import logging

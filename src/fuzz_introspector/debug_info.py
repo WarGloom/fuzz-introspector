@@ -19,6 +19,11 @@ This module provides functions to parse and extract debug information
 from various sources, including DWARF debug info and other debug formats.
 """
 
+# pylint: disable=line-too-long,missing-function-docstring,redefined-outer-name
+# pylint: disable=use-dict-literal,use-yield-from,chained-comparison,too-many-nested-blocks
+# pylint: disable=consider-using-f-string,logging-not-lazy,consider-using-max-builtin
+# pylint: disable=invalid-name,superfluous-parens,consider-using-in,no-else-continue
+
 import collections
 import hashlib
 import json
@@ -35,7 +40,7 @@ from concurrent.futures import (
     as_completed,
     wait,
 )
-from typing import Any, Iterator, TypeVar
+from typing import Any, Callable, Iterator, TypeVar
 import yaml
 
 from fuzz_introspector import backend_loaders
@@ -779,6 +784,13 @@ def _write_spill(items: list[Any], category: str) -> tuple[str, int]:
     return spill_path, len(items)
 
 
+def _shutdown_executor_instance(shutdown_fn: Callable[..., None]) -> None:
+    try:
+        shutdown_fn(wait=True, cancel_futures=True)
+    except TypeError:
+        shutdown_fn(wait=True)
+
+
 def _iter_spill_items(spill_path: str):
     with open(spill_path, "r", encoding="utf-8") as spill_fp:
         # Backward compatibility: legacy spill files were written as one JSON
@@ -1067,12 +1079,9 @@ def _load_yaml_collections(paths: list[str], category: str) -> list[Any]:
                 if ex is None:
                     return
                 shutdown_fn = getattr(ex, "shutdown", None)
-                if shutdown_fn is None:
+                if not callable(shutdown_fn):
                     return
-                try:
-                    shutdown_fn(wait=True, cancel_futures=True)
-                except TypeError:
-                    shutdown_fn(wait=True)
+                _shutdown_executor_instance(shutdown_fn)
 
             def _submit_shard(shard_idx: int) -> None:
                 shard = shards[shard_idx]

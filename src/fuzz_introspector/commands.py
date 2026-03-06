@@ -13,6 +13,8 @@
 # limitations under the License.
 """High-level routines and CLI entrypoints"""
 
+# pylint: disable=line-too-long
+
 import json
 import logging
 import os

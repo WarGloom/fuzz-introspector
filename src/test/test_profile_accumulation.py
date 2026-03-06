@@ -380,8 +380,11 @@ class _FunctionProfileStub:
 class _FuzzerProfileStub:
     """Minimal stand-in for FuzzerProfile used in batch reachability tests."""
 
-    def __init__(self, profile_id: str, functions: dict):
+    def __init__(
+        self, profile_id: str, functions: dict, profile_key: str | None = None
+    ):
         self._identifier = profile_id
+        self._profile_key = profile_key or profile_id
         # functions: {name: [direct_callee, ...]}
         self.all_class_functions = {
             name: _FunctionProfileStub(name, callees)
@@ -391,6 +394,38 @@ class _FuzzerProfileStub:
     @property
     def identifier(self):
         return self._identifier
+
+    def get_key(self):
+        return self._profile_key
+
+
+class _FilterFunctionStub:
+    """Minimal function entry for native filter tests."""
+
+    def __init__(self, name: str, source_file: str = "/src/file.cc"):
+        self.function_source_file = source_file
+        self.function_name = name
+        self.raw_function_name = name
+
+
+class _FilterProfileStub:
+    """Minimal profile entry for native filter tests."""
+
+    def __init__(self, identifier: str, profile_key: str, function_name: str):
+        self._identifier = identifier
+        self._profile_key = profile_key
+        self.fuzzer_source_file = f"/{profile_key}.cc"
+        self.all_class_functions = {
+            function_name: _FilterFunctionStub(function_name),
+        }
+        self.all_class_constructors = {}
+
+    @property
+    def identifier(self):
+        return self._identifier
+
+    def get_key(self):
+        return self._profile_key
 
 
 def _make_batch_success_response(profiles_data):
@@ -414,7 +449,7 @@ def test_batch_returns_false_when_binary_not_found(monkeypatch):
     """Returns False when the binary cannot be located."""
     monkeypatch.setenv("FI_REACHABILITY_BACKEND", "rust")
     monkeypatch.delenv("FI_REACHABILITY_RUST_BIN", raising=False)
-    monkeypatch.setattr(fuzzer_profile.shutil, "which", lambda _: None)
+    monkeypatch.setattr(fuzzer_profile, "_resolve_reachability_binary", lambda: "")
     profiles = [_FuzzerProfileStub("p1", {"f": []})]
     assert fuzzer_profile.propagate_reachability_native_batch(profiles) is False
 
@@ -630,6 +665,119 @@ def test_batch_sends_correct_payload(monkeypatch):
     func_map = {f["name"]: f["direct_callees"] for f in fuzz_a_entry["functions"]}
     assert func_map["main"] == ["helper"]
     assert func_map["helper"] == []
+
+
+def test_batch_uses_unique_profile_keys_when_identifiers_collide(monkeypatch):
+    """Native batch reachability keys profiles by get_key() instead of identifier."""
+    monkeypatch.setenv("FI_REACHABILITY_BACKEND", "rust")
+    monkeypatch.setenv("FI_REACHABILITY_RUST_BIN", "/fake/bin")
+
+    captured = {}
+
+    def _fake_run(args, input, **kwargs):
+        del args, kwargs
+        captured["payload"] = json.loads(input)
+        response = _make_batch_success_response(
+            [
+                {
+                    "profile_id": "dir-one/fuzzer",
+                    "results": [
+                        {
+                            "name": "entry_one",
+                            "functions_reached": ["shared"],
+                            "function_depth": 1,
+                        }
+                    ],
+                },
+                {
+                    "profile_id": "dir-two/fuzzer",
+                    "results": [
+                        {
+                            "name": "entry_two",
+                            "functions_reached": ["leaf"],
+                            "function_depth": 1,
+                        }
+                    ],
+                },
+            ]
+        )
+        return SimpleNamespace(returncode=0, stdout=response, stderr="")
+
+    monkeypatch.setattr(fuzzer_profile.subprocess, "run", _fake_run)
+
+    p1 = _FuzzerProfileStub("fuzzer", {"entry_one": []}, profile_key="dir-one/fuzzer")
+    p2 = _FuzzerProfileStub("fuzzer", {"entry_two": []}, profile_key="dir-two/fuzzer")
+
+    result = fuzzer_profile.propagate_reachability_native_batch([p1, p2])
+
+    assert result is True
+    assert [pr["profile_id"] for pr in captured["payload"]["profiles"]] == [
+        "dir-one/fuzzer",
+        "dir-two/fuzzer",
+    ]
+    assert p1.all_class_functions["entry_one"].functions_reached == ["shared"]
+    assert p2.all_class_functions["entry_two"].functions_reached == ["leaf"]
+
+
+def test_filter_profiles_native_uses_unique_profile_keys(monkeypatch):
+    """Native filter maps responses back with get_key() when identifiers collide."""
+    monkeypatch.delenv(analysis.FI_FILTER_RUST_BIN_ENV, raising=False)
+    monkeypatch.setattr(
+        analysis.backend_loaders,
+        "resolve_component_backend",
+        lambda _env_name: "rust",
+    )
+    monkeypatch.setattr(analysis.shutil, "which", lambda _name: "/fake/bin")
+
+    captured = {}
+
+    def _fake_run(args, input, **kwargs):
+        del args, kwargs
+        captured["payload"] = json.loads(input)
+        response = json.dumps(
+            {
+                "status": "success",
+                "profiles": [
+                    {
+                        "profile_id": "dir-one/fuzzer",
+                        "excluded": False,
+                        "excluded_functions": ["drop-one"],
+                        "excluded_constructors": [],
+                    },
+                    {
+                        "profile_id": "dir-two/fuzzer",
+                        "excluded": False,
+                        "excluded_functions": ["drop-two"],
+                        "excluded_constructors": [],
+                    },
+                ],
+            }
+        )
+        return SimpleNamespace(returncode=0, stdout=response, stderr="")
+
+    monkeypatch.setattr(analysis.subprocess, "run", _fake_run)
+
+    p1 = _FilterProfileStub("fuzzer", "dir-one/fuzzer", "drop-one")
+    p2 = _FilterProfileStub("fuzzer", "dir-two/fuzzer", "drop-two")
+
+    filtered = analysis._filter_profiles_native([p1, p2], [], [])
+
+    assert filtered == [p1, p2]
+    assert [pr["profile_id"] for pr in captured["payload"]["profiles"]] == [
+        "dir-one/fuzzer",
+        "dir-two/fuzzer",
+    ]
+    assert p1.all_class_functions == {}
+    assert p2.all_class_functions == {}
+
+
+def test_fuzzer_profile_get_key_prefers_stable_full_path():
+    """get_key returns the full executable path to avoid basename collisions."""
+    profile = fuzzer_profile.FuzzerProfile.__new__(fuzzer_profile.FuzzerProfile)
+    profile.binary_executable = "/tmp/out/../build/fuzzer"
+    profile.fuzzer_source_file = "/src/fuzzer.cc"
+
+    assert profile.get_key() == os.path.normpath("/tmp/out/../build/fuzzer")
 
 
 # ---------------------------------------------------------------------------

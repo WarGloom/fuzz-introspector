@@ -13,6 +13,10 @@
 # limitations under the License.
 """Module for creating HTML reports"""
 
+# pylint: disable=line-too-long,invalid-name,missing-function-docstring,unused-variable
+# pylint: disable=consider-using-join,consider-using-f-string,subprocess-run-check
+# pylint: disable=logging-fstring-interpolation
+
 from typing import (
     Any,
     Dict,
@@ -21,17 +25,27 @@ from typing import (
     Tuple,
 )
 
+import json
 import os
+import shutil
+import subprocess
 import sys
+
 import bs4
 import logging
 from datetime import datetime
 from enum import Enum
 
+from fuzz_introspector import backend_loaders
 from fuzz_introspector import utils, constants
 from fuzz_introspector.datatypes import fuzzer_profile
 
 logger = logging.getLogger(name=__name__)
+
+# Environment variables for native calltree bitmap backend
+FI_CALLTREE_BITMAP_BACKEND_ENV = "FI_CALLTREE_BITMAP_BACKEND"
+FI_CALLTREE_BITMAP_RUST_BIN_ENV = "FI_CALLTREE_BITMAP_RUST_BIN"
+_BITMAP_BINARY_NAME = "native_calltree_bitmap_rust"
 
 
 class HTML_HEADING(Enum):
@@ -452,14 +466,171 @@ def create_calltree_color_distribution_table(color_list: List[str]) -> str:
     return html_string
 
 
-def create_horisontal_calltree_image(image_name: str,
-                                     profile: fuzzer_profile.FuzzerProfile,
-                                     dump_files: bool, out_dir) -> List[str]:
+def _resolve_bitmap_binary() -> str | None:
+    """Locate the native calltree bitmap binary.
+
+    Discovery order:
+      1. ``FI_CALLTREE_BITMAP_RUST_BIN`` env var (explicit path)
+      2. Repo-relative ``tools/native_calltree_bitmap_rust/target/release/``
+      3. ``shutil.which()`` on PATH
+    """
+    explicit = os.environ.get(FI_CALLTREE_BITMAP_RUST_BIN_ENV, "").strip()
+    if explicit:
+        if os.path.isfile(explicit):
+            return explicit
+        logger.warning(
+            "%s=%s does not exist; trying fallbacks",
+            FI_CALLTREE_BITMAP_RUST_BIN_ENV,
+            explicit,
+        )
+
+    # Repo-relative: <repo>/tools/native_calltree_bitmap_rust/target/release/...
+    try:
+        repo_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        candidate = os.path.join(
+            repo_root,
+            "tools",
+            _BITMAP_BINARY_NAME,
+            "target",
+            "release",
+            _BITMAP_BINARY_NAME,
+        )
+        if os.path.isfile(candidate):
+            return candidate
+    except Exception:
+        pass
+
+    found = shutil.which(_BITMAP_BINARY_NAME)
+    if found:
+        return found
+
+    return None
+
+
+def render_calltree_bitmaps_native(
+    jobs: list[tuple[str, list[str], str]], ) -> dict[str, list[str]] | None:
+    """Render calltree bitmaps using the native Rust backend.
+
+    Parameters
+    ----------
+    jobs : list of (image_name, color_list, out_dir) tuples
+        Each tuple describes one bitmap to render.
+
+    Returns
+    -------
+    dict mapping image_name -> color_list on success, or None on failure
+    (caller should fall back to matplotlib).
+    """
+    backend = backend_loaders.resolve_component_backend(
+        FI_CALLTREE_BITMAP_BACKEND_ENV)
+    if backend != "rust":
+        return None
+
+    bin_path = _resolve_bitmap_binary()
+    if bin_path is None:
+        logger.debug(
+            "Native bitmap binary not found; falling back to matplotlib")
+        return None
+
+    # Build the JSON payload
+    bitmap_jobs = []
+    for image_name, color_list, out_dir in jobs:
+        colors = color_list if color_list else ["red"]
+        bitmap_jobs.append({
+            "job_id": image_name,
+            "output_path": os.path.join(out_dir, image_name),
+            "color_list": colors,
+        })
+
+    payload = {
+        "schema_version": 1,
+        "width": 1500,
+        "height": 250,
+        "jobs": bitmap_jobs,
+    }
+
+    try:
+        result = subprocess.run(
+            [bin_path],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except FileNotFoundError:
+        logger.warning("Native bitmap binary not found at %s", bin_path)
+        return None
+    except subprocess.TimeoutExpired:
+        logger.warning("Native bitmap binary timed out after 120s")
+        return None
+    except OSError as exc:
+        logger.warning("Failed to run native bitmap binary: %s", exc)
+        return None
+
+    if result.returncode != 0:
+        logger.warning(
+            "Native bitmap binary exited with code %d; stderr: %s",
+            result.returncode,
+            result.stderr[:500] if result.stderr else "(empty)",
+        )
+        return None
+
+    try:
+        output = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        logger.warning("Native bitmap binary produced invalid JSON: %s", exc)
+        return None
+
+    if output.get("status") not in ("success", "partial"):
+        logger.warning(
+            "Native bitmap binary reported status=%s: %s",
+            output.get("status"),
+            output.get("error", ""),
+        )
+        return None
+
+    # Build result mapping: image_name -> color_list
+    result_map: dict[str, list[str]] = {}
+    for job_result in output.get("results", []):
+        if job_result.get("status") == "ok":
+            # Find the matching input job to get the color_list
+            for image_name, color_list, _out_dir in jobs:
+                if image_name == job_result["job_id"]:
+                    result_map[image_name] = color_list if color_list else [
+                        "red"
+                    ]
+                    break
+
+    if not result_map:
+        logger.warning("Native bitmap binary produced no successful results")
+        return None
+
+    logger.info(
+        "Native bitmap backend rendered %d/%d bitmaps successfully",
+        len(result_map),
+        len(jobs),
+    )
+    return result_map
+
+
+def create_horisontal_calltree_image(
+    image_name: str,
+    profile: fuzzer_profile.FuzzerProfile,
+    dump_files: bool,
+    out_dir,
+    prerendered_colors: Optional[List[str]] = None,
+) -> List[str]:
     """
     Creates a horisontal image of the calltree. The height is fixed and
     each element on the x-axis shows a node in the calltree in the form
     of a rectangle. The rectangle is red if not visited and green if visited.
     """
+    # If the bitmap was already rendered by the native batch backend,
+    # just return the pre-computed color list.
+    if prerendered_colors is not None:
+        return prerendered_colors
+
     try:
         import matplotlib
 

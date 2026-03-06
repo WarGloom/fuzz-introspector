@@ -56,7 +56,7 @@ def summary_update_batch(out_dir: str):
 def _get_summary_dict(out_dir) -> Dict[Any, Any]:
     """Returns the current json report on disk as a dictionary."""
     if not os.path.isfile(os.path.join(out_dir, constants.SUMMARY_FILE)):
-        existing_contents = dict()
+        existing_contents = {}
     else:
         with open(os.path.join(out_dir, constants.SUMMARY_FILE),
                   "r") as report_fd:
@@ -79,7 +79,7 @@ def _overwrite_report_with_dict(new_dict: Dict[Any, Any], out_dir) -> None:
 
 def _update_summary(out_dir: str, mutator: Callable[[Dict[Any, Any]],
                                                     None]) -> None:
-    """Update summary either by writing directly or buffering in the active batch."""
+    """Update summary directly or buffer it in the active batch."""
     if out_dir in _SUMMARY_BATCHES:
         mutator(_SUMMARY_BATCHES[out_dir])
         return
@@ -141,7 +141,7 @@ def add_fuzzer_key_value_to_report(fuzzer_name: str, key: str, value: Any,
         if "fuzzers" not in fuzzers_target:
             fuzzers_target["fuzzers"] = {}
         if fuzzer_name not in fuzzers_target["fuzzers"]:
-            fuzzers_target["fuzzers"][fuzzer_name] = dict()
+            fuzzers_target["fuzzers"][fuzzer_name] = {}
         fuzzers_target["fuzzers"][fuzzer_name][key] = value
 
     _update_summary(out_dir, _mutate)
@@ -163,13 +163,14 @@ def add_project_key_value_to_report(key: str, value: Any, out_dir) -> None:
     def _mutate(project_target: Dict[Any, Any]) -> None:
         # Update the report accordingly
         if constants.JSON_REPORT_KEY_PROJECT not in project_target:
-            project_target[constants.JSON_REPORT_KEY_PROJECT] = dict()
+            project_target[constants.JSON_REPORT_KEY_PROJECT] = {}
         project_target[constants.JSON_REPORT_KEY_PROJECT][key] = value
 
     _update_summary(out_dir, _mutate)
 
 
 def create_all_fi_functions_json(functions_dict, out_dir) -> None:
+    """Write the all-functions JSON artifact to the report output directory."""
     if not constants.should_dump_files:
         return
 
@@ -188,6 +189,7 @@ def create_all_fi_functions_json(functions_dict, out_dir) -> None:
 
 
 def create_all_jvm_constructor_json(functions_dict, out_dir) -> None:
+    """Write the JVM constructor JSON artifact to the output directory."""
     if not constants.should_dump_files:
         return
 
@@ -206,12 +208,16 @@ def create_all_jvm_constructor_json(functions_dict, out_dir) -> None:
         json.dump(functions_dict, f)
 
 
-def add_branch_blocker_key_value_to_report(profile_identifier, key,
+def add_branch_blocker_key_value_to_report(profile_identifier, unused_key,
                                            branch_blockers_list, out_dir):
-    """Returns the current json report on disk as a dictionary."""
+    """Write branch blocker data for a profile.
+
+    The unused_key parameter is kept for compatibility with existing callers.
+    """
+    del unused_key
     if not os.path.isfile(os.path.join(out_dir,
                                        constants.BRANCH_BLOCKERS_FILE)):
-        existing_contents = dict()
+        existing_contents = {}
     else:
         with open(os.path.join(out_dir, constants.BRANCH_BLOCKERS_FILE),
                   "r") as report_fd:

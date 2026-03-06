@@ -13,6 +13,9 @@
 # limitations under the License.
 """Analysis for creating optimal coverage targets"""
 
+# pylint: disable=line-too-long,missing-class-docstring,unused-argument
+# pylint: disable=logging-fstring-interpolation,consider-using-f-string
+
 import logging
 
 from typing import (

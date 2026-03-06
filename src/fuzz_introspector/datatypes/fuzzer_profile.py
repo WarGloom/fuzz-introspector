@@ -13,6 +13,11 @@
 # limitations under the License.
 """Fuzzer profile"""
 
+# pylint: disable=line-too-long,missing-function-docstring,unused-argument
+# pylint: disable=use-dict-literal,consider-using-in,no-else-return
+# pylint: disable=consider-using-max-builtin,logging-fstring-interpolation
+# pylint: disable=subprocess-run-check,too-many-nested-blocks
+
 import json
 import logging
 import os
@@ -31,7 +36,13 @@ from typing import (
     Tuple,
 )
 
-from fuzz_introspector import cfg_load, code_coverage, json_report, utils
+from fuzz_introspector import (
+    backend_loaders,
+    cfg_load,
+    code_coverage,
+    json_report,
+    utils,
+)
 from fuzz_introspector.datatypes import branch_profile, function_profile
 from fuzz_introspector.exceptions import DataLoaderError
 
@@ -45,6 +56,43 @@ def _intern_function_name_list(function_names: list[Any]) -> list[Any]:
         if isinstance(function_name, str) else function_name
         for function_name in function_names
     ]
+
+
+_FI_REACHABILITY_BACKEND_ENV = "FI_REACHABILITY_BACKEND"
+_REACHABILITY_BINARY_NAME = "native_reachability_rust"
+_FI_REACHABILITY_RUST_BIN_ENV = "FI_REACHABILITY_RUST_BIN"
+
+
+def _resolve_reachability_binary() -> str:
+    """Locate the native_reachability_rust binary.
+
+    Discovery order:
+      1. ``FI_REACHABILITY_RUST_BIN`` environment variable.
+      2. Repo-relative path (matches overlay backend pattern).
+      3. ``shutil.which`` PATH lookup.
+
+    Returns the resolved path, or ``""`` if not found.
+    """
+    bin_path = os.environ.get(_FI_REACHABILITY_RUST_BIN_ENV, "")
+    if bin_path:
+        return bin_path
+
+    # Repo-relative path: <repo>/tools/native_reachability_rust/target/release/…
+    repo_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), os.pardir, os.pardir,
+                     os.pardir))
+    repo_candidate = os.path.join(
+        repo_root,
+        "tools",
+        _REACHABILITY_BINARY_NAME,
+        "target",
+        "release",
+        _REACHABILITY_BINARY_NAME,
+    )
+    if os.path.isfile(repo_candidate) and os.access(repo_candidate, os.X_OK):
+        return repo_candidate
+
+    return shutil.which(_REACHABILITY_BINARY_NAME) or ""
 
 
 class FuzzerProfile:
@@ -372,9 +420,12 @@ class FuzzerProfile:
     def get_key(self) -> str:
         """Returns the "key" we use to identify this Fuzzer profile."""
         if self.binary_executable != "":
-            return os.path.basename(self.binary_executable)
+            return os.path.normpath(self.binary_executable)
 
-        return self.fuzzer_source_file
+        if self.fuzzer_source_file != "":
+            return os.path.normpath(self.fuzzer_source_file)
+
+        return self.identifier
 
     @staticmethod
     def _serialize_branch_side(
@@ -662,20 +713,20 @@ class FuzzerProfile:
     def _propagate_functions_reached_native(self) -> bool:
         """Try to compute transitive closure via the native Rust binary.
 
-        Only activated when the environment variable ``FI_REACHABILITY_BACKEND``
-        is set to ``"rust"``.  The binary is located via the
-        ``FI_REACHABILITY_RUST_BIN`` env var (if set) or via
-        :func:`shutil.which`.
+        Only activated when ``FI_REACHABILITY_BACKEND=rust`` or the
+        global ``FI_NATIVE_BACKENDS=rust``.  The binary is located via
+        ``FI_REACHABILITY_RUST_BIN`` (if set), a repo-relative path, or
+        via :func:`shutil.which`.
 
         Returns ``True`` on success, ``False`` when the binary is unavailable
         or the subprocess fails (caller falls back to the pure-Python path).
         """
-        if os.environ.get("FI_REACHABILITY_BACKEND", "") != "rust":
+        backend = backend_loaders.resolve_component_backend(
+            _FI_REACHABILITY_BACKEND_ENV)
+        if backend != "rust":
             return False
 
-        bin_path = os.environ.get("FI_REACHABILITY_RUST_BIN", "")
-        if not bin_path:
-            bin_path = shutil.which("native_reachability_rust") or ""
+        bin_path = _resolve_reachability_binary()
         if not bin_path:
             logger.debug(
                 "%s: native_reachability_rust binary not found; falling back to Python",
@@ -1386,20 +1437,21 @@ def propagate_reachability_native_batch(
         profiles: list["FuzzerProfile"]) -> bool:
     """Call the native Rust binary once for all profiles in a batch.
 
-    Only activated when ``FI_REACHABILITY_BACKEND=rust``.  The binary is
-    located via ``FI_REACHABILITY_RUST_BIN`` (if set) or via
-    :func:`shutil.which`.
+    Only activated when ``FI_REACHABILITY_BACKEND=rust`` or the global
+    ``FI_NATIVE_BACKENDS=rust``.  The binary is located via
+    ``FI_REACHABILITY_RUST_BIN`` (if set), a repo-relative path, or
+    via :func:`shutil.which`.
 
     Returns ``True`` if the binary ran successfully and results were applied to
     all profiles.  Returns ``False`` on any failure so the caller can fall back
     to per-profile Python DFS.
     """
-    if os.environ.get("FI_REACHABILITY_BACKEND", "") != "rust":
+    backend = backend_loaders.resolve_component_backend(
+        _FI_REACHABILITY_BACKEND_ENV)
+    if backend != "rust":
         return False
 
-    bin_path = os.environ.get("FI_REACHABILITY_RUST_BIN", "")
-    if not bin_path:
-        bin_path = shutil.which("native_reachability_rust") or ""
+    bin_path = _resolve_reachability_binary()
     if not bin_path:
         logger.debug(
             "native_reachability_rust binary not found; falling back to Python"
@@ -1415,7 +1467,7 @@ def propagate_reachability_native_batch(
         1,
         "profiles": [{
             "profile_id":
-            p.identifier,
+            p.get_key(),
             "functions": [{
                 "name": name,
                 "direct_callees": list(fd.functions_reached),
@@ -1463,7 +1515,7 @@ def propagate_reachability_native_batch(
         return False
 
     # Build a lookup: profile_id -> FuzzerProfile
-    profile_map = {p.identifier: p for p in profiles}
+    profile_map = {p.get_key(): p for p in profiles}
 
     for prof_result in output.get("profiles", []):
         pid = prof_result.get("profile_id")

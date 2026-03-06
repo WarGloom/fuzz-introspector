@@ -160,7 +160,7 @@ class MergeCoordinator:
                 canonical_order.append(analysis_name)
 
         remaining = [
-            analysis_name for analysis_name in self.analysis_results.keys()
+            analysis_name for analysis_name in self.analysis_results
             if analysis_name not in canonical_order
         ]
         canonical_order.extend(remaining)

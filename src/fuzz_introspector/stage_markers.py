@@ -132,7 +132,14 @@ def pair_stage_events(
 
     if include_stages is not None:
         for stage_name in include_stages:
-            paired[stage_name]
+            paired.setdefault(
+                stage_name,
+                {
+                    "durations": [],
+                    "missing_starts": 0,
+                    "missing_ends": 0,
+                },
+            )
 
     return dict(paired)
 

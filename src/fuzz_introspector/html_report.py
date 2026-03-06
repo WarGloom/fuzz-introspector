@@ -13,6 +13,9 @@
 # limitations under the License.
 """Module for creating HTML reports"""
 
+# pylint: disable=line-too-long,missing-function-docstring,unused-variable,unused-argument
+# pylint: disable=chained-comparison,consider-using-f-string,logging-not-lazy
+
 import contextlib
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -1174,6 +1177,7 @@ def create_fuzzer_detailed_section(
     fuzzer_table_data: Dict[str, Any],
     dump_files: bool,
     out_dir,
+    prerendered_bitmaps: dict[str, list[str]] | None = None,
 ) -> str:
     html_parts: List[str] = [
         html_helpers.html_add_header_with_link(
@@ -1242,8 +1246,13 @@ def create_fuzzer_detailed_section(
         )
 
     if should_generate_bitmap:
+        prerendered = (prerendered_bitmaps or {}).get(image_name)
         color_list = html_helpers.create_horisontal_calltree_image(
-            image_name, profile, dump_files, out_dir)
+            image_name,
+            profile,
+            dump_files,
+            out_dir,
+            prerendered_colors=prerendered)
 
     if should_generate_bitmap and os.path.exists(image_path):
         html_parts.append(f'<img class="colormap" src="{image_name}">')
@@ -1543,6 +1552,34 @@ def create_section_fuzzer_detailed_section(
                                                table_of_contents),
         '<div class="collapsible">',
     ]
+
+    # Pre-render calltree bitmaps in batch using the native backend if
+    # available. This renders all bitmaps in a single subprocess call
+    # instead of one matplotlib figure per profile.
+    prerendered_bitmaps: dict[str, list[str]] = {}
+    if dump_files:
+        bitmap_jobs: list[tuple[str, list[str], str]] = []
+        max_bitmap_nodes = _parse_calltree_bitmap_max_nodes()
+        for harness_profile in introspection_proj.profiles:
+            callsites = harness_profile.get_callsites()
+            callsite_count = len(callsites)
+            if max_bitmap_nodes == 0 or callsite_count > max_bitmap_nodes:
+                continue
+            colormap_file_prefix = harness_profile.identifier
+            if "/" in colormap_file_prefix:
+                colormap_file_prefix = colormap_file_prefix.replace("/", "_")
+            if not colormap_file_prefix:
+                continue
+            image_name = f"{colormap_file_prefix}_colormap.png"
+            color_list = [cs.cov_color for cs in callsites]
+            bitmap_jobs.append((image_name, color_list, out_dir))
+
+        if bitmap_jobs:
+            native_result = html_helpers.render_calltree_bitmaps_native(
+                bitmap_jobs)
+            if native_result is not None:
+                prerendered_bitmaps = native_result
+
     for profile_idx, harness_profile in enumerate(introspection_proj.profiles):
         html_report_parts.append(
             create_fuzzer_detailed_section(
@@ -1556,6 +1593,7 @@ def create_section_fuzzer_detailed_section(
                 fuzzer_table_data,
                 dump_files,
                 out_dir,
+                prerendered_bitmaps=prerendered_bitmaps,
             ))
     html_report_parts.append("</div>")  # .collapsible
     html_report_parts.append("</div>")  # report box

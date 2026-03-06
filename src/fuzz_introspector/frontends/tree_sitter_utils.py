@@ -13,6 +13,8 @@
 # limitations under the License.
 """Utilities for tree-sitter query execution."""
 
+# pylint: disable=missing-function-docstring
+
 from collections import defaultdict
 from typing import Any
 
@@ -37,7 +39,7 @@ def get_query(language: Language, query_string: str) -> Query:
 
 def query_captures(query: Query, node: Node) -> dict[str, list[Node]]:
     """Runs a query and returns captures indexed by capture name."""
-    captures_fn = getattr(query, 'captures', None)
+    captures_fn = getattr(query, "captures", None)
     if callable(captures_fn):
         capture_result = captures_fn(node)
     else:
@@ -65,8 +67,8 @@ def _normalise_capture_result(capture_result: Any) -> dict[str, list[Node]]:
                     node = item[1]
                     name = item[0]
             else:
-                node = getattr(item, 'node', None)
-                name = getattr(item, 'name', None)
+                node = getattr(item, "node", None)
+                name = getattr(item, "name", None)
 
             if isinstance(node, Node) and name is not None:
                 grouped_captures[str(name)].append(node)

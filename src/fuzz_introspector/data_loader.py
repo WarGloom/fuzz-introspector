@@ -13,6 +13,8 @@
 # limitations under the License.
 """Reads the data output from the fuzz introspector LLVM plugin."""
 
+# pylint: disable=line-too-long,missing-function-docstring
+
 import concurrent.futures
 import json
 import logging

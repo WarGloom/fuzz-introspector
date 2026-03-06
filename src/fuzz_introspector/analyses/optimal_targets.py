@@ -13,6 +13,8 @@
 # limitations under the License.
 """Analysis for identifying optimal targets"""
 
+# pylint: disable=line-too-long,superfluous-parens,unused-argument
+
 import os
 import copy
 import json

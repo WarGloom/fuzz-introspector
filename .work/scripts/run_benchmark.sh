@@ -79,6 +79,11 @@ rust)
 	# Reachability transitive-closure binary
 	export FI_REACHABILITY_BACKEND=rust
 	export FI_REACHABILITY_RUST_BIN="${REPO_ROOT}/tools/native_reachability_rust/target/release/native_reachability_rust"
+	# Stage markers for profiling
+	export FI_DEBUG_STAGE_RSS=1
+	export FI_DEBUG_PERF_WARN=1
+	export FI_STAGE_WARN_SECONDS=30
+	export FI_DEBUG_STAGE_WARN_RSS_MB=4096
 	;;
 go)
 	export FI_NATIVE_BACKENDS=go
@@ -95,11 +100,23 @@ go)
 	export FI_OVERLAY_BIN="${REPO_ROOT}/tools/native_overlay_backend_go/native_overlay_backend_go"
 	;;
 python)
-	unset FI_NATIVE_BACKENDS FI_DEBUG_CORRELATE_NATIVE FI_DEBUG_YAML_LOADER FI_NATIVE_PLUGINS 2>/dev/null || true
+	unset FI_NATIVE_BACKENDS FI_DEBUG_CORRELATE_NATIVE FI_DEBUG_YAML_LOADER FI_NATIVE_PLUGINS \
+		FI_REACHABILITY_BACKEND FI_REACHABILITY_RUST_BIN FI_REACHABILITY_GO_BIN \
+		FI_FILTER_BACKEND FI_FILTER_RUST_BIN FI_FILTER_GO_BIN \
+		FI_CALLTREE_BITMAP_BACKEND FI_CALLTREE_BITMAP_RUST_BIN FI_CALLTREE_BITMAP_GO_BIN \
+		FI_PROFILE_YAML_LOADER FI_PROFILE_YAML_LOADER_RUST_BIN FI_PROFILE_YAML_LOADER_GO_BIN \
+		FI_DEBUG_YAML_LOADER_RUST_BIN FI_DEBUG_YAML_LOADER_GO_BIN \
+		FI_DEBUG_CORRELATOR_BACKEND FI_IF_DEBUG_CORRELATOR_BACKEND \
+		FI_DEBUG_CORRELATOR_RUST_BIN FI_DEBUG_CORRELATOR_GO_BIN \
+		FI_ALL_FUNCTIONS_ROWS_BACKEND \
+		FI_OVERLAY_BACKEND FI_OVERLAY_BIN \
+		FI_LLVM_COV_LOADER_RUST_BIN FI_LLVM_COV_LOADER_GO_BIN 2>/dev/null || true
 	# FI_LLVM_COV_LOADER defaults to rust inside code_coverage.py even when
 	# FI_NATIVE_BACKENDS is unset; force python explicitly to suppress spurious
 	# "No command configured for backend rust" warnings.
 	export FI_LLVM_COV_LOADER=python
+	export FI_IF_DEBUG_CORRELATOR_BACKEND=python
+	export FI_ALL_FUNCTIONS_ROWS_BACKEND=python
 	;;
 *)
 	echo "Unknown backend: $BACKEND (use python, rust, or go)" >&2

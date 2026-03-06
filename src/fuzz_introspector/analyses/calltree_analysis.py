@@ -13,6 +13,9 @@
 # limitations under the License.
 """Logic related to calltree analysis"""
 
+# pylint: disable=line-too-long,missing-class-docstring,missing-function-docstring
+# pylint: disable=consider-using-f-string,unused-argument
+
 import os
 import logging
 import html

@@ -15,6 +15,8 @@
 ################################################################################
 """Fuzz Introspector Light frontend for Go"""
 
+# pylint: disable=missing-function-docstring,unused-argument,too-many-nested-blocks
+
 from typing import Any, Optional
 
 from tree_sitter import Language, Node

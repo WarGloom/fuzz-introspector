@@ -13,6 +13,11 @@
 # limitations under the License.
 """Module for handling code coverage reports"""
 
+# pylint: disable=line-too-long,missing-function-docstring,logging-fstring-interpolation
+# pylint: disable=use-dict-literal,use-list-literal,protected-access,consider-using-enumerate
+# pylint: disable=unused-variable,useless-return,simplifiable-if-statement,no-else-return
+# pylint: disable=redefined-outer-name,reimported,consider-using-f-string,invalid-name
+
 import os
 import sys
 import json

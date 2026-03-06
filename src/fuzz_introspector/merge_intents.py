@@ -24,13 +24,9 @@ from typing import Any, Dict, List, Optional, Union
 class MergeIntentValidationError(Exception):
     """Raised when a merge intent fails validation."""
 
-    pass
-
 
 class PathSafetyError(Exception):
     """Raised when a path safety check fails."""
-
-    pass
 
 
 class MergeIntentCollector:
@@ -63,6 +59,8 @@ class TableIdOffsetList(list):
 _MERGE_INTENT_COLLECTOR: contextvars.ContextVar[
     Optional[MergeIntentCollector]] = (contextvars.ContextVar(
         "merge_intent_collector", default=None))
+ARTIFACT_WRITE_CONTENT_SOURCE_ERROR = (
+    "artifact_write must have exactly one of content_b64 or temp_file_ref")
 
 
 def get_active_merge_intent_collector() -> Optional[MergeIntentCollector]:
@@ -190,9 +188,7 @@ def _validate_artifact_write(intent: Dict[str, Any]) -> None:
 
     # Validate content source
     if "content_b64" in intent and "temp_file_ref" in intent:
-        raise MergeIntentValidationError(
-            "artifact_write must have exactly one of content_b64 or temp_file_ref"
-        )
+        raise MergeIntentValidationError(ARTIFACT_WRITE_CONTENT_SOURCE_ERROR)
 
     if "content_b64" in intent:
         if not isinstance(intent["content_b64"], str):
@@ -203,15 +199,13 @@ def _validate_artifact_write(intent: Dict[str, Any]) -> None:
             raise MergeIntentValidationError(
                 "artifact_write temp_file_ref must be a string")
     else:
-        raise MergeIntentValidationError(
-            "artifact_write must have exactly one of content_b64 or temp_file_ref"
-        )
+        raise MergeIntentValidationError(ARTIFACT_WRITE_CONTENT_SOURCE_ERROR)
 
 
 def validate_path_safety(relative_path: str,
                          base_dir: str,
                          resolve_symlinks: bool = True) -> None:
-    """Validate that a relative path is safe to write within a base directory."""
+    """Validate that a relative path stays within the base directory."""
     # Check for path traversal attempts
     if ".." in relative_path:
         raise PathSafetyError(f"Path traversal detected in: {relative_path}")

@@ -50,7 +50,7 @@ class AnalysisWorkerResult:
                 timestamp=data.get("timestamp"),
             )
         except Exception as e:
-            logger.error(f"Failed to validate AnalysisWorkerResult: {e}")
+            logger.error("Failed to validate AnalysisWorkerResult: %s", e)
             raise FuzzIntrospectorError(
                 f"Invalid analysis worker result: {e}") from e
 
@@ -76,7 +76,8 @@ class AnalysisWorkerResultValidator:
             try:
                 validated.append(AnalysisWorkerResult.from_dict(result))
             except FuzzIntrospectorError as e:
-                logger.warning(f"Skipping invalid result at index {idx}: {e}")
+                logger.warning("Skipping invalid result at index %d: %s", idx,
+                               e)
         return validated
 
     @staticmethod

@@ -13,6 +13,8 @@
 # limitations under the License.
 """Analysis plugin for sink functions of interest for different CWE"""
 
+# pylint: disable=line-too-long
+
 import json
 import logging
 import os

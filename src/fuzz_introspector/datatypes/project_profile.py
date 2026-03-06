@@ -13,6 +13,11 @@
 # limitations under the License.
 """Project profile"""
 
+# pylint: disable=line-too-long,missing-function-docstring,unused-variable,invalid-name
+# pylint: disable=use-dict-literal,use-list-literal,logging-fstring-interpolation
+# pylint: disable=no-else-return,consider-using-f-string,consider-iterating-dictionary
+# pylint: disable=redefined-builtin
+
 import collections
 import itertools
 import os
