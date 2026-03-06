@@ -73,6 +73,9 @@ RUST_TOOLS=(
 	"native_debug_correlator_rust:native_debug_correlator_rust"
 	"native_overlay_backend_rust:native_overlay_backend_rust"
 	"native_analysis_plugins_rust:native_analysis_plugins_rust"
+	"native_reachability_rust:native_reachability_rust"
+	"native_filter_functions_rust:native_filter_functions_rust"
+	"native_calltree_bitmap_rust:native_calltree_bitmap_rust"
 )
 
 for entry in "${RUST_TOOLS[@]}"; do
@@ -118,6 +121,20 @@ export FI_DEBUG_CORRELATOR_RUST_BIN="${NATIVE_BIN_DIR}/native_debug_correlator_r
 export FI_DEBUG_CORRELATOR_BIN="${NATIVE_BIN_DIR}/native_debug_correlator_rust"
 export FI_OVERLAY_NATIVE_BIN="${NATIVE_BIN_DIR}/native_overlay_backend_rust"
 export FI_OVERLAY_RUST_BIN="${NATIVE_BIN_DIR}/native_overlay_backend_rust"
+
+export FI_REACHABILITY_BACKEND=rust
+export FI_REACHABILITY_RUST_BIN="${NATIVE_BIN_DIR}/native_reachability_rust"
+export FI_FILTER_BACKEND=rust
+export FI_FILTER_RUST_BIN="${NATIVE_BIN_DIR}/native_filter_functions_rust"
+export FI_CALLTREE_BITMAP_BACKEND=rust
+export FI_CALLTREE_BITMAP_RUST_BIN="${NATIVE_BIN_DIR}/native_calltree_bitmap_rust"
+
+# Performance observability: emit stage-marker timestamps and RSS to logs so
+# the container monitor can attribute wall-time to individual pipeline phases.
+export FI_DEBUG_STAGE_RSS=1
+export FI_DEBUG_PERF_WARN=1
+export FI_STAGE_WARN_SECONDS=30
+export FI_DEBUG_STAGE_WARN_RSS_MB=4096
 
 # native_analysis_plugins_rust is resolved via shutil.which; ensure it is on PATH.
 export PATH="${NATIVE_BIN_DIR}:${PATH}"
