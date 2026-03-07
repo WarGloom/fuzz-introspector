@@ -59,40 +59,45 @@ def _intern_function_name_list(function_names: list[Any]) -> list[Any]:
 
 
 _FI_REACHABILITY_BACKEND_ENV = "FI_REACHABILITY_BACKEND"
-_REACHABILITY_BINARY_NAME = "native_reachability_rust"
 _FI_REACHABILITY_RUST_BIN_ENV = "FI_REACHABILITY_RUST_BIN"
+_FI_REACHABILITY_GO_BIN_ENV = "FI_REACHABILITY_GO_BIN"
+_REACHABILITY_BINARY_NAMES = {
+    backend_loaders.BACKEND_RUST: "native_reachability_rust",
+    backend_loaders.BACKEND_GO: "native_reachability_go",
+}
 
 
-def _resolve_reachability_binary() -> str:
-    """Locate the native_reachability_rust binary.
+def _resolve_reachability_binary(backend: str) -> str:
+    """Locate the selected native reachability binary.
 
     Discovery order:
-      1. ``FI_REACHABILITY_RUST_BIN`` environment variable.
+      1. Backend-specific env var or ``FI_REACHABILITY_BIN``.
       2. Repo-relative path (matches overlay backend pattern).
       3. ``shutil.which`` PATH lookup.
 
     Returns the resolved path, or ``""`` if not found.
     """
-    bin_path = os.environ.get(_FI_REACHABILITY_RUST_BIN_ENV, "")
-    if bin_path:
-        return bin_path
+    command = backend_loaders.resolve_backend_command("FI_REACHABILITY",
+                                                      backend)
+    if command:
+        return command[0]
 
-    # Repo-relative path: <repo>/tools/native_reachability_rust/target/release/…
+    binary_name = _REACHABILITY_BINARY_NAMES.get(backend, "")
+    if not binary_name:
+        return ""
+
     repo_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), os.pardir, os.pardir,
                      os.pardir))
-    repo_candidate = os.path.join(
-        repo_root,
-        "tools",
-        _REACHABILITY_BINARY_NAME,
-        "target",
-        "release",
-        _REACHABILITY_BINARY_NAME,
-    )
+    repo_candidate = os.path.join(repo_root, "tools", binary_name, "target",
+                                  "release", binary_name)
+    if backend == backend_loaders.BACKEND_GO:
+        repo_candidate = os.path.join(repo_root, "tools", binary_name,
+                                      binary_name)
     if os.path.isfile(repo_candidate) and os.access(repo_candidate, os.X_OK):
         return repo_candidate
 
-    return shutil.which(_REACHABILITY_BINARY_NAME) or ""
+    return shutil.which(binary_name) or ""
 
 
 class FuzzerProfile:
@@ -711,26 +716,27 @@ class FuzzerProfile:
         return profile
 
     def _propagate_functions_reached_native(self) -> bool:
-        """Try to compute transitive closure via the native Rust binary.
+        """Try to compute transitive closure via the selected native backend.
 
-        Only activated when ``FI_REACHABILITY_BACKEND=rust`` or the
-        global ``FI_NATIVE_BACKENDS=rust``.  The binary is located via
-        ``FI_REACHABILITY_RUST_BIN`` (if set), a repo-relative path, or
-        via :func:`shutil.which`.
+        Only activated when ``FI_REACHABILITY_BACKEND`` (or the global
+        ``FI_NATIVE_BACKENDS``) selects ``rust`` or ``go``.
 
         Returns ``True`` on success, ``False`` when the binary is unavailable
         or the subprocess fails (caller falls back to the pure-Python path).
         """
         backend = backend_loaders.resolve_component_backend(
             _FI_REACHABILITY_BACKEND_ENV)
-        if backend != "rust":
+        if backend not in (backend_loaders.BACKEND_RUST,
+                           backend_loaders.BACKEND_GO):
             return False
 
-        bin_path = _resolve_reachability_binary()
+        binary_name = _REACHABILITY_BINARY_NAMES[backend]
+        bin_path = _resolve_reachability_binary(backend)
         if not bin_path:
             logger.debug(
-                "%s: native_reachability_rust binary not found; falling back to Python",
+                "%s: %s binary not found; falling back to Python",
                 self.identifier,
+                binary_name,
             )
             return False
 
@@ -760,17 +766,18 @@ class FuzzerProfile:
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             logger.warning(
-                "%s: native_reachability_rust failed (%s); falling back to Python",
+                "%s: %s failed (%s); falling back to Python",
                 self.identifier,
+                binary_name,
                 exc,
             )
             return False
 
         if result.returncode != 0:
             logger.warning(
-                "%s: native_reachability_rust exited with code %d; "
-                "falling back to Python",
+                "%s: %s exited with code %d; falling back to Python",
                 self.identifier,
+                binary_name,
                 result.returncode,
             )
             return False
@@ -779,18 +786,18 @@ class FuzzerProfile:
             output = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
             logger.warning(
-                "%s: native_reachability_rust produced invalid JSON (%s); "
-                "falling back to Python",
+                "%s: %s produced invalid JSON (%s); falling back to Python",
                 self.identifier,
+                binary_name,
                 exc,
             )
             return False
 
         if output.get("status") != "success":
             logger.warning(
-                "%s: native_reachability_rust returned status=%r reason=%r; "
-                "falling back to Python",
+                "%s: %s returned status=%r reason=%r; falling back to Python",
                 self.identifier,
+                binary_name,
                 output.get("status"),
                 output.get("reason"),
             )
@@ -800,9 +807,9 @@ class FuzzerProfile:
         profiles = output.get("profiles", [])
         if not profiles:
             logger.warning(
-                "%s: native_reachability_rust returned no profiles; "
-                "falling back to Python",
+                "%s: %s returned no profiles; falling back to Python",
                 self.identifier,
+                binary_name,
             )
             return False
 
@@ -1435,12 +1442,10 @@ class FuzzerProfile:
 
 def propagate_reachability_native_batch(
         profiles: list["FuzzerProfile"]) -> bool:
-    """Call the native Rust binary once for all profiles in a batch.
+    """Call the selected native reachability backend once for all profiles.
 
-    Only activated when ``FI_REACHABILITY_BACKEND=rust`` or the global
-    ``FI_NATIVE_BACKENDS=rust``.  The binary is located via
-    ``FI_REACHABILITY_RUST_BIN`` (if set), a repo-relative path, or
-    via :func:`shutil.which`.
+    Only activated when ``FI_REACHABILITY_BACKEND`` (or the global
+    ``FI_NATIVE_BACKENDS``) selects ``rust`` or ``go``.
 
     Returns ``True`` if the binary ran successfully and results were applied to
     all profiles.  Returns ``False`` on any failure so the caller can fall back
@@ -1448,13 +1453,16 @@ def propagate_reachability_native_batch(
     """
     backend = backend_loaders.resolve_component_backend(
         _FI_REACHABILITY_BACKEND_ENV)
-    if backend != "rust":
+    if backend not in (backend_loaders.BACKEND_RUST,
+                       backend_loaders.BACKEND_GO):
         return False
 
-    bin_path = _resolve_reachability_binary()
+    binary_name = _REACHABILITY_BINARY_NAMES[backend]
+    bin_path = _resolve_reachability_binary(backend)
     if not bin_path:
         logger.debug(
-            "native_reachability_rust binary not found; falling back to Python"
+            "%s binary not found; falling back to Python",
+            binary_name,
         )
         return False
 
@@ -1485,13 +1493,16 @@ def propagate_reachability_native_batch(
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         logger.warning(
-            "native_reachability_rust batch failed (%s); falling back to Python",
-            exc)
+            "%s batch failed (%s); falling back to Python",
+            binary_name,
+            exc,
+        )
         return False
 
     if result.returncode != 0:
         logger.warning(
-            "native_reachability_rust batch exited %d; falling back to Python",
+            "%s batch exited %d; falling back to Python",
+            binary_name,
             result.returncode,
         )
         return False
@@ -1500,15 +1511,16 @@ def propagate_reachability_native_batch(
         output = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         logger.warning(
-            "native_reachability_rust batch produced invalid JSON (%s); falling back to Python",
+            "%s batch produced invalid JSON (%s); falling back to Python",
+            binary_name,
             exc,
         )
         return False
 
     if output.get("status") != "success":
         logger.warning(
-            "native_reachability_rust batch returned status=%r reason=%r; "
-            "falling back to Python",
+            "%s batch returned status=%r reason=%r; falling back to Python",
+            binary_name,
             output.get("status"),
             output.get("reason"),
         )

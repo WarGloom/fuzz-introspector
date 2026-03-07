@@ -243,9 +243,11 @@ def test_fi_native_plugins_rust_env_routes_to_native_proxy(
     assert "runtime_coverage_analysis" in result
 
 
-def test_fi_native_plugins_is_enabled_when_env_set(monkeypatch) -> None:
-    """NativePluginProxy.is_enabled() returns True only when env var is 'rust'."""
-    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "rust")
+@pytest.mark.parametrize("backend", ["rust", "go"])
+def test_fi_native_plugins_is_enabled_when_env_set(monkeypatch,
+                                                   backend: str) -> None:
+    """NativePluginProxy.is_enabled() returns True for explicit native backends."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, backend)
     assert analysis.NativePluginProxy.is_enabled() is True
 
 
@@ -256,11 +258,11 @@ def test_fi_native_plugins_not_enabled_by_default(monkeypatch) -> None:
     assert analysis.NativePluginProxy.is_enabled() is False
 
 
-def test_native_proxy_not_enabled_for_global_go_backend(monkeypatch) -> None:
+def test_native_proxy_enabled_for_global_go_backend(monkeypatch) -> None:
     monkeypatch.delenv(analysis.FI_NATIVE_PLUGINS_ENV, raising=False)
     monkeypatch.setenv("FI_NATIVE_BACKENDS", "go")
 
-    assert analysis.NativePluginProxy.is_enabled() is False
+    assert analysis.NativePluginProxy.is_enabled() is True
 
 
 def test_native_proxy_enabled_for_global_rust_backend(monkeypatch) -> None:
@@ -459,12 +461,46 @@ def test_native_proxy_timeout_returns_empty(monkeypatch) -> None:
 
 
 def test_fi_native_plugins_not_rust_does_not_enable_proxy(monkeypatch) -> None:
-    """Setting FI_NATIVE_PLUGINS to a value other than 'rust' leaves proxy disabled."""
+    """Non-native plugin values leave the proxy disabled."""
     monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "python")
     assert analysis.NativePluginProxy.is_enabled() is False
 
-    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "go")
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "bogus")
     assert analysis.NativePluginProxy.is_enabled() is False
+
+
+def test_fi_native_plugins_go_env_routes_to_native_proxy(monkeypatch) -> None:
+    """When FI_NATIVE_PLUGINS=go, NativePluginProxy invokes the Go binary."""
+    monkeypatch.setenv(analysis.FI_NATIVE_PLUGINS_ENV, "go")
+
+    plugin_names = ["optimal_targets"]
+    fake_response = _make_native_response(plugin_names)
+
+    fake_proc = mock.MagicMock()
+    fake_proc.returncode = 0
+    fake_proc.stdout = json.dumps(fake_response).encode()
+    fake_proc.stderr = b""
+
+    proxy = analysis.NativePluginProxy()
+
+    with (
+            mock.patch.object(
+                analysis.NativePluginProxy,
+                "find_binary",
+                return_value="/usr/bin/native_analysis_plugins_go",
+            ),
+            mock.patch("fuzz_introspector.analysis.subprocess.run",
+                       return_value=fake_proc) as mock_run,
+    ):
+        result = proxy.run_analysis(
+            _make_fake_proj_profile(),
+            [],
+            plugin_names,
+        )
+
+    mock_run.assert_called_once()
+    assert mock_run.call_args[0][0] == ["/usr/bin/native_analysis_plugins_go"]
+    assert "optimal_targets" in result
 
 
 def test_native_proxy_schema_version_in_request(monkeypatch) -> None:

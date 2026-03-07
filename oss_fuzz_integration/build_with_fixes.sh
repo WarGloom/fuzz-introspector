@@ -79,9 +79,27 @@ REQUIRED_NATIVE_RUST_TOOLS=(
 	"native_calltree_bitmap_rust"
 )
 
+NATIVE_GO_TOOLS=(
+	"native_yaml_loader_go"
+	"native_llvm_cov_loader_go"
+	"native_debug_correlator_go"
+	"native_overlay_backend_go"
+	"native_analysis_plugins_go"
+	"native_reachability_go"
+	"native_filter_functions_go"
+	"native_calltree_bitmap_go"
+)
+
 for tool_dir in "${REQUIRED_NATIVE_RUST_TOOLS[@]}"; do
 	if [ ! -d "$SCRIPT_DIR/tools/$tool_dir" ]; then
 		echo "ERROR: Required native Rust backend directory is missing: $SCRIPT_DIR/tools/$tool_dir" >&2
+		exit 1
+	fi
+done
+
+for tool_dir in "${NATIVE_GO_TOOLS[@]}"; do
+	if [ ! -d "$SCRIPT_DIR/tools/$tool_dir" ]; then
+		echo "ERROR: Required native Go backend directory is missing: $SCRIPT_DIR/tools/$tool_dir" >&2
 		exit 1
 	fi
 done
@@ -93,26 +111,24 @@ if command -v rsync &>/dev/null; then
 		--exclude='dist/'
 		--exclude='native_*_go'
 	)
-	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_yaml_loader_go/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_yaml_loader_go/"
+	for tool_dir in "${NATIVE_GO_TOOLS[@]}"; do
+		rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/$tool_dir/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/$tool_dir/"
+	done
 	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_yaml_loader_rust/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_yaml_loader_rust/"
-	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_llvm_cov_loader_go/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_llvm_cov_loader_go/"
 	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_llvm_cov_loader_rust/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_llvm_cov_loader_rust/"
-	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_debug_correlator_go/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_debug_correlator_go/"
 	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_debug_correlator_rust/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_debug_correlator_rust/"
-	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_overlay_backend_go/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_overlay_backend_go/"
 	rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/native_overlay_backend_rust/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_overlay_backend_rust/"
 	for tool_dir in "${REQUIRED_NATIVE_RUST_TOOLS[@]}"; do
 		rsync -a "${RSYNC_EXCLUDES[@]}" "$SCRIPT_DIR/tools/$tool_dir/" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/$tool_dir/"
 	done
 else
 	echo "rsync not found, falling back to cp -rf for native tools"
-	cp -rf "$SCRIPT_DIR/tools/native_yaml_loader_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
+	for tool_dir in "${NATIVE_GO_TOOLS[@]}"; do
+		cp -rf "$SCRIPT_DIR/tools/$tool_dir" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
+	done
 	cp -rf "$SCRIPT_DIR/tools/native_yaml_loader_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
-	cp -rf "$SCRIPT_DIR/tools/native_llvm_cov_loader_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
 	cp -rf "$SCRIPT_DIR/tools/native_llvm_cov_loader_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
-	cp -rf "$SCRIPT_DIR/tools/native_debug_correlator_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
 	cp -rf "$SCRIPT_DIR/tools/native_debug_correlator_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
-	cp -rf "$SCRIPT_DIR/tools/native_overlay_backend_go" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
 	cp -rf "$SCRIPT_DIR/tools/native_overlay_backend_rust" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
 	for tool_dir in "${REQUIRED_NATIVE_RUST_TOOLS[@]}"; do
 		cp -rf "$SCRIPT_DIR/tools/$tool_dir" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/"
@@ -125,10 +141,9 @@ rm -rf "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/nat
 for tool_dir in "${REQUIRED_NATIVE_RUST_TOOLS[@]}"; do
 	rm -rf "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/$tool_dir/target"
 done
-rm -f "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_yaml_loader_go/native_yaml_loader_go"
-rm -f "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_llvm_cov_loader_go/native_llvm_cov_loader_go"
-rm -f "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_debug_correlator_go/native_debug_correlator_go"
-rm -f "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/native_overlay_backend_go/native_overlay_backend_go"
+for tool_dir in "${NATIVE_GO_TOOLS[@]}"; do
+	rm -f "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/tools/$tool_dir/$tool_dir"
+done
 cp "$SCRIPT_DIR/requirements.txt" "$OSS_FUZZ_DIR/infra/base-images/base-builder/fuzz-introspector/"
 
 # Step 4: Update requirements.txt to use tree-sitter >= 0.25.0
@@ -192,7 +207,8 @@ skip == 0 {
 mv "$tmp_dockerfile" "$DOCKERFILE"
 
 tmp_dockerfile="${DOCKERFILE}.tmp"
-native_loader_block=$(cat <<'EOF'
+native_loader_block=$(
+	cat <<'EOF'
 # Fuzz Introspector native loader backends (auto-generated by build_with_fixes.sh)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl && \
@@ -214,6 +230,10 @@ RUN apt-get update && \
     cd /fuzz-introspector/tools/native_llvm_cov_loader_go && /usr/local/go/bin/go build -o /opt/fuzz-introspector/bin/native_llvm_cov_loader_go . && \
     cd /fuzz-introspector/tools/native_debug_correlator_go && /usr/local/go/bin/go build -o /opt/fuzz-introspector/bin/native_debug_correlator_go . && \
     cd /fuzz-introspector/tools/native_overlay_backend_go && /usr/local/go/bin/go build -o /opt/fuzz-introspector/bin/native_overlay_backend_go . && \
+    cd /fuzz-introspector/tools/native_analysis_plugins_go && /usr/local/go/bin/go build -o /opt/fuzz-introspector/bin/native_analysis_plugins_go . && \
+    cd /fuzz-introspector/tools/native_reachability_go && /usr/local/go/bin/go build -o /opt/fuzz-introspector/bin/native_reachability_go . && \
+    cd /fuzz-introspector/tools/native_filter_functions_go && /usr/local/go/bin/go build -o /opt/fuzz-introspector/bin/native_filter_functions_go . && \
+    cd /fuzz-introspector/tools/native_calltree_bitmap_go && /usr/local/go/bin/go build -o /opt/fuzz-introspector/bin/native_calltree_bitmap_go . && \
     cd /fuzz-introspector/tools/native_overlay_backend_rust && /root/.cargo/bin/cargo build --release && \
     cp target/release/native_overlay_backend_rust /opt/fuzz-introspector/bin/native_overlay_backend_rust && \
     cd /fuzz-introspector/tools/native_analysis_plugins_rust && /root/.cargo/bin/cargo build --release && \
@@ -242,6 +262,10 @@ ENV FI_DEBUG_YAML_LOADER=rust \
     FI_DEBUG_YAML_LOADER_GO_BIN=/opt/fuzz-introspector/bin/native_yaml_loader_go \
     FI_PROFILE_YAML_LOADER_GO_BIN=/opt/fuzz-introspector/bin/native_yaml_loader_go \
     FI_LLVM_COV_LOADER_GO_BIN=/opt/fuzz-introspector/bin/native_llvm_cov_loader_go \
+    FI_NATIVE_PLUGINS_GO_BIN=/opt/fuzz-introspector/bin/native_analysis_plugins_go \
+    FI_REACHABILITY_GO_BIN=/opt/fuzz-introspector/bin/native_reachability_go \
+    FI_FILTER_GO_BIN=/opt/fuzz-introspector/bin/native_filter_functions_go \
+    FI_CALLTREE_BITMAP_GO_BIN=/opt/fuzz-introspector/bin/native_calltree_bitmap_go \
     FI_REACHABILITY_RUST_BIN=/opt/fuzz-introspector/bin/native_reachability_rust \
     FI_FILTER_RUST_BIN=/opt/fuzz-introspector/bin/native_filter_functions_rust \
     FI_CALLTREE_BITMAP_RUST_BIN=/opt/fuzz-introspector/bin/native_calltree_bitmap_rust \

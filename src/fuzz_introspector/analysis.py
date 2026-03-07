@@ -79,7 +79,11 @@ FI_IF_DEBUG_CORRELATOR_STRICT_ENV = "FI_IF_DEBUG_CORRELATOR_STRICT"
 _IF_DEBUG_SIGNATURE_CORRELATION_STAGE = "if_debug_signature_correlation"
 FI_FILTER_BACKEND_ENV = "FI_FILTER_BACKEND"
 FI_FILTER_RUST_BIN_ENV = "FI_FILTER_RUST_BIN"
-_FILTER_BINARY_NAME = "native_filter_functions_rust"
+FI_FILTER_GO_BIN_ENV = "FI_FILTER_GO_BIN"
+_FILTER_BINARY_NAMES = {
+    backend_loaders.BACKEND_RUST: "native_filter_functions_rust",
+    backend_loaders.BACKEND_GO: "native_filter_functions_go",
+}
 _BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
 _BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
 
@@ -89,46 +93,59 @@ _BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
 # binary for dramatically better throughput on large codebases.
 
 
+def _resolve_filter_binary(backend: str) -> str:
+    """Locate the native filter binary for the selected backend."""
+    command = backend_loaders.resolve_backend_command("FI_FILTER", backend)
+    if command:
+        return command[0]
+
+    binary_name = _FILTER_BINARY_NAMES.get(backend, "")
+    if not binary_name:
+        return ""
+
+    repo_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
+    repo_candidate = os.path.join(
+        repo_root,
+        "tools",
+        binary_name,
+        "target",
+        "release",
+        binary_name,
+    )
+    if backend == backend_loaders.BACKEND_GO:
+        repo_candidate = os.path.join(repo_root, "tools", binary_name,
+                                      binary_name)
+    if os.path.isfile(repo_candidate) and os.access(repo_candidate, os.X_OK):
+        return repo_candidate
+
+    return shutil.which(binary_name) or ""
+
+
 def _filter_profiles_native(
     profiles: list[fuzzer_profile.FuzzerProfile],
     exclude_patterns: list[str],
     exclude_function_patterns: list[str],
 ) -> list[fuzzer_profile.FuzzerProfile] | None:
-    """Filter profiles using the native Rust binary.
+    """Filter profiles using the selected native backend.
 
     Returns the filtered profile list on success, or ``None`` on any
     failure so the caller can fall back to the Python implementation.
 
-    Only activated when ``FI_FILTER_BACKEND=rust`` (or the global
-    ``FI_NATIVE_BACKENDS=rust``).  The binary is located via
-    ``FI_FILTER_RUST_BIN`` (if set) or via :func:`shutil.which`.
+    Only activated when ``FI_FILTER_BACKEND`` (or ``FI_NATIVE_BACKENDS``)
+    selects ``rust`` or ``go``.
     """
     backend = backend_loaders.resolve_component_backend(FI_FILTER_BACKEND_ENV)
-    if backend != "rust":
+    if backend not in (backend_loaders.BACKEND_RUST,
+                       backend_loaders.BACKEND_GO):
         return None
 
-    bin_path = os.environ.get(FI_FILTER_RUST_BIN_ENV, "")
-    if not bin_path:
-        # Repo-relative path (matches overlay backend pattern).
-        repo_root = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
-        repo_candidate = os.path.join(
-            repo_root,
-            "tools",
-            _FILTER_BINARY_NAME,
-            "target",
-            "release",
-            _FILTER_BINARY_NAME,
-        )
-        if os.path.isfile(repo_candidate) and os.access(
-                repo_candidate, os.X_OK):
-            bin_path = repo_candidate
-    if not bin_path:
-        bin_path = shutil.which(_FILTER_BINARY_NAME) or ""
+    binary_name = _FILTER_BINARY_NAMES[backend]
+    bin_path = _resolve_filter_binary(backend)
     if not bin_path:
         logger.debug(
             "%s binary not found; falling back to Python",
-            _FILTER_BINARY_NAME,
+            binary_name,
         )
         return None
 
@@ -169,8 +186,7 @@ def _filter_profiles_native(
         }
         payload["profiles"].append(entry)
 
-    logger.info("Invoking %s for %d profiles", _FILTER_BINARY_NAME,
-                len(profiles))
+    logger.info("Invoking %s for %d profiles", binary_name, len(profiles))
     t0 = time.monotonic()
 
     try:
@@ -184,7 +200,7 @@ def _filter_profiles_native(
     except (OSError, subprocess.TimeoutExpired) as exc:
         logger.warning(
             "%s failed (%s); falling back to Python",
-            _FILTER_BINARY_NAME,
+            binary_name,
             exc,
         )
         return None
@@ -192,7 +208,7 @@ def _filter_profiles_native(
     if result.returncode != 0:
         logger.warning(
             "%s exited %d; falling back to Python",
-            _FILTER_BINARY_NAME,
+            binary_name,
             result.returncode,
         )
         if result.stderr:
@@ -204,7 +220,7 @@ def _filter_profiles_native(
     except json.JSONDecodeError as exc:
         logger.warning(
             "%s produced invalid JSON (%s); falling back to Python",
-            _FILTER_BINARY_NAME,
+            binary_name,
             exc,
         )
         return None
@@ -212,7 +228,7 @@ def _filter_profiles_native(
     if output.get("status") != "success":
         logger.warning(
             "%s returned status=%r reason=%r; falling back to Python",
-            _FILTER_BINARY_NAME,
+            binary_name,
             output.get("status"),
             output.get("reason"),
         )
@@ -271,6 +287,7 @@ def _filter_profiles_native(
 
 FI_NATIVE_PLUGINS_ENV = "FI_NATIVE_PLUGINS"
 _NATIVE_PLUGINS_RUST_VALUE = "rust"
+_NATIVE_PLUGINS_GO_VALUE = "go"
 
 # Plugin names handled by the Rust binary.
 _NATIVE_PLUGIN_NAMES: frozenset[str] = frozenset({
@@ -449,15 +466,20 @@ def _serialize_project_for_native_plugins(
 
 
 class NativePluginProxy:
-    """Invokes the native_analysis_plugins_rust binary for analysis plugins.
+    """Invokes the selected native analysis-plugin binary.
 
-    This is an *opt-in* accelerator.  When ``FI_NATIVE_PLUGINS=rust`` is set
-    and the binary is on ``PATH``, the proxy is tried first.  Any plugin whose
-    native result is empty (or the binary is missing / fails) falls back
+    This is an *opt-in* accelerator.  When ``FI_NATIVE_PLUGINS`` (or the
+    global ``FI_NATIVE_BACKENDS``) selects ``rust`` or ``go`` and a matching
+    binary is available, the proxy is tried first.  Any plugin whose native
+    result is empty (or the binary is missing / fails) falls back
     transparently to the ordinary Python plugin.
     """
 
     NATIVE_BINARY = "native_analysis_plugins_rust"
+    NATIVE_BINARY_BY_BACKEND = {
+        backend_loaders.BACKEND_RUST: "native_analysis_plugins_rust",
+        backend_loaders.BACKEND_GO: "native_analysis_plugins_go",
+    }
     SCHEMA_VERSION = 1
     TIMEOUT_SECONDS = 300
 
@@ -474,30 +496,65 @@ class NativePluginProxy:
                                                               ...]]] = set()
 
     @staticmethod
+    def selected_backend() -> str:
+        """Return the configured native plugin backend, if any."""
+        fi_plugins_raw = os.environ.get(FI_NATIVE_PLUGINS_ENV,
+                                        "").strip().lower()
+        if fi_plugins_raw:
+            if fi_plugins_raw in (_NATIVE_PLUGINS_RUST_VALUE,
+                                  _NATIVE_PLUGINS_GO_VALUE):
+                return fi_plugins_raw
+            return backend_loaders.BACKEND_PYTHON
+
+        global_backend = backend_loaders.parse_native_backends_env()
+        if global_backend in (backend_loaders.BACKEND_RUST,
+                              backend_loaders.BACKEND_GO):
+            return global_backend
+        return backend_loaders.BACKEND_PYTHON
+
+    @staticmethod
     def is_enabled() -> bool:
         """Return True when the caller has opted in to native plugin dispatch.
 
         Priority:
-        1. ``FI_NATIVE_PLUGINS`` (per-component, explicit) — if set to 'rust',
-           returns True; if set to any other non-empty value, returns False
+        1. ``FI_NATIVE_PLUGINS`` (per-component, explicit) — if set to
+           ``'rust'`` or ``'go'``, returns True; if set to any other non-empty
+           value, returns False
            (explicit opt-out even when FI_NATIVE_BACKENDS=rust).
-        2. ``FI_NATIVE_BACKENDS`` (global) — activates native plugins only
-           when set to 'rust'.
+        2. ``FI_NATIVE_BACKENDS`` (global) — activates native plugins when set
+           to ``'rust'`` or ``'go'``.
         """
-        # Per-component var takes precedence: explicit opt-in or opt-out.
-        fi_plugins_raw = os.environ.get(FI_NATIVE_PLUGINS_ENV,
-                                        "").strip().lower()
-        if fi_plugins_raw:
-            return fi_plugins_raw == _NATIVE_PLUGINS_RUST_VALUE
-
-        # Fall back to the global unified backend selector.
-        global_backend = backend_loaders.parse_native_backends_env()
-        return global_backend == backend_loaders.BACKEND_RUST
+        return NativePluginProxy.selected_backend() in (
+            backend_loaders.BACKEND_RUST,
+            backend_loaders.BACKEND_GO,
+        )
 
     @staticmethod
     def find_binary() -> Optional[str]:
-        """Return the absolute path to the Rust binary, or None."""
-        return shutil.which(NativePluginProxy.NATIVE_BINARY)
+        """Return the absolute path to the selected native-plugin binary."""
+        backend = NativePluginProxy.selected_backend()
+        if backend not in NativePluginProxy.NATIVE_BINARY_BY_BACKEND:
+            return None
+
+        command = backend_loaders.resolve_backend_command(
+            FI_NATIVE_PLUGINS_ENV, backend)
+        if command:
+            return command[0]
+
+        binary_name = NativePluginProxy.NATIVE_BINARY_BY_BACKEND[backend]
+        repo_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
+        if backend == backend_loaders.BACKEND_RUST:
+            repo_candidate = os.path.join(repo_root, "tools", binary_name,
+                                          "target", "release", binary_name)
+        else:
+            repo_candidate = os.path.join(repo_root, "tools", binary_name,
+                                          binary_name)
+        if os.path.isfile(repo_candidate) and os.access(
+                repo_candidate, os.X_OK):
+            return repo_candidate
+
+        return shutil.which(binary_name)
 
     def _project_cache_key(
         self,

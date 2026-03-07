@@ -45,7 +45,11 @@ logger = logging.getLogger(name=__name__)
 # Environment variables for native calltree bitmap backend
 FI_CALLTREE_BITMAP_BACKEND_ENV = "FI_CALLTREE_BITMAP_BACKEND"
 FI_CALLTREE_BITMAP_RUST_BIN_ENV = "FI_CALLTREE_BITMAP_RUST_BIN"
-_BITMAP_BINARY_NAME = "native_calltree_bitmap_rust"
+FI_CALLTREE_BITMAP_GO_BIN_ENV = "FI_CALLTREE_BITMAP_GO_BIN"
+_BITMAP_BINARY_NAMES = {
+    backend_loaders.BACKEND_RUST: "native_calltree_bitmap_rust",
+    backend_loaders.BACKEND_GO: "native_calltree_bitmap_go",
+}
 
 
 class HTML_HEADING(Enum):
@@ -466,42 +470,42 @@ def create_calltree_color_distribution_table(color_list: List[str]) -> str:
     return html_string
 
 
-def _resolve_bitmap_binary() -> str | None:
-    """Locate the native calltree bitmap binary.
+def _resolve_bitmap_binary(backend: str) -> str | None:
+    """Locate the native calltree bitmap binary for the selected backend.
 
     Discovery order:
-      1. ``FI_CALLTREE_BITMAP_RUST_BIN`` env var (explicit path)
-      2. Repo-relative ``tools/native_calltree_bitmap_rust/target/release/``
+      1. Backend-specific env var or ``FI_CALLTREE_BITMAP_BIN``
+      2. Repo-relative tool binary
       3. ``shutil.which()`` on PATH
     """
-    explicit = os.environ.get(FI_CALLTREE_BITMAP_RUST_BIN_ENV, "").strip()
-    if explicit:
+    command = backend_loaders.resolve_backend_command("FI_CALLTREE_BITMAP",
+                                                      backend)
+    if command:
+        explicit = command[0]
         if os.path.isfile(explicit):
             return explicit
         logger.warning(
-            "%s=%s does not exist; trying fallbacks",
-            FI_CALLTREE_BITMAP_RUST_BIN_ENV,
-            explicit,
-        )
+            "Resolved bitmap command %s does not exist; trying fallbacks",
+            explicit)
 
-    # Repo-relative: <repo>/tools/native_calltree_bitmap_rust/target/release/...
+    binary_name = _BITMAP_BINARY_NAMES.get(backend, "")
+    if not binary_name:
+        return None
+
     try:
         repo_root = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        candidate = os.path.join(
-            repo_root,
-            "tools",
-            _BITMAP_BINARY_NAME,
-            "target",
-            "release",
-            _BITMAP_BINARY_NAME,
-        )
+        candidate = os.path.join(repo_root, "tools", binary_name, "target",
+                                 "release", binary_name)
+        if backend == backend_loaders.BACKEND_GO:
+            candidate = os.path.join(repo_root, "tools", binary_name,
+                                     binary_name)
         if os.path.isfile(candidate):
             return candidate
     except Exception:
         pass
 
-    found = shutil.which(_BITMAP_BINARY_NAME)
+    found = shutil.which(binary_name)
     if found:
         return found
 
@@ -510,7 +514,7 @@ def _resolve_bitmap_binary() -> str | None:
 
 def render_calltree_bitmaps_native(
     jobs: list[tuple[str, list[str], str]], ) -> dict[str, list[str]] | None:
-    """Render calltree bitmaps using the native Rust backend.
+    """Render calltree bitmaps using the selected native backend.
 
     Parameters
     ----------
@@ -524,10 +528,12 @@ def render_calltree_bitmaps_native(
     """
     backend = backend_loaders.resolve_component_backend(
         FI_CALLTREE_BITMAP_BACKEND_ENV)
-    if backend != "rust":
+    if backend not in (backend_loaders.BACKEND_RUST,
+                       backend_loaders.BACKEND_GO):
         return None
 
-    bin_path = _resolve_bitmap_binary()
+    binary_name = _BITMAP_BINARY_NAMES[backend]
+    bin_path = _resolve_bitmap_binary(backend)
     if bin_path is None:
         logger.debug(
             "Native bitmap binary not found; falling back to matplotlib")
@@ -559,18 +565,19 @@ def render_calltree_bitmaps_native(
             timeout=120,
         )
     except FileNotFoundError:
-        logger.warning("Native bitmap binary not found at %s", bin_path)
+        logger.warning("%s binary not found at %s", binary_name, bin_path)
         return None
     except subprocess.TimeoutExpired:
-        logger.warning("Native bitmap binary timed out after 120s")
+        logger.warning("%s timed out after 120s", binary_name)
         return None
     except OSError as exc:
-        logger.warning("Failed to run native bitmap binary: %s", exc)
+        logger.warning("Failed to run %s: %s", binary_name, exc)
         return None
 
     if result.returncode != 0:
         logger.warning(
-            "Native bitmap binary exited with code %d; stderr: %s",
+            "%s exited with code %d; stderr: %s",
+            binary_name,
             result.returncode,
             result.stderr[:500] if result.stderr else "(empty)",
         )
@@ -579,12 +586,13 @@ def render_calltree_bitmaps_native(
     try:
         output = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        logger.warning("Native bitmap binary produced invalid JSON: %s", exc)
+        logger.warning("%s produced invalid JSON: %s", binary_name, exc)
         return None
 
     if output.get("status") not in ("success", "partial"):
         logger.warning(
-            "Native bitmap binary reported status=%s: %s",
+            "%s reported status=%s: %s",
+            binary_name,
             output.get("status"),
             output.get("error", ""),
         )
@@ -603,7 +611,7 @@ def render_calltree_bitmaps_native(
                     break
 
     if not result_map:
-        logger.warning("Native bitmap binary produced no successful results")
+        logger.warning("%s produced no successful results", binary_name)
         return None
 
     logger.info(
