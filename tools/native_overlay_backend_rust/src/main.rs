@@ -12,6 +12,8 @@ struct OverlayRequest {
     #[serde(default)]
     output_dir: String,
     #[serde(default)]
+    target_lang: String,
+    #[serde(default)]
     target_coverage_url: String,
     #[serde(default)]
     callsites: Vec<Callsite>,
@@ -21,11 +23,14 @@ struct OverlayRequest {
     functions: BTreeMap<String, FunctionInput>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct Callsite {
     cov_ct_idx: i64,
     depth: i64,
     dst_function_name: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    coverage_lookup_name: String,
     #[allow(dead_code)]
     dst_function_source_file: String,
     src_linenumber: i64,
@@ -33,6 +38,8 @@ struct Callsite {
     cov_link: String,
     #[serde(default)]
     cov_callsite_link: String,
+    #[serde(default)]
+    python_parent_file_hit: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -46,12 +53,24 @@ struct CoverageInput {
     file_map: BTreeMap<String, Vec<[i64; 2]>>,
     #[serde(default)]
     branch_cov_map: BTreeMap<String, Vec<i64>>,
+    #[serde(default)]
+    kernel_coverage: Vec<KernelModule>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct KernelModule {
+    #[serde(rename = "Filename")]
+    filename: String,
+    #[serde(rename = "Covered")]
+    covered: Vec<i64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct FunctionInput {
     #[serde(default)]
     function_source_file: String,
+    #[serde(default)]
+    coverage_lookup_name: String,
     #[serde(default)]
     total_cyclomatic_complexity: i64,
     #[serde(default)]
@@ -140,9 +159,92 @@ fn get_parent_name(stack: &HashMap<i64, String>, depth: i64) -> Option<&str> {
     stack.get(&(depth - 1)).map(|name| name.as_str())
 }
 
-fn get_hitcount(coverage: &CoverageInput, callstack: &HashMap<i64, String>, node: &Callsite, idx: usize) -> i64 {
+fn callsite_coverage_lookup_name(node: &Callsite) -> &str {
+    if node.coverage_lookup_name.is_empty() {
+        &node.dst_function_name
+    } else {
+        &node.coverage_lookup_name
+    }
+}
+
+fn normalize_kernel_target_file(path: &str) -> &str {
+    path.trim_start_matches("../")
+}
+
+fn kernel_hitcount(modules: &[KernelModule], target_file: &str, line_number: i64) -> i64 {
+    let target_file = normalize_kernel_target_file(target_file);
+    if target_file.is_empty() || line_number <= 0 {
+        return 0;
+    }
+    for module in modules {
+        if !module.filename.ends_with(target_file) {
+            continue;
+        }
+        for covered_line in &module.covered {
+            for offset in 0..10 {
+                if *covered_line == line_number + offset {
+                    return 100;
+                }
+            }
+        }
+    }
+    0
+}
+
+fn resolve_coverage_lookup_name<'a>(request: &'a OverlayRequest, function_name: &'a str) -> &'a str {
+    request
+        .functions
+        .get(function_name)
+        .and_then(|function| {
+            if function.coverage_lookup_name.is_empty() {
+                None
+            } else {
+                Some(function.coverage_lookup_name.as_str())
+            }
+        })
+        .unwrap_or(function_name)
+}
+
+fn lookup_cov_rows<'a>(request: &'a OverlayRequest, function_name: &'a str) -> Option<&'a Vec<[i64; 2]>> {
+    if let Some(rows) = request.coverage.covmap.get(function_name) {
+        return Some(rows);
+    }
+    let lookup_name = resolve_coverage_lookup_name(request, function_name);
+    if lookup_name != function_name {
+        return request.coverage.covmap.get(lookup_name);
+    }
+    None
+}
+
+fn is_function_hit(request: &OverlayRequest, function_name: &str) -> bool {
+    lookup_cov_rows(request, function_name)
+        .map(|rows| rows.iter().any(|row| row[1] > 0))
+        .unwrap_or(false)
+}
+
+fn is_function_line_hit(request: &OverlayRequest, function_name: &str, line_number: i64) -> bool {
+    lookup_cov_rows(request, function_name)
+        .map(|rows| {
+            rows.iter()
+                .find(|row| row[0] == line_number)
+                .map(|row| row[1] != 0)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
+fn get_hitcount(
+    request: &OverlayRequest,
+    callstack: &HashMap<i64, String>,
+    callstack_source_files: &HashMap<i64, String>,
+    node: &Callsite,
+    idx: usize,
+) -> i64 {
     if idx == 0 {
-        if let Some(rows) = coverage.covmap.get(&node.dst_function_name) {
+        if request.target_lang == "c-cpp" && request.coverage.r#type == "kernel" {
+            return 100;
+        }
+        if let Some(rows) = request.coverage.covmap.get(callsite_coverage_lookup_name(node)) {
             return rows.iter().map(|row| row[1]).max().unwrap_or(0);
         }
         return 0;
@@ -151,7 +253,22 @@ fn get_hitcount(coverage: &CoverageInput, callstack: &HashMap<i64, String>, node
     let Some(parent_name) = get_parent_name(callstack, node.depth) else {
         return 0;
     };
-    let Some(rows) = coverage.covmap.get(parent_name) else {
+    if request.target_lang == "c-cpp" && request.coverage.r#type == "kernel" {
+        return callstack_source_files
+            .get(&(node.depth - 1))
+            .map(|parent_source_file| {
+                kernel_hitcount(
+                    &request.coverage.kernel_coverage,
+                    parent_source_file,
+                    node.src_linenumber,
+                )
+            })
+            .unwrap_or(0);
+    }
+    if node.python_parent_file_hit {
+        return 200;
+    }
+    let Some(rows) = request.coverage.covmap.get(parent_name) else {
         return 0;
     };
     for row in rows {
@@ -236,13 +353,15 @@ fn run() -> Result<(), String> {
         .map_err(|err| format!("failed creating output_dir {}: {err}", output_dir.display()))?;
 
     let mut callstack: HashMap<i64, String> = HashMap::new();
+    let mut callstack_source_files: HashMap<i64, String> = HashMap::new();
     let mut overlay_nodes: Vec<OverlayNodeOutput> = Vec::new();
-    let mut sorted_callsites = request.callsites;
+    let mut sorted_callsites = request.callsites.clone();
     sorted_callsites.sort_by_key(|node| node.cov_ct_idx);
 
     for (idx, node) in sorted_callsites.iter().enumerate() {
-        callstack.insert(node.depth, node.dst_function_name.clone());
-        let hit_count = get_hitcount(&request.coverage, &callstack, node, idx);
+        callstack.insert(node.depth, callsite_coverage_lookup_name(node).to_string());
+        callstack_source_files.insert(node.depth, node.dst_function_source_file.clone());
+        let hit_count = get_hitcount(&request, &callstack, &callstack_source_files, node, idx);
         overlay_nodes.push(OverlayNodeOutput {
             cov_ct_idx: node.cov_ct_idx,
             cov_hitcount: hit_count,
@@ -333,12 +452,7 @@ fn run() -> Result<(), String> {
                     if unique_funcs.contains(func_name) {
                         unique_reachable += complexity;
                     }
-                    let is_hit = request
-                        .coverage
-                        .covmap
-                        .get(func_name)
-                        .map(|rows| rows.iter().any(|row| row[1] > 0))
-                        .unwrap_or(false);
+                    let is_hit = is_function_hit(&request, func_name);
                     if !is_hit {
                         not_covered += complexity;
                         if unique_funcs.contains(func_name) {
@@ -423,12 +537,25 @@ fn run() -> Result<(), String> {
             if branch_line > blocked_line {
                 continue;
             }
-            if is_side_hit(
-                &request.coverage,
-                &function_data.function_source_file,
-                &function_name,
-                blocked_line,
-            ) {
+            if request.coverage.r#type == "file" {
+                if is_side_hit(
+                    &request.coverage,
+                    &function_data.function_source_file,
+                    &function_name,
+                    blocked_line,
+                ) {
+                    continue;
+                }
+            } else if request.target_lang == "c-cpp" && request.coverage.r#type == "kernel" {
+                if kernel_hitcount(
+                    &request.coverage.kernel_coverage,
+                    &function_data.function_source_file,
+                    blocked_line,
+                ) > 0
+                {
+                    continue;
+                }
+            } else if is_function_line_hit(&request, &function_name, blocked_line) {
                 continue;
             }
 
@@ -537,4 +664,222 @@ fn run() -> Result<(), String> {
         .map_err(|err| format!("failed writing newline: {err}"))?;
     let _ = &request.target_coverage_url;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn overlay_request_with_coverage(coverage: CoverageInput) -> OverlayRequest {
+        OverlayRequest {
+            output_dir: String::new(),
+            target_lang: String::new(),
+            target_coverage_url: String::new(),
+            callsites: Vec::new(),
+            coverage,
+            functions: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn get_hitcount_uses_python_parent_file_hit_override() {
+        let coverage = CoverageInput {
+            r#type: "file".to_string(),
+            covmap: BTreeMap::from([("pkg.entry".to_string(), vec![[1, 5]])]),
+            file_map: BTreeMap::new(),
+            branch_cov_map: BTreeMap::new(),
+            kernel_coverage: Vec::new(),
+        };
+        let request = overlay_request_with_coverage(coverage);
+        let callstack = HashMap::from([(0, "pkg.entry".to_string())]);
+        let callstack_source_files = HashMap::from([(0, "pkg.py".to_string())]);
+        let node = Callsite {
+            cov_ct_idx: 1,
+            depth: 1,
+            dst_function_name: "pkg.leaf".to_string(),
+            coverage_lookup_name: "pkg.leaf".to_string(),
+            dst_function_source_file: "pkg.py".to_string(),
+            src_linenumber: 12,
+            cov_link: String::new(),
+            cov_callsite_link: String::new(),
+            python_parent_file_hit: true,
+        };
+
+        assert_eq!(
+            get_hitcount(&request, &callstack, &callstack_source_files, &node, 1),
+            200
+        );
+    }
+
+    #[test]
+    fn get_hitcount_uses_parent_covmap_without_python_override() {
+        let coverage = CoverageInput {
+            r#type: "function".to_string(),
+            covmap: BTreeMap::from([("entry".to_string(), vec![[7, 11]])]),
+            file_map: BTreeMap::new(),
+            branch_cov_map: BTreeMap::new(),
+            kernel_coverage: Vec::new(),
+        };
+        let request = overlay_request_with_coverage(coverage);
+        let callstack = HashMap::from([(0, "entry".to_string())]);
+        let callstack_source_files = HashMap::from([(0, "a.c".to_string())]);
+        let node = Callsite {
+            cov_ct_idx: 1,
+            depth: 1,
+            dst_function_name: "leaf".to_string(),
+            coverage_lookup_name: "leaf".to_string(),
+            dst_function_source_file: "a.c".to_string(),
+            src_linenumber: 7,
+            cov_link: String::new(),
+            cov_callsite_link: String::new(),
+            python_parent_file_hit: false,
+        };
+
+        assert_eq!(
+            get_hitcount(&request, &callstack, &callstack_source_files, &node, 1),
+            11
+        );
+    }
+
+    #[test]
+    fn get_hitcount_uses_coverage_lookup_name_for_root_and_parent() {
+        let request = OverlayRequest {
+            output_dir: String::new(),
+            target_lang: "c-cpp".to_string(),
+            target_coverage_url: String::new(),
+            callsites: Vec::new(),
+            coverage: CoverageInput {
+                r#type: "function".to_string(),
+                covmap: BTreeMap::from([("entry()".to_string(), vec![[1, 5], [7, 11]])]),
+                file_map: BTreeMap::new(),
+                branch_cov_map: BTreeMap::new(),
+                kernel_coverage: Vec::new(),
+            },
+            functions: BTreeMap::new(),
+        };
+        let root = Callsite {
+            cov_ct_idx: 0,
+            depth: 0,
+            dst_function_name: "_Z5entryv".to_string(),
+            coverage_lookup_name: "entry()".to_string(),
+            dst_function_source_file: "a.cc".to_string(),
+            src_linenumber: 1,
+            cov_link: String::new(),
+            cov_callsite_link: String::new(),
+            python_parent_file_hit: false,
+        };
+        let child = Callsite {
+            cov_ct_idx: 1,
+            depth: 1,
+            dst_function_name: "_Z4leafv".to_string(),
+            coverage_lookup_name: "leaf()".to_string(),
+            dst_function_source_file: "a.cc".to_string(),
+            src_linenumber: 7,
+            cov_link: String::new(),
+            cov_callsite_link: String::new(),
+            python_parent_file_hit: false,
+        };
+        let root_stack = HashMap::from([(0, "entry()".to_string())]);
+        let source_files = HashMap::from([(0, "a.cc".to_string())]);
+
+        assert_eq!(get_hitcount(&request, &HashMap::new(), &HashMap::new(), &root, 0), 11);
+        assert_eq!(get_hitcount(&request, &root_stack, &source_files, &child, 1), 11);
+    }
+
+    #[test]
+    fn get_hitcount_uses_kernel_semantics_for_cpp() {
+        let request = OverlayRequest {
+            output_dir: String::new(),
+            target_lang: "c-cpp".to_string(),
+            target_coverage_url: String::new(),
+            callsites: Vec::new(),
+            coverage: CoverageInput {
+                r#type: "kernel".to_string(),
+                covmap: BTreeMap::new(),
+                file_map: BTreeMap::new(),
+                branch_cov_map: BTreeMap::new(),
+                kernel_coverage: vec![KernelModule {
+                    filename: "/tmp/build/src/foo.c".to_string(),
+                    covered: vec![18],
+                }],
+            },
+            functions: BTreeMap::new(),
+        };
+        let root = Callsite {
+            cov_ct_idx: 0,
+            depth: 0,
+            dst_function_name: "entry".to_string(),
+            coverage_lookup_name: "entry".to_string(),
+            dst_function_source_file: "../src/foo.c".to_string(),
+            src_linenumber: 1,
+            cov_link: String::new(),
+            cov_callsite_link: String::new(),
+            python_parent_file_hit: false,
+        };
+        let child = Callsite {
+            cov_ct_idx: 1,
+            depth: 1,
+            dst_function_name: "leaf".to_string(),
+            coverage_lookup_name: "leaf".to_string(),
+            dst_function_source_file: "../src/bar.c".to_string(),
+            src_linenumber: 10,
+            cov_link: String::new(),
+            cov_callsite_link: String::new(),
+            python_parent_file_hit: false,
+        };
+        let callstack = HashMap::from([(0, "entry".to_string())]);
+        let source_files = HashMap::from([(0, "../src/foo.c".to_string())]);
+
+        assert_eq!(get_hitcount(&request, &HashMap::new(), &HashMap::new(), &root, 0), 100);
+        assert_eq!(get_hitcount(&request, &callstack, &source_files, &child, 1), 100);
+    }
+
+    #[test]
+    fn function_hit_helpers_resolve_demangled_lookup_names() {
+        let request = OverlayRequest {
+            output_dir: String::new(),
+            target_lang: "c-cpp".to_string(),
+            target_coverage_url: String::new(),
+            callsites: Vec::new(),
+            coverage: CoverageInput {
+                r#type: "function".to_string(),
+                covmap: BTreeMap::from([("foo()".to_string(), vec![[11, 3]])]),
+                file_map: BTreeMap::new(),
+                branch_cov_map: BTreeMap::new(),
+                kernel_coverage: Vec::new(),
+            },
+            functions: BTreeMap::from([(
+                "_Z3foov".to_string(),
+                FunctionInput {
+                    function_source_file: "a.cc".to_string(),
+                    coverage_lookup_name: "foo()".to_string(),
+                    total_cyclomatic_complexity: 7,
+                    branch_profiles: BTreeMap::new(),
+                },
+            )]),
+        };
+
+        assert!(is_function_hit(&request, "_Z3foov"));
+        assert!(is_function_line_hit(&request, "_Z3foov", 11));
+        assert!(!is_function_line_hit(&request, "_Z3foov", 12));
+    }
+
+    #[test]
+    fn kernel_and_file_branch_blocker_checks_match_coverage_type() {
+        let file_coverage = CoverageInput {
+            r#type: "file".to_string(),
+            covmap: BTreeMap::from([("foo".to_string(), vec![[11, 0]])]),
+            file_map: BTreeMap::from([("a.py".to_string(), vec![[11, 1]])]),
+            branch_cov_map: BTreeMap::new(),
+            kernel_coverage: Vec::new(),
+        };
+        assert!(is_side_hit(&file_coverage, "a.py", "foo", 11));
+
+        let kernel_modules = vec![KernelModule {
+            filename: "/tmp/build/src/foo.c".to_string(),
+            covered: vec![15],
+        }];
+        assert_eq!(kernel_hitcount(&kernel_modules, "../src/foo.c", 10), 100);
+        assert_eq!(kernel_hitcount(&kernel_modules, "../src/foo.c", 16), 0);
+    }
 }

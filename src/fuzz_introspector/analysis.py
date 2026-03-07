@@ -1819,20 +1819,23 @@ def _build_overlay_native_payload(
         all_callsites = cfg_load.extract_all_callsites(profile.fuzzer_callsite_calltree)
         callstack: Dict[int, str] = {}
         for ct_idx, node in enumerate(all_callsites):
-            if profile.target_lang == "jvm":
-                demangled_name = utils.demangle_jvm_func(
-                    node.dst_function_source_file, node.dst_function_name
+            demangled_name = _get_overlay_coverage_lookup_name(profile, node)
+            python_parent_file_hit = False
+            if (
+                profile.target_lang == "python"
+                and profile.coverage is not None
+                and callstack_has_parent(node, callstack)
+            ):
+                python_parent_file_hit = profile.coverage.is_file_lineno_hit(
+                    callstack_get_parent(node, callstack), node.src_linenumber, True
                 )
-            elif profile.target_lang == "rust":
-                demangled_name = utils.demangle_rust_func(node.dst_function_name)
-            else:
-                demangled_name = utils.demangle_cpp_func(node.dst_function_name)
             callstack_set_curr_node(node, demangled_name, callstack)
             callsites.append(
                 {
                     "cov_ct_idx": ct_idx,
                     "depth": int(node.depth),
                     "dst_function_name": node.dst_function_name,
+                    "coverage_lookup_name": demangled_name,
                     "dst_function_source_file": node.dst_function_source_file,
                     "src_linenumber": node.src_linenumber,
                     "cov_link": get_url_to_cov_report(
@@ -1844,6 +1847,7 @@ def _build_overlay_native_payload(
                         profile,
                         target_coverage_url,
                     ),
+                    "python_parent_file_hit": python_parent_file_hit,
                 }
             )
 
@@ -1852,6 +1856,7 @@ def _build_overlay_native_payload(
         "covmap": {},
         "file_map": {},
         "branch_cov_map": {},
+        "kernel_coverage": [],
     }
     if profile.coverage is not None:
         coverage_payload = {
@@ -1865,6 +1870,7 @@ def _build_overlay_native_payload(
                 for file_name, hits in sorted(profile.coverage.file_map.items())
             },
             "branch_cov_map": dict(sorted(profile.coverage.branch_cov_map.items())),
+            "kernel_coverage": list(profile.coverage.kernel_coverage),
         }
 
     function_complexities: Dict[str, Any] = {}
@@ -1881,6 +1887,9 @@ def _build_overlay_native_payload(
             }
         function_complexities[function_name] = {
             "function_source_file": function_data.function_source_file,
+            "coverage_lookup_name": _get_overlay_function_coverage_lookup_name(
+                profile.target_lang, function_name, function_data.function_source_file
+            ),
             "total_cyclomatic_complexity": function_data.total_cyclomatic_complexity,
             "branch_profiles": branch_profiles,
         }
@@ -1894,6 +1903,27 @@ def _build_overlay_native_payload(
         "coverage": coverage_payload,
         "functions": function_complexities,
     }
+
+
+def _get_overlay_coverage_lookup_name(
+    profile: fuzzer_profile.FuzzerProfile,
+    node: cfg_load.CalltreeCallsite,
+) -> str:
+    return _get_overlay_function_coverage_lookup_name(
+        profile.target_lang, node.dst_function_name, node.dst_function_source_file
+    )
+
+
+def _get_overlay_function_coverage_lookup_name(
+    target_lang: str,
+    function_name: str,
+    function_source_file: str,
+) -> str:
+    if target_lang == "jvm":
+        return utils.demangle_jvm_func(function_source_file, function_name)
+    if target_lang == "rust":
+        return utils.demangle_rust_func(function_name)
+    return utils.demangle_cpp_func(function_name)
 
 
 def _resolve_overlay_artifact_path(
@@ -2430,14 +2460,7 @@ def _overlay_calltree_with_coverage_python(
         node.cov_ct_idx = ct_idx
         ct_idx += 1
 
-        if profile.target_lang == "jvm":
-            demangled_name = utils.demangle_jvm_func(
-                node.dst_function_source_file, node.dst_function_name
-            )
-        elif profile.target_lang == "rust":
-            demangled_name = utils.demangle_rust_func(node.dst_function_name)
-        else:
-            demangled_name = utils.demangle_cpp_func(node.dst_function_name)
+        demangled_name = _get_overlay_coverage_lookup_name(profile, node)
 
         # Add to callstack
         callstack_set_curr_node(node, demangled_name, callstack)

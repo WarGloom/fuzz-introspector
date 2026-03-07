@@ -30,9 +30,16 @@ class _CoverageStub:
         self.covmap = {"entry": [(1, 1)]}
         self.file_map = {}
         self.branch_cov_map = {}
+        self.kernel_coverage = []
+        self.file_hits = {}
 
     def get_type(self) -> str:
         return "function"
+
+    def is_file_lineno_hit(
+        self, target_file: str, lineno: int, resolve_name: bool = False
+    ) -> bool:
+        return self.file_hits.get((target_file, lineno, resolve_name), False)
 
 
 class _BranchSideStub:
@@ -995,6 +1002,104 @@ def test_overlay_native_payload_includes_python_link_fields() -> None:
     assert payload["callsites"][0]["cov_callsite_link"] == "#"
     assert payload["callsites"][1]["cov_link"] == "a.c:10:leaf"
     assert payload["callsites"][1]["cov_callsite_link"] == "a.c:10:entry"
+    assert payload["target_lang"] == "c-cpp"
+    assert payload["coverage"]["type"] == "function"
+
+
+def test_overlay_native_payload_uses_demangled_lookup_name_for_cpp() -> None:
+    root = cfg_load.CalltreeCallsite("_Z5entryv", "a.cc", 0, 1, None)
+    child = cfg_load.CalltreeCallsite("_Z4leafv", "a.cc", 1, 7, root)
+    root.children = [child]
+    profile = _ProfileStub(
+        identifier="fuzzer",
+        target_lang="c-cpp",
+        fuzzer_callsite_calltree=root,
+        coverage=_CoverageStub(),
+        dst_to_fd_cache={},
+        branch_blockers=[],
+    )
+
+    payload = analysis._build_overlay_native_payload(
+        profile,
+        _dummy_project(),
+        "https://cov.example",
+        "/tmp",
+    )
+
+    assert payload["callsites"][0]["dst_function_name"] == "_Z5entryv"
+    assert payload["callsites"][0]["coverage_lookup_name"] == "entry()"
+    assert payload["callsites"][1]["dst_function_name"] == "_Z4leafv"
+    assert payload["callsites"][1]["coverage_lookup_name"] == "leaf()"
+
+
+def test_overlay_native_payload_includes_kernel_coverage_data() -> None:
+    profile = _build_two_node_profile()
+    profile.coverage.kernel_coverage = [
+        {"Filename": "src/drivers/foo.c", "Covered": [10, 11, 12]}
+    ]
+    profile.coverage.get_type = lambda: "kernel"
+
+    payload = analysis._build_overlay_native_payload(
+        profile,
+        _dummy_project(),
+        "https://cov.example",
+        "/tmp",
+    )
+
+    assert payload["coverage"]["type"] == "kernel"
+    assert payload["coverage"]["kernel_coverage"] == [
+        {"Filename": "src/drivers/foo.c", "Covered": [10, 11, 12]}
+    ]
+    assert payload["callsites"][0]["dst_function_source_file"] == "a.c"
+
+
+def test_overlay_native_payload_includes_function_lookup_name_for_cpp() -> None:
+    profile = _dummy_profile()
+    project = SimpleNamespace(
+        all_functions={
+            "_Z5entryv": SimpleNamespace(
+                function_source_file="a.cc",
+                total_cyclomatic_complexity=10,
+                branch_profiles={},
+            )
+        }
+    )
+
+    payload = analysis._build_overlay_native_payload(
+        profile,
+        project,
+        "https://cov.example",
+        "/tmp",
+    )
+
+    assert payload["functions"]["_Z5entryv"]["coverage_lookup_name"] == "entry()"
+
+
+def test_overlay_native_payload_marks_python_parent_file_hit() -> None:
+    root = cfg_load.CalltreeCallsite("pkg.entry", "pkg.py", 0, 1, None)
+    child = cfg_load.CalltreeCallsite("pkg.leaf", "pkg.py", 1, 12, root)
+    root.children = [child]
+    coverage = _CoverageStub()
+    coverage.get_type = lambda: "file"
+    coverage.file_hits[("pkg.entry", 12, True)] = True
+    profile = _ProfileStub(
+        identifier="fuzzer",
+        target_lang="python",
+        fuzzer_callsite_calltree=root,
+        coverage=coverage,
+        dst_to_fd_cache={},
+        branch_blockers=[],
+    )
+
+    payload = analysis._build_overlay_native_payload(
+        profile,
+        _dummy_project(),
+        "https://cov.example",
+        "/tmp",
+    )
+
+    assert payload["callsites"][0]["python_parent_file_hit"] is False
+    assert payload["callsites"][1]["python_parent_file_hit"] is True
 
 
 def test_overlay_parity_detects_forward_red_and_sentinel_drift() -> None:

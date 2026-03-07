@@ -14,12 +14,15 @@ import (
 const schemaVersion = 1
 
 type callsite struct {
-	CovCtIdx        int    `json:"cov_ct_idx"`
-	Depth           int    `json:"depth"`
-	DstFunctionName string `json:"dst_function_name"`
-	CovLink         string `json:"cov_link"`
-	CovCallsiteLink string `json:"cov_callsite_link"`
-	SrcLineNumber   int    `json:"src_linenumber"`
+	CovCtIdx              int    `json:"cov_ct_idx"`
+	Depth                 int    `json:"depth"`
+	DstFunctionName       string `json:"dst_function_name"`
+	CoverageLookupName    string `json:"coverage_lookup_name"`
+	DstFunctionSourceFile string `json:"dst_function_source_file"`
+	CovLink               string `json:"cov_link"`
+	CovCallsiteLink       string `json:"cov_callsite_link"`
+	PythonParentFileHit   bool   `json:"python_parent_file_hit"`
+	SrcLineNumber         int    `json:"src_linenumber"`
 }
 
 type branchSide struct {
@@ -33,21 +36,30 @@ type branch struct {
 
 type functionData struct {
 	FunctionSourceFile        string            `json:"function_source_file"`
+	CoverageLookupName        string            `json:"coverage_lookup_name"`
 	TotalCyclomaticComplexity int               `json:"total_cyclomatic_complexity"`
 	BranchProfiles            map[string]branch `json:"branch_profiles"`
 }
 
 type coverageData struct {
-	CovMap       map[string][][]int `json:"covmap"`
-	BranchCovMap map[string][]int   `json:"branch_cov_map"`
-	FileMap      map[string][][]int `json:"file_map"`
+	Type           string             `json:"type"`
+	CovMap         map[string][][]int `json:"covmap"`
+	BranchCovMap   map[string][]int   `json:"branch_cov_map"`
+	FileMap        map[string][][]int `json:"file_map"`
+	KernelCoverage []kernelModule     `json:"kernel_coverage"`
+}
+
+type kernelModule struct {
+	Filename string `json:"Filename"`
+	Covered  []int  `json:"Covered"`
 }
 
 type request struct {
-	OutputDir string                  `json:"output_dir"`
-	Callsites []callsite              `json:"callsites"`
-	Coverage  coverageData            `json:"coverage"`
-	Functions map[string]functionData `json:"functions"`
+	OutputDir  string                  `json:"output_dir"`
+	TargetLang string                  `json:"target_lang"`
+	Callsites  []callsite              `json:"callsites"`
+	Coverage   coverageData            `json:"coverage"`
+	Functions  map[string]functionData `json:"functions"`
 }
 
 type overlayNode struct {
@@ -180,44 +192,108 @@ func writeError(reason string) {
 	_ = json.NewEncoder(os.Stdout).Encode(payload)
 }
 
-func main() {
-	if err := run(); err != nil {
-		writeError(err.Error())
-		os.Exit(1)
+func (cs callsite) coverageLookupName() string {
+	if cs.CoverageLookupName != "" {
+		return cs.CoverageLookupName
 	}
+	return cs.DstFunctionName
 }
 
-func run() error {
-	var req request
-	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
-		return fmt.Errorf("invalid request json: %w", err)
+func normalizeKernelTargetFile(path string) string {
+	for strings.HasPrefix(path, "../") {
+		path = path[3:]
 	}
-	if req.OutputDir == "" {
-		req.OutputDir = "."
-	}
-	if err := os.MkdirAll(req.OutputDir, 0o755); err != nil {
-		return fmt.Errorf("failed creating output_dir: %w", err)
-	}
+	return path
+}
 
-	sort.Slice(req.Callsites, func(i, j int) bool {
-		return req.Callsites[i].CovCtIdx < req.Callsites[j].CovCtIdx
-	})
+func kernelHitcount(modules []kernelModule, targetFile string, lineNumber int) int {
+	targetFile = normalizeKernelTargetFile(targetFile)
+	if targetFile == "" || lineNumber <= 0 {
+		return 0
+	}
+	for _, module := range modules {
+		if !strings.HasSuffix(module.Filename, targetFile) {
+			continue
+		}
+		for _, coveredLine := range module.Covered {
+			for offset := 0; offset < 10; offset++ {
+				if coveredLine == lineNumber+offset {
+					return 100
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func resolveCoverageLookupName(req request, functionName string) string {
+	if fd, ok := req.Functions[functionName]; ok && fd.CoverageLookupName != "" {
+		return fd.CoverageLookupName
+	}
+	return functionName
+}
+
+func lookupCovRows(req request, functionName string) [][]int {
+	if rows, ok := req.Coverage.CovMap[functionName]; ok {
+		return rows
+	}
+	lookupName := resolveCoverageLookupName(req, functionName)
+	if lookupName != functionName {
+		if rows, ok := req.Coverage.CovMap[lookupName]; ok {
+			return rows
+		}
+	}
+	return nil
+}
+
+func isFunctionHit(req request, functionName string) bool {
+	for _, row := range lookupCovRows(req, functionName) {
+		if len(row) == 2 && row[1] > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func isFunctionLineHit(req request, functionName string, lineNumber int) bool {
+	for _, row := range lookupCovRows(req, functionName) {
+		if len(row) == 2 && row[0] == lineNumber {
+			return row[1] != 0
+		}
+	}
+	return false
+}
+
+func buildOverlayNodes(req request) []overlayNode {
 	callstack := map[int]string{}
+	callstackSourceFiles := map[int]string{}
 	nodes := make([]overlayNode, 0, len(req.Callsites))
 	for idx, cs := range req.Callsites {
-		callstack[cs.Depth] = cs.DstFunctionName
+		lookupName := cs.coverageLookupName()
+		callstack[cs.Depth] = lookupName
+		callstackSourceFiles[cs.Depth] = cs.DstFunctionSourceFile
 		hit := 0
 		if idx == 0 {
-			for _, pair := range req.Coverage.CovMap[cs.DstFunctionName] {
-				if len(pair) == 2 && pair[1] > hit {
-					hit = pair[1]
+			if req.TargetLang == "c-cpp" && req.Coverage.Type == "kernel" {
+				hit = 100
+			} else {
+				for _, pair := range req.Coverage.CovMap[lookupName] {
+					if len(pair) == 2 && pair[1] > hit {
+						hit = pair[1]
+					}
 				}
 			}
 		} else if parent, ok := callstack[cs.Depth-1]; ok {
-			for _, pair := range req.Coverage.CovMap[parent] {
-				if len(pair) == 2 && pair[0] == cs.SrcLineNumber && pair[1] > 0 {
-					hit = pair[1]
-					break
+			if req.TargetLang == "c-cpp" && req.Coverage.Type == "kernel" {
+				hit = kernelHitcount(req.Coverage.KernelCoverage, callstackSourceFiles[cs.Depth-1], cs.SrcLineNumber)
+			} else if cs.PythonParentFileHit {
+				hit = 200
+			} else {
+				for _, pair := range req.Coverage.CovMap[parent] {
+					if len(pair) == 2 && pair[0] == cs.SrcLineNumber && pair[1] > 0 {
+						hit = pair[1]
+						break
+					}
 				}
 			}
 		}
@@ -240,6 +316,32 @@ func run() error {
 			}
 		}
 	}
+	return nodes
+}
+
+func main() {
+	if err := run(); err != nil {
+		writeError(err.Error())
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	var req request
+	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
+		return fmt.Errorf("invalid request json: %w", err)
+	}
+	if req.OutputDir == "" {
+		req.OutputDir = "."
+	}
+	if err := os.MkdirAll(req.OutputDir, 0o755); err != nil {
+		return fmt.Errorf("failed creating output_dir: %w", err)
+	}
+
+	sort.Slice(req.Callsites, func(i, j int) bool {
+		return req.Callsites[i].CovCtIdx < req.Callsites[j].CovCtIdx
+	})
+	nodes := buildOverlayNodes(req)
 
 	prevEnd := -1
 	for idx := range nodes {
@@ -322,15 +424,7 @@ func run() error {
 					if _, isUniq := uniqueFuncs[f]; isUniq {
 						uniqueReachable += complexity
 					}
-					isHit := false
-					if rows, ok := req.Coverage.CovMap[f]; ok {
-						for _, row := range rows {
-							if len(row) == 2 && row[1] > 0 {
-								isHit = true
-								break
-							}
-						}
-					}
+					isHit := isFunctionHit(req, f)
 					if !isHit {
 						notCovered += complexity
 						if _, isUniq := uniqueFuncs[f]; isUniq {
@@ -430,7 +524,15 @@ func run() error {
 			if branchLine > blockedLine {
 				continue
 			}
-			if isSideHit(req.Coverage, fn.FunctionSourceFile, fnName, blockedLine) {
+			if req.Coverage.Type == "file" {
+				if isSideHit(req.Coverage, fn.FunctionSourceFile, fnName, blockedLine) {
+					continue
+				}
+			} else if req.TargetLang == "c-cpp" && req.Coverage.Type == "kernel" {
+				if kernelHitcount(req.Coverage.KernelCoverage, fn.FunctionSourceFile, blockedLine) > 0 {
+					continue
+				}
+			} else if isFunctionLineHit(req, fnName, blockedLine) {
 				continue
 			}
 
