@@ -355,7 +355,7 @@ def test_overlay_unsupported_language_skips_native_authoritative(
     assert python_overlay_calls == [1]
 
 
-def test_overlay_go_backend_runs_authoritative_when_shadow_disabled(
+def test_overlay_go_backend_forces_shadow_mode_for_c_cpp(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -445,9 +445,9 @@ def test_overlay_go_backend_runs_authoritative_when_shadow_disabled(
 
     root = cfg_load.extract_all_callsites(profile.fuzzer_callsite_calltree)[0]
     assert native_loader_calls == [1]
-    assert python_overlay_calls == []
-    assert root.cov_hitcount == 0
-    assert root.cov_link == "native-link"
+    assert python_overlay_calls == [1]
+    assert root.cov_hitcount == 77
+    assert root.cov_color == "green"
 
 
 def test_overlay_native_authoritative_applies_artifacts(
@@ -838,6 +838,87 @@ def test_overlay_shadow_mode_strict_raises_on_mismatch(
         analysis.overlay_calltree_with_coverage(profile, project, "", "", str(tmp_path))
 
     assert exc_info.value.reason_code == backend_loaders.FI_OVERLAY_PARITY_MISMATCH
+
+
+def test_overlay_go_forced_shadow_ignores_strict_mismatch_for_c_cpp(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    caplog,
+) -> None:
+    profile = _dummy_profile()
+    project = _dummy_project()
+    python_overlay_calls = []
+
+    overlay_nodes = tmp_path / "overlay_nodes.json"
+    overlay_nodes.write_text(
+        json.dumps(
+            [
+                {
+                    "cov_ct_idx": 0,
+                    "cov_hitcount": 0,
+                    "cov_color": "red",
+                    "cov_link": "native-link",
+                    "cov_callsite_link": "native-callsite",
+                    "cov_forward_reds": 0,
+                    "cov_largest_blocked_func": "native-only",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    branch_complexities = tmp_path / "branch_complexities.json"
+    branch_complexities.write_text("[]", encoding="utf-8")
+    branch_blockers = tmp_path / "branch_blockers.json"
+    branch_blockers.write_text("[]", encoding="utf-8")
+
+    def _python_overlay(profile_arg, *_args, **_kwargs):
+        python_overlay_calls.append(1)
+        root = cfg_load.extract_all_callsites(profile_arg.fuzzer_callsite_calltree)[0]
+        root.cov_ct_idx = 0
+        root.cov_hitcount = 42
+        root.cov_color = "yellow"
+
+    monkeypatch.setattr(backend_loaders, "parse_overlay_backend_env", lambda: "go")
+    monkeypatch.setattr(backend_loaders, "parse_overlay_strict_mode", lambda: True)
+    monkeypatch.setattr(backend_loaders, "parse_overlay_shadow_mode", lambda: False)
+    monkeypatch.setattr(
+        backend_loaders,
+        "resolve_overlay_backend_command_with_details",
+        lambda *_args, **_kwargs: (["mock-overlay-cmd"], {}),
+    )
+    monkeypatch.setattr(
+        backend_loaders,
+        "run_overlay_backend",
+        lambda **_kwargs: backend_loaders.OverlayBackendResult(
+            selected_backend="go",
+            strict_mode=False,
+            response={
+                "schema_version": 1,
+                "status": "success",
+                "counters": {},
+                "timings": {},
+                "artifacts": {
+                    "overlay_nodes": str(overlay_nodes),
+                    "branch_complexities": str(branch_complexities),
+                    "branch_blockers": str(branch_blockers),
+                },
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        analysis, "_overlay_calltree_with_coverage_python", _python_overlay
+    )
+
+    with caplog.at_level("WARNING"):
+        analysis.overlay_calltree_with_coverage(profile, project, "", "", str(tmp_path))
+
+    root = cfg_load.extract_all_callsites(profile.fuzzer_callsite_calltree)[0]
+    assert python_overlay_calls == [1]
+    assert root.cov_hitcount == 42
+    assert any(
+        backend_loaders.FI_OVERLAY_PARITY_MISMATCH in record.message
+        for record in caplog.records
+    )
 
 
 def test_overlay_parity_normalization_is_order_stable() -> None:

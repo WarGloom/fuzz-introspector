@@ -813,6 +813,14 @@ _SOURCES_SCAN_CACHE: dict[tuple[str, tuple[str, ...], str, str], frozenset[str]]
 _OVERLAY_AUTHORITATIVE_LANGS = {"c-cpp"}
 
 
+def _overlay_backend_forces_shadow_mode(
+    selected_backend: str,
+    target_lang: str,
+) -> bool:
+    """Return whether the overlay backend must remain shadow-only."""
+    return selected_backend == backend_loaders.BACKEND_GO and target_lang == "c-cpp"
+
+
 def _matches_any_pattern(
     path: str,
     compiled_patterns: list[re.Pattern[str]],
@@ -2222,6 +2230,18 @@ def overlay_calltree_with_coverage(
     selected_backend = backend_loaders.parse_overlay_backend_env()
     strict_mode = backend_loaders.parse_overlay_strict_mode()
     shadow_mode = backend_loaders.parse_overlay_shadow_mode()
+    forced_shadow_mode = _overlay_backend_forces_shadow_mode(
+        selected_backend, profile.target_lang
+    )
+    effective_shadow_mode = shadow_mode or forced_shadow_mode
+    effective_strict_mode = strict_mode and not forced_shadow_mode
+
+    if forced_shadow_mode and not shadow_mode:
+        logger.warning(
+            "Go overlay backend remains shadow-only for language %s; Python "
+            "overlay path stays authoritative",
+            profile.target_lang,
+        )
 
     language_supports_authoritative = (
         profile.target_lang in _OVERLAY_AUTHORITATIVE_LANGS
@@ -2230,7 +2250,7 @@ def overlay_calltree_with_coverage(
         selected_backend != backend_loaders.BACKEND_PYTHON
         and not language_supports_authoritative
     ):
-        if not shadow_mode:
+        if not effective_shadow_mode:
             logger.warning(
                 "Native overlay authoritative mode is disabled for language %s; "
                 "using Python overlay path",
@@ -2279,7 +2299,7 @@ def overlay_calltree_with_coverage(
         backend_result = backend_loaders.run_overlay_backend(
             payload=request_payload,
             selected_backend=selected_backend,
-            strict_mode=strict_mode,
+            strict_mode=effective_strict_mode,
         )
         if backend_result.response is not None:
             target_coverage_url = request_payload["target_coverage_url"]
@@ -2318,7 +2338,7 @@ def overlay_calltree_with_coverage(
                     "backend": selected_backend,
                     "phase": "artifact_load",
                 }
-                if strict_mode:
+                if effective_strict_mode:
                     raise backend_loaders.OverlayBackendError(
                         backend_loaders.FI_OVERLAY_SCHEMA_ERROR,
                         "Failed to load overlay backend artifacts",
@@ -2334,7 +2354,7 @@ def overlay_calltree_with_coverage(
                 )
                 return
 
-            if shadow_mode:
+            if effective_shadow_mode:
                 _overlay_calltree_with_coverage_python(
                     profile, proj_profile, coverage_url, basefolder, out_dir
                 )
@@ -2348,7 +2368,7 @@ def overlay_calltree_with_coverage(
                     json.dumps(mismatch_counts, sort_keys=True),
                 )
                 if mismatch_total > 0:
-                    if strict_mode:
+                    if effective_strict_mode:
                         raise backend_loaders.OverlayBackendError(
                             backend_loaders.FI_OVERLAY_PARITY_MISMATCH,
                             "Overlay native output mismatches Python output",
