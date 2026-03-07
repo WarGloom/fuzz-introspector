@@ -348,7 +348,7 @@ def test_run_overlay_backend_alias_uses_native_command_resolution(
         strict_mode=False,
     )
 
-    assert resolve_calls == [("FI_OVERLAY", backend_loaders.BACKEND_NATIVE)]
+    assert resolve_calls == [("FI_OVERLAY", requested_backend)]
     assert result.selected_backend == backend_loaders.BACKEND_PYTHON
     assert result.reason_code == backend_loaders.FI_OVERLAY_COMMAND_MISSING
     assert result.reason_details is not None
@@ -356,9 +356,10 @@ def test_run_overlay_backend_alias_uses_native_command_resolution(
     assert result.reason_details["execution_backend"] == backend_loaders.BACKEND_NATIVE
     assert result.reason_details["command_env_prefix"] == "FI_OVERLAY"
     assert result.reason_details["env_hint"] == (
-        "Set FI_OVERLAY_NATIVE_BIN or FI_OVERLAY_BIN"
+        f"Set FI_OVERLAY_{requested_backend.upper()}_BIN, "
+        "FI_OVERLAY_NATIVE_BIN or FI_OVERLAY_BIN"
     )
-    assert len(result.reason_details["checked_candidates"]) == 4
+    assert len(result.reason_details["checked_candidates"]) == 2
 
 
 def test_parse_overlay_shadow_mode(

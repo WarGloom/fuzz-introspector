@@ -355,10 +355,9 @@ def test_overlay_unsupported_language_skips_native_authoritative(
     assert python_overlay_calls == [1]
 
 
-def test_overlay_go_backend_forces_python_authoritative_shadow(
+def test_overlay_go_backend_runs_authoritative_when_shadow_disabled(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
-    caplog,
 ) -> None:
     profile = _dummy_profile()
     project = _dummy_project()
@@ -417,6 +416,7 @@ def test_overlay_go_backend_forces_python_authoritative_shadow(
         encoding="utf-8",
     )
     cmd = " ".join([shlex.quote(sys.executable), shlex.quote(str(script_path))])
+    command_parts = [sys.executable, str(script_path)]
     monkeypatch.setenv("FI_OVERLAY_BACKEND", "go")
     monkeypatch.setenv("FI_OVERLAY_GO_BIN", cmd)
     monkeypatch.setenv("FI_OVERLAY_STRICT", "0")
@@ -424,7 +424,7 @@ def test_overlay_go_backend_forces_python_authoritative_shadow(
     monkeypatch.setattr(
         backend_loaders,
         "resolve_overlay_backend_command_with_details",
-        lambda *_args, **_kwargs: ([cmd], {}),
+        lambda *_args, **_kwargs: (command_parts, {}),
     )
     monkeypatch.setattr(
         analysis, "_overlay_calltree_with_coverage_python", _python_overlay
@@ -441,14 +441,13 @@ def test_overlay_go_backend_forces_python_authoritative_shadow(
         _counting_run_overlay_backend,
     )
 
-    with caplog.at_level("WARNING"):
-        analysis.overlay_calltree_with_coverage(profile, project, "", "", str(tmp_path))
+    analysis.overlay_calltree_with_coverage(profile, project, "", "", str(tmp_path))
 
     root = cfg_load.extract_all_callsites(profile.fuzzer_callsite_calltree)[0]
     assert native_loader_calls == [1]
-    assert python_overlay_calls == [1]
-    assert root.cov_hitcount == 77
-    assert any("probe/shadow-only mode" in record.message for record in caplog.records)
+    assert python_overlay_calls == []
+    assert root.cov_hitcount == 0
+    assert root.cov_link == "native-link"
 
 
 def test_overlay_native_authoritative_applies_artifacts(
