@@ -55,13 +55,16 @@ def add_func_to_reached_and_clone(
     all_functions = merged_profile.all_functions
     target_lang = merged_profile_old.profiles[0].target_lang
 
-    # Update hitcount of the function in the new merged profile
-    logger.info("Updating hitcount")
+    # Identify newly reached functions *before* updating hitcounts
+    logger.info("Updating hitcount-related data")
+    newly_reached = []
+
     f = all_functions[func_to_add.function_name]
     if f.cyclomatic_complexity == func_to_add.cyclomatic_complexity:
+        if f.hitcount == 0:
+            newly_reached.append(f)
         f.hitcount = 1
 
-    # Update hitcount of all functions reached by the function
     for func_name in func_to_add.functions_reached:
         if func_name not in all_functions:
             if target_lang == "jvm":
@@ -69,41 +72,32 @@ def add_func_to_reached_and_clone(
             else:
                 logger.debug("Mismatched function name: %s", func_name)
             continue
-        f = all_functions[func_name]
-        f.hitcount += 1
+
+        f_reached = all_functions[func_name]
+        if f_reached.hitcount == 0:
+            newly_reached.append(f_reached)
+
+        f_reached.hitcount += 1
 
         if merged_profile.target_lang == "rust":
-            f.reached_by_fuzzers.append(
+            f_reached.reached_by_fuzzers.append(
                 utils.demangle_rust_func(func_to_add.function_name))
         else:
-            f.reached_by_fuzzers.append(
+            f_reached.reached_by_fuzzers.append(
                 utils.demangle_cpp_func(func_to_add.function_name))
 
-    # Recompute all analysis that is based on hitcounts in all functions as
-    # hitcount has changed for elements in the dictionary.
-    logger.info("Updating hitcount-related data")
-    for f_profile in all_functions.values():
-        cc = 0
-        uncovered_cc = 0
-        for reached_func_name in f_profile.functions_reached:
-            if reached_func_name not in all_functions:
-                if target_lang == "jvm":
-                    logger.debug("%s not provided within classpath",
-                                 reached_func_name)
-                else:
-                    logger.debug("Mismatched function name: %s",
-                                 reached_func_name)
-                continue
-            f_reached = all_functions[reached_func_name]
-            cc += f_reached.cyclomatic_complexity
-            if f_reached.hitcount == 0:
-                uncovered_cc += f_reached.cyclomatic_complexity
+    for newly_reached_func in newly_reached:
+        # This function is no longer unreached.
+        # Subtract its complexity from itself.
+        newly_reached_func.new_unreached_complexity -= newly_reached_func.cyclomatic_complexity
 
-        # set complexity fields in the function
-        f_profile.new_unreached_complexity = uncovered_cc
-        if f_profile.hitcount == 0:
-            f_profile.new_unreached_complexity += f_profile.cyclomatic_complexity
-        f_profile.total_cyclomatic_complexity = cc + f_profile.cyclomatic_complexity
+        # Subtract its complexity from all its callers' unreached complexity
+        for incoming_name in newly_reached_func.incoming_references:
+            caller = all_functions.get(incoming_name)
+            if not caller:
+                continue
+
+            caller.new_unreached_complexity -= newly_reached_func.cyclomatic_complexity
 
     if all_functions[func_to_add.function_name].hitcount == 0:
         logger.info("Error. Hitcount did not get set for some reason. Exiting")
