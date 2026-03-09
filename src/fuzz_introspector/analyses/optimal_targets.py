@@ -178,7 +178,8 @@ class OptimalTargets(analysis.AnalysisInterface):
                     new_profile = proj_profile
                     logger.info(
                         "[native] OptimalTargets: used Rust "
-                        "result (%d functions)", len(optimal_target_functions),
+                        "result (%d functions)",
+                        len(optimal_target_functions),
                     )
             except (KeyError, IndexError, TypeError):
                 optimal_target_functions = None
@@ -187,8 +188,7 @@ class OptimalTargets(analysis.AnalysisInterface):
         # Fall back to the Python computation when native result is absent.
         if optimal_target_functions is None:
             new_profile, optimal_target_functions = (
-                self.iteratively_get_optimal_targets(proj_profile)
-            )
+                self.iteratively_get_optimal_targets(proj_profile))
         assert new_profile is not None
         html_string += self.get_optimal_target_section(
             optimal_target_functions,
@@ -490,8 +490,7 @@ class OptimalTargets(analysis.AnalysisInterface):
         # Table with details about all functions in the project in case the
         # suggested fuzzers are implemented.
         html_string += html_helpers.html_add_header_with_link(
-            "All functions overview",
-            html_helpers.HTML_HEADING.H4,
+            "All functions overview", html_helpers.HTML_HEADING.H4,
             table_of_contents)
         html_string += ("<p> If you implement fuzzers for these functions, the"
                         " status of all functions in the project will be:</p>")
