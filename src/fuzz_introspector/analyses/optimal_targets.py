@@ -59,7 +59,14 @@ def add_func_to_reached_and_clone(
     logger.info("Updating hitcount")
     f = all_functions[func_to_add.function_name]
     if f.cyclomatic_complexity == func_to_add.cyclomatic_complexity:
-        f.hitcount = 1
+        if f.hitcount == 0:
+            f.hitcount = 1
+            # Decrement newly reached complexity from this func and its callers
+            f.new_unreached_complexity -= f.cyclomatic_complexity
+            for incoming in f.incoming_references:
+                if incoming in all_functions:
+                    all_functions[incoming].new_unreached_complexity -= (
+                        f.cyclomatic_complexity)
 
     # Update hitcount of all functions reached by the function
     for func_name in func_to_add.functions_reached:
@@ -70,7 +77,17 @@ def add_func_to_reached_and_clone(
                 logger.debug("Mismatched function name: %s", func_name)
             continue
         f = all_functions[func_name]
-        f.hitcount += 1
+
+        if f.hitcount == 0:
+            f.hitcount = 1
+            # Decrement newly reached complexity from this func and its callers
+            f.new_unreached_complexity -= f.cyclomatic_complexity
+            for incoming in f.incoming_references:
+                if incoming in all_functions:
+                    all_functions[incoming].new_unreached_complexity -= (
+                        f.cyclomatic_complexity)
+        else:
+            f.hitcount += 1
 
         if merged_profile.target_lang == "rust":
             f.reached_by_fuzzers.append(
@@ -78,32 +95,6 @@ def add_func_to_reached_and_clone(
         else:
             f.reached_by_fuzzers.append(
                 utils.demangle_cpp_func(func_to_add.function_name))
-
-    # Recompute all analysis that is based on hitcounts in all functions as
-    # hitcount has changed for elements in the dictionary.
-    logger.info("Updating hitcount-related data")
-    for f_profile in all_functions.values():
-        cc = 0
-        uncovered_cc = 0
-        for reached_func_name in f_profile.functions_reached:
-            if reached_func_name not in all_functions:
-                if target_lang == "jvm":
-                    logger.debug("%s not provided within classpath",
-                                 reached_func_name)
-                else:
-                    logger.debug("Mismatched function name: %s",
-                                 reached_func_name)
-                continue
-            f_reached = all_functions[reached_func_name]
-            cc += f_reached.cyclomatic_complexity
-            if f_reached.hitcount == 0:
-                uncovered_cc += f_reached.cyclomatic_complexity
-
-        # set complexity fields in the function
-        f_profile.new_unreached_complexity = uncovered_cc
-        if f_profile.hitcount == 0:
-            f_profile.new_unreached_complexity += f_profile.cyclomatic_complexity
-        f_profile.total_cyclomatic_complexity = cc + f_profile.cyclomatic_complexity
 
     if all_functions[func_to_add.function_name].hitcount == 0:
         logger.info("Error. Hitcount did not get set for some reason. Exiting")
@@ -186,8 +177,8 @@ class OptimalTargets(analysis.AnalysisInterface):
                                 proj_profile.all_functions[fname])
                     new_profile = proj_profile
                     logger.info(
-                        "[native] OptimalTargets: used Rust result (%d functions)",
-                        len(optimal_target_functions),
+                        "[native] OptimalTargets: used Rust "
+                        "result (%d functions)", len(optimal_target_functions),
                     )
             except (KeyError, IndexError, TypeError):
                 optimal_target_functions = None
@@ -196,7 +187,8 @@ class OptimalTargets(analysis.AnalysisInterface):
         # Fall back to the Python computation when native result is absent.
         if optimal_target_functions is None:
             new_profile, optimal_target_functions = (
-                self.iteratively_get_optimal_targets(proj_profile))
+                self.iteratively_get_optimal_targets(proj_profile)
+            )
         assert new_profile is not None
         html_string += self.get_optimal_target_section(
             optimal_target_functions,
@@ -486,7 +478,8 @@ class OptimalTargets(analysis.AnalysisInterface):
         basefolder: str,
         out_dir: str = "",
     ) -> str:
-        """Create section showing state of project if optimal targets are hit"""
+        """Create section showing state of project if optimal targets are hit.
+        """
         # pylint: disable=unused-argument
         html_string = (
             "<p>Implementing fuzzers that target the above functions "
@@ -497,7 +490,8 @@ class OptimalTargets(analysis.AnalysisInterface):
         # Table with details about all functions in the project in case the
         # suggested fuzzers are implemented.
         html_string += html_helpers.html_add_header_with_link(
-            "All functions overview", html_helpers.HTML_HEADING.H4,
+            "All functions overview",
+            html_helpers.HTML_HEADING.H4,
             table_of_contents)
         html_string += ("<p> If you implement fuzzers for these functions, the"
                         " status of all functions in the project will be:</p>")
@@ -512,10 +506,9 @@ class OptimalTargets(analysis.AnalysisInterface):
 
         # Write all functions to the .js file
         if self.dump_files:
-            with open(
-                    os.path.join(out_dir,
-                                 constants.OPTIMAL_TARGETS_ALL_FUNCTIONS),
-                    "w") as func_file:
+            target_path = os.path.join(out_dir,
+                                       constants.OPTIMAL_TARGETS_ALL_FUNCTIONS)
+            with open(target_path, "w") as func_file:
                 func_file.write("var analysis_1_data = ")
                 func_file.write(json.dumps(all_functions_json))
         return html_string
