@@ -73,6 +73,7 @@ Field meanings:
 Notes:
 - Only lines with `hit_count > 0` are emitted.
 - Duplicate `(fuzzer_name, filename, line_number)` entries are deduplicated by keeping the highest hit count.
+- If a matching per-fuzzer coverage report is missing for a fuzz target, no covered-line records are emitted for that fuzzer. Fuzz Introspector does not widen missing per-fuzzer coverage to merged/global coverage.
 
 ## File: `per-fuzzer-statically-reachable-lines.json`
 
