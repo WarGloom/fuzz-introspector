@@ -56,7 +56,7 @@ def test_correlate_introspection_functions_prefers_exact_source_line(monkeypatch
     ]
     debug_functions = [
         _make_debug_function("before", "/src/project/target.cc", "10"),
-        _make_debug_function("exact", "/src/project/target.cc", "20"),
+        _make_debug_function("target", "/src/project/target.cc", "20"),
     ]
 
     analysis.correlate_introspection_functions_to_debug_info(
@@ -66,8 +66,8 @@ def test_correlate_introspection_functions_prefers_exact_source_line(monkeypatch
         report_dict={"all_files_in_project": []},
     )
 
-    assert llvm_functions[0]["function_signature"] == "sig::exact"
-    assert llvm_functions[0]["debug_function_info"]["name"] == "exact"
+    assert llvm_functions[0]["function_signature"] == "sig::target"
+    assert llvm_functions[0]["debug_function_info"]["name"] == "target"
 
 
 def test_correlate_introspection_functions_uses_closest_preceding_line(monkeypatch):
@@ -79,7 +79,73 @@ def test_correlate_introspection_functions_uses_closest_preceding_line(monkeypat
 
     llvm_functions = [
         {
-            "Func name": "target",
+            "Func name": "ns::target(int)",
+            "raw-function-name": "_ZN2ns6targetEi",
+            "Functions filename": "/src/project/target.cc",
+            "source_line_begin": "25",
+        }
+    ]
+    debug_functions = [
+        _make_debug_function("target", "/src/project/target.cc", "10"),
+        _make_debug_function("after", "/src/project/target.cc", "30"),
+    ]
+
+    analysis.correlate_introspection_functions_to_debug_info(
+        llvm_functions,
+        debug_functions,
+        "c-cpp",
+        report_dict={"all_files_in_project": []},
+    )
+
+    assert llvm_functions[0]["function_signature"] == "sig::target"
+    assert llvm_functions[0]["debug_function_info"]["name"] == "target"
+
+
+def test_correlate_introspection_functions_uses_short_debug_name_before_mismatch(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        analysis,
+        "convert_debug_info_to_signature_v2",
+        lambda debug_function, _: f"sig::{debug_function['name']}",
+    )
+
+    llvm_functions = [
+        {
+            "Func name": "ZProtocolPort::setBusy(unsignedint,BaseInetAddrconst&)",
+            "raw-function-name": "_ZN13ZProtocolPort7setBusyEjRK12BaseInetAddr",
+            "Functions filename": "/src/src/Base/BaseInetAddr.h",
+            "source_line_begin": "39",
+        }
+    ]
+    debug_functions = [
+        _make_debug_function("isEmpty", "/src/src/Base/BaseInetAddr.h", "38"),
+        _make_debug_function("setBusy", "/src/src/Network/ZProtocolPort.cpp", "77"),
+    ]
+
+    analysis.correlate_introspection_functions_to_debug_info(
+        llvm_functions,
+        debug_functions,
+        "c-cpp",
+        report_dict={"all_files_in_project": []},
+    )
+
+    assert llvm_functions[0]["function_signature"] == "sig::setBusy"
+    assert llvm_functions[0]["debug_function_info"]["name"] == "setBusy"
+
+
+def test_correlate_introspection_functions_ignores_preceding_line_name_mismatch(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        analysis,
+        "convert_debug_info_to_signature_v2",
+        lambda debug_function, _: f"sig::{debug_function['name']}",
+    )
+
+    llvm_functions = [
+        {
+            "Func name": "target_without_exact_name_match",
             "Functions filename": "/src/project/target.cc",
             "source_line_begin": "25",
         }
@@ -96,8 +162,8 @@ def test_correlate_introspection_functions_uses_closest_preceding_line(monkeypat
         report_dict={"all_files_in_project": []},
     )
 
-    assert llvm_functions[0]["function_signature"] == "sig::before"
-    assert llvm_functions[0]["debug_function_info"]["name"] == "before"
+    assert llvm_functions[0]["function_signature"] == "N/A"
+    assert llvm_functions[0]["debug_function_info"] == {}
 
 
 def test_correlate_introspection_functions_handles_invalid_source_line_begin():
@@ -422,7 +488,10 @@ def test_if_debug_correlator_rust_invokes_native_branch_when_available(monkeypat
     assert captured_payload["selected_backend"] == analysis.backend_loaders.BACKEND_RUST
 
 
-def test_if_debug_correlator_go_invokes_native_branch_when_available(monkeypatch):
+def test_if_debug_correlator_go_forces_shadow_mode_for_c_cpp(
+    monkeypatch,
+    caplog,
+):
     monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, "go")
     monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_STRICT_ENV, raising=False)
     monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_SHADOW_ENV, raising=False)
@@ -459,8 +528,10 @@ def test_if_debug_correlator_go_invokes_native_branch_when_available(monkeypatch
             },
         )
 
-    def _python_fallback_must_not_run(*_args, **_kwargs):
-        raise AssertionError("python fallback should not run after native success")
+    def _python_authoritative_path(*args, **kwargs):
+        del args, kwargs
+        llvm_functions[0]["function_signature"] = "sig::python"
+        llvm_functions[0]["debug_function_info"] = {"name": "python_target"}
 
     monkeypatch.setattr(
         analysis.backend_loaders,
@@ -470,19 +541,24 @@ def test_if_debug_correlator_go_invokes_native_branch_when_available(monkeypatch
     monkeypatch.setattr(
         analysis,
         "_correlate_introspection_functions_to_debug_info_python",
-        _python_fallback_must_not_run,
+        _python_authoritative_path,
     )
 
-    analysis.correlate_introspection_functions_to_debug_info(
-        llvm_functions,
-        [],
-        "c-cpp",
-        report_dict={"all_files_in_project": []},
-    )
+    with caplog.at_level(logging.INFO):
+        analysis.correlate_introspection_functions_to_debug_info(
+            llvm_functions,
+            [],
+            "c-cpp",
+            report_dict={"all_files_in_project": []},
+        )
 
-    assert llvm_functions[0]["function_signature"] == "sig::native-go"
+    assert llvm_functions[0]["function_signature"] == "sig::python"
+    assert llvm_functions[0]["debug_function_info"]["name"] == "python_target"
     assert captured_payload["command_env_prefix"] == "FI_IF_DEBUG_CORRELATOR"
     assert captured_payload["selected_backend"] == analysis.backend_loaders.BACKEND_GO
+    assert any(
+        "backend forced shadow mode" in record.message for record in caplog.records
+    )
 
 
 def test_if_debug_correlator_shadow_mode_runs_native_and_logs_comparison(

@@ -908,6 +908,11 @@ def _parse_if_debug_correlator_backend_env() -> str:
     return backend_loaders.BACKEND_RUST
 
 
+def _if_debug_correlator_backend_forces_shadow_mode(
+        backend: str, proj_lang: str) -> bool:
+    return backend == backend_loaders.BACKEND_GO and proj_lang == "c-cpp"
+
+
 def _parse_stage_warn_seconds() -> int:
     raw_value = os.environ.get(FI_STAGE_WARN_SECONDS_ENV, "")
     if not raw_value:
@@ -2928,6 +2933,33 @@ def _build_debug_function_indexes(debug_all_functions, header_index_by_name=None
     )
 
 
+def _get_introspector_debug_name_candidates(if_func):
+    candidates = set()
+
+    for raw_name in (
+        if_func.get("Func name", ""),
+        utils.demangle_rust_func(
+            utils.demangle_cpp_func(if_func.get("raw-function-name", ""))),
+    ):
+        if not isinstance(raw_name, str):
+            continue
+        candidate = raw_name.split("(", maxsplit=1)[0].strip()
+        if not candidate:
+            continue
+        candidates.add(candidate)
+        if "::" in candidate:
+            candidates.add(candidate.rsplit("::", maxsplit=1)[-1])
+
+    return candidates
+
+
+def _debug_function_name_matches(if_func, debug_function):
+    debug_name = debug_function.get("name", "")
+    if not isinstance(debug_name, str) or not debug_name:
+        return False
+    return debug_name in _get_introspector_debug_name_candidates(if_func)
+
+
 def correlate_introspector_func_to_debug_information(
     if_func,
     all_debug_functions,
@@ -2938,10 +2970,14 @@ def correlate_introspector_func_to_debug_information(
     """Correlate a single LLVM-based function to a given function in the
     collected debug information."""
     # Check if name matches. If so, this one is easy.
-    same_name_dfs = debug_dict_by_name.get(if_func["Func name"], [])
-
-    for debug_function in same_name_dfs:
-        if debug_function.get("name", "") == if_func["Func name"]:
+    seen_debug_functions = set()
+    for candidate_name in _get_introspector_debug_name_candidates(if_func):
+        same_name_dfs = debug_dict_by_name.get(candidate_name, [])
+        for debug_function in same_name_dfs:
+            debug_function_id = id(debug_function)
+            if debug_function_id in seen_debug_functions:
+                continue
+            seen_debug_functions.add(debug_function_id)
             func_signature = convert_debug_info_to_signature_v2(debug_function, if_func)
             return func_signature, debug_function
 
@@ -2964,18 +3000,20 @@ def correlate_introspector_func_to_debug_information(
             and source_line_begin != 0
         ):
             matched_debug_func = matching_debug_functions[exact_line_idx]
-            func_signature = convert_debug_info_to_signature_v2(
-                matched_debug_func, if_func
-            )
-            return func_signature, matched_debug_func
+            if _debug_function_name_matches(if_func, matched_debug_func):
+                func_signature = convert_debug_info_to_signature_v2(
+                    matched_debug_func, if_func
+                )
+                return func_signature, matched_debug_func
 
         preceding_line_idx = exact_line_idx - 1
         if preceding_line_idx >= 0:
             matched_debug_func = matching_debug_functions[preceding_line_idx]
-            func_signature = convert_debug_info_to_signature_v2(
-                matched_debug_func, if_func
-            )
-            return func_signature, matched_debug_func
+            if _debug_function_name_matches(if_func, matched_debug_func):
+                func_signature = convert_debug_info_to_signature_v2(
+                    matched_debug_func, if_func
+                )
+                return func_signature, matched_debug_func
 
     target_minimum = 999999
     tfunc_signature = None
@@ -2984,6 +3022,8 @@ def correlate_introspector_func_to_debug_information(
     for dfunction in debug_dict_by_filename.get(source_file, []):
         dline = _safe_int(dfunction["source"].get("source_line", "-1"), default=None)
         if dline is None:
+            continue
+        if not _debug_function_name_matches(if_func, dfunction):
             continue
 
         # Match based on containment, as there can be discrepancies between function
@@ -3200,6 +3240,11 @@ def correlate_introspection_functions_to_debug_info(
     configured_backend = _parse_if_debug_correlator_backend_env()
     shadow_mode = _parse_bool_env(FI_IF_DEBUG_CORRELATOR_SHADOW_ENV, False)
     strict_mode = _parse_bool_env(FI_IF_DEBUG_CORRELATOR_STRICT_ENV, False)
+    forced_shadow_mode = _if_debug_correlator_backend_forces_shadow_mode(
+        configured_backend, proj_lang
+    )
+    effective_shadow_mode = shadow_mode or forced_shadow_mode
+    effective_strict_mode = strict_mode and not forced_shadow_mode
 
     effective_backend = backend_loaders.BACKEND_PYTHON
     status = "success"
@@ -3215,18 +3260,26 @@ def correlate_introspection_functions_to_debug_info(
             "start",
             configured_backend=configured_backend,
             effective_backend=effective_backend,
-            shadow_mode=shadow_mode,
-            strict_mode=strict_mode,
+            shadow_mode=effective_shadow_mode,
+            strict_mode=effective_strict_mode,
             fallback_reason=fallback_reason,
         )
 
     try:
+        if forced_shadow_mode and not shadow_mode:
+            logger.info(
+                "%s backend forced shadow mode for %s with proj_lang=%s; Python remains authoritative",
+                configured_backend,
+                _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
+                proj_lang,
+            )
+
         if configured_backend in (
             backend_loaders.BACKEND_RUST,
             backend_loaders.BACKEND_GO,
         ):
             native_target = all_functions_json_report
-            if shadow_mode:
+            if effective_shadow_mode:
                 native_target = copy.deepcopy(all_functions_json_report)
 
             try:
@@ -3242,7 +3295,7 @@ def correlate_introspection_functions_to_debug_info(
                 native_reason = f"native_schema_mismatch:{native_err}"
 
             if native_success:
-                if shadow_mode:
+                if effective_shadow_mode:
                     native_shadow_result = [
                         (
                             func.get("function_signature"),
@@ -3251,8 +3304,7 @@ def correlate_introspection_functions_to_debug_info(
                         for func in native_target
                     ]
                     logger.info(
-                        "%s enabled for %s; native backend executed and Python "
-                        "authoritative path will run for comparison",
+                        "%s enabled for %s; native backend executed and Python authoritative path will run for comparison",
                         FI_IF_DEBUG_CORRELATOR_SHADOW_ENV,
                         _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
                     )
@@ -3261,7 +3313,7 @@ def correlate_introspection_functions_to_debug_info(
                     return
             else:
                 fallback_reason = native_reason
-                if strict_mode:
+                if effective_strict_mode:
                     status = "error"
                     effective_backend = "unavailable"
                     error_message = (
@@ -3309,8 +3361,8 @@ def correlate_introspection_functions_to_debug_info(
                 "end",
                 configured_backend=configured_backend,
                 effective_backend=effective_backend,
-                shadow_mode=shadow_mode,
-                strict_mode=strict_mode,
+                shadow_mode=effective_shadow_mode,
+                strict_mode=effective_strict_mode,
                 fallback_reason=fallback_reason,
                 status=status,
             )

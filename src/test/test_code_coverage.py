@@ -342,3 +342,74 @@ def test_load_llvm_coverage_cache_can_be_disabled(monkeypatch, tmp_path):
 
     assert open_counts["covreport_reads"] == 2
     assert first.covmap is not second.covmap
+
+
+def test_load_llvm_coverage_shadow_mode_keeps_python_authoritative(
+    monkeypatch, tmp_path, caplog
+):
+    covreport = tmp_path / "target.covreport"
+    covreport.write_text("funcA:\n  10| 1| return 0;\n", encoding="utf-8")
+
+    python_profile = code_coverage.CoverageProfile()
+    python_profile.set_type("function")
+    python_profile.covmap = {"funcA": [(10, 1)]}
+    python_profile.coverage_files = [str(covreport)]
+
+    monkeypatch.setenv(code_coverage.FI_LLVM_COV_LOADER_SHADOW_ENV, "1")
+    monkeypatch.delenv(code_coverage.FI_LLVM_COV_LOADER_STRICT_ENV,
+                       raising=False)
+    monkeypatch.setattr(
+        code_coverage.backend_loaders,
+        "load_json_with_backend",
+        lambda **_: (
+            "go",
+            {
+                "covmap": {"funcA": [[10, 0]]},
+                "branch_cov_map": {},
+                "coverage_files": [str(covreport)],
+            },
+        ),
+    )
+    monkeypatch.setattr(code_coverage, "_load_llvm_coverage_python_reports",
+                        lambda *_args, **_kwargs: python_profile)
+
+    with caplog.at_level("INFO"):
+        cp = code_coverage.load_llvm_coverage(str(tmp_path), "target")
+
+    assert cp is python_profile
+    assert cp.get_hit_summary("funcA") == (1, 1)
+    assert any(code_coverage.FI_LLVM_COV_PARITY_MISMATCH in record.message
+               for record in caplog.records)
+
+
+def test_load_llvm_coverage_shadow_mode_strict_raises_on_mismatch(
+    monkeypatch, tmp_path
+):
+    covreport = tmp_path / "target.covreport"
+    covreport.write_text("funcA:\n  10| 1| return 0;\n", encoding="utf-8")
+
+    python_profile = code_coverage.CoverageProfile()
+    python_profile.set_type("function")
+    python_profile.covmap = {"funcA": [(10, 1)]}
+    python_profile.coverage_files = [str(covreport)]
+
+    monkeypatch.setenv(code_coverage.FI_LLVM_COV_LOADER_SHADOW_ENV, "1")
+    monkeypatch.setenv(code_coverage.FI_LLVM_COV_LOADER_STRICT_ENV, "1")
+    monkeypatch.setattr(
+        code_coverage.backend_loaders,
+        "load_json_with_backend",
+        lambda **_: (
+            "go",
+            {
+                "covmap": {"funcA": [[10, 0]]},
+                "branch_cov_map": {},
+                "coverage_files": [str(covreport)],
+            },
+        ),
+    )
+    monkeypatch.setattr(code_coverage, "_load_llvm_coverage_python_reports",
+                        lambda *_args, **_kwargs: python_profile)
+
+    with pytest.raises(Exception,
+                       match=code_coverage.FI_LLVM_COV_PARITY_MISMATCH):
+        code_coverage.load_llvm_coverage(str(tmp_path), "target")

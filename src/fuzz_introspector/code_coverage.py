@@ -45,8 +45,26 @@ COVERAGE_BRANCH_REGEX = re.compile(r".*\|.*\sBranch.*\(.*:.*\):")
 
 logger = logging.getLogger(name=__name__)
 LLVM_COVERAGE_CACHE_ENV = "FI_LLVM_COVERAGE_CACHE"
+FI_LLVM_COV_LOADER_SHADOW_ENV = "FI_LLVM_COV_LOADER_SHADOW"
+FI_LLVM_COV_LOADER_STRICT_ENV = "FI_LLVM_COV_LOADER_STRICT"
+FI_LLVM_COV_PARITY_MISMATCH = "FI_LLVM_COV_PARITY_MISMATCH"
+_BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
+_BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
 _LLVM_COVERAGE_PROFILE_CACHE: Dict[Tuple[Any, ...], "CoverageProfile"] = {}
 _LLVM_COVERAGE_PROFILE_CACHE_LOCK = threading.Lock()
+
+
+def _parse_bool_env(env_name: str, default: bool) -> bool:
+    raw_value = os.environ.get(env_name, "").strip().lower()
+    if not raw_value:
+        return default
+    if raw_value in _BOOL_TRUE_VALUES:
+        return True
+    if raw_value in _BOOL_FALSE_VALUES:
+        return False
+    logger.warning("Invalid %s=%r; defaulting to %s", env_name, raw_value,
+                   default)
+    return default
 
 
 class CoverageProfile:
@@ -568,6 +586,182 @@ def _coverage_profile_from_external_payload(
     return cp
 
 
+def _normalise_covmap(
+        covmap: Dict[str, List[Tuple[int, int]]]) -> Dict[str, List[Tuple[int,
+                                                                       int]]]:
+    return {
+        key: sorted((int(line_no), int(hit_count))
+                    for line_no, hit_count in entries)
+        for key, entries in covmap.items()
+    }
+
+
+def _normalise_branch_cov_map(
+        branch_cov_map: Dict[str, List[int]]) -> Dict[str, List[int]]:
+    return {key: [int(value) for value in values]
+            for key, values in branch_cov_map.items()}
+
+
+def _collect_llvm_cov_parity_details(native_profile: "CoverageProfile",
+                                     python_profile: "CoverageProfile") -> Dict[str, int]:
+    native_covmap = _normalise_covmap(native_profile.covmap)
+    python_covmap = _normalise_covmap(python_profile.covmap)
+    native_branch_map = _normalise_branch_cov_map(native_profile.branch_cov_map)
+    python_branch_map = _normalise_branch_cov_map(python_profile.branch_cov_map)
+
+    covmap_keys = set(native_covmap) | set(python_covmap)
+    branch_keys = set(native_branch_map) | set(python_branch_map)
+    covmap_mismatches = sum(
+        1 for key in covmap_keys if native_covmap.get(key) != python_covmap.get(key))
+    branch_mismatches = sum(
+        1 for key in branch_keys
+        if native_branch_map.get(key) != python_branch_map.get(key))
+    return {
+        "covmap_key_count": len(covmap_keys),
+        "covmap_mismatches": covmap_mismatches,
+        "branch_key_count": len(branch_keys),
+        "branch_mismatches": branch_mismatches,
+    }
+
+
+def _load_llvm_coverage_python_reports(
+        coverage_reports: List[str], is_rust: bool) -> CoverageProfile:
+    cache_disabled_values = {"0", "false", "no", "off"}
+    cache_enabled = (os.getenv(LLVM_COVERAGE_CACHE_ENV, "1").strip().lower()
+                     not in cache_disabled_values)
+    cache_key: Optional[Tuple[Any, ...]] = None
+    if cache_enabled:
+        cache_entries: List[Tuple[str, int, int]] = []
+        for coverage_report in coverage_reports:
+            try:
+                stat_result = os.stat(coverage_report)
+            except OSError:
+                cache_entries = []
+                break
+            cache_entries.append((coverage_report, stat_result.st_mtime_ns,
+                                  stat_result.st_size))
+        if cache_entries:
+            cache_key = (tuple(cache_entries), is_rust)
+            with _LLVM_COVERAGE_PROFILE_CACHE_LOCK:
+                cached_profile = _LLVM_COVERAGE_PROFILE_CACHE.get(cache_key)
+            if cached_profile is not None:
+                logger.info("Reusing cached LLVM coverage for %d reports",
+                            len(coverage_reports))
+                return cached_profile.clone_with_shared_data()
+
+    cp = CoverageProfile()
+    logger.info(f"Using the following coverages {coverage_reports}")
+    cp.set_type("function")
+    for profile_file in coverage_reports:
+        cp.coverage_files.append(profile_file)
+        logger.info(f"Reading coverage report: {profile_file}")
+        with open(profile_file, "rb") as pf:
+            curr_func = None
+            switch_string = str()
+            switch_line_number = None
+            case_line_numbers: Set[int] = set()
+            for raw_line in pf:
+                line = utils.safe_decode(raw_line)
+                if line is None:
+                    continue
+
+                line = line.replace("\n", "")
+                logger.debug(f"cov-readline: {line}")
+
+                if len(line) > 0 and line[-1] == ":" and "|" not in line:
+                    if len(line.split(":")) == 3:
+                        curr_func = line.split(":")[1].replace(" ", "").replace(
+                            ":", "")
+                    else:
+                        curr_func = line.replace(" ", "").replace(":", "")
+                    if is_rust:
+                        curr_func = utils.demangle_rust_func(curr_func)
+                    else:
+                        curr_func = utils.demangle_cpp_func(curr_func)
+                    cp.covmap[curr_func] = list()
+                    switch_string = ""
+                    switch_line_number = None
+                if curr_func and COVERAGE_SWITCH_REGEX.match(line):
+                    line_segs = line.split("|")
+                    try:
+                        switch_line_number = int(line_segs[0])
+                    except Exception:
+                        continue
+
+                    try:
+                        column_number = line_segs[2].find("switch") + 1
+                    except Exception:
+                        continue
+                    case_line_numbers = set()
+                    switch_string = f"{curr_func}:{switch_line_number},{column_number}"
+
+                if curr_func and COVERAGE_BRANCH_REGEX.match(line):
+                    try:
+                        line_number = int(line.split("(")[1].split(":")[0])
+                    except Exception:
+                        continue
+                    try:
+                        column_number = int(line.split(":")[1].split(")")[0])
+                    except Exception:
+                        continue
+
+                    try:
+                        true_hit = extract_hitcount(
+                            line.split("True:")[1].split(",")[0])
+                        if true_hit == -1:
+                            continue
+                    except Exception:
+                        continue
+                    try:
+                        false_hit = extract_hitcount(
+                            line.split("False:")[1].replace("]", ""))
+                        if false_hit == -1:
+                            continue
+                    except Exception:
+                        continue
+
+                    if switch_line_number and line_number == switch_line_number:
+                        cp.branch_cov_map[switch_string] = [true_hit, false_hit]
+                    elif line_number in case_line_numbers:
+                        try:
+                            cp.branch_cov_map[switch_string].append(true_hit)
+                        except Exception:
+                            cp.branch_cov_map[switch_string] = [
+                                true_hit, false_hit, true_hit
+                            ]
+                    else:
+                        branch_string = f"{curr_func}:{line_number},{column_number}"
+                        cp.branch_cov_map[branch_string] = [true_hit, false_hit]
+                elif curr_func is not None and "|" in line:
+                    try:
+                        line_number = int(line.split("|")[0])
+                    except Exception:
+                        continue
+
+                    if COVERAGE_CASE_REGEX.match(line):
+                        if switch_string:
+                            case_line_numbers.add(line_number)
+                        else:
+                            logger.info("found case outside a switch?! \n%s",
+                                        line)
+
+                    try:
+                        hit_times = extract_hitcount(line.split("|")[1])
+                        if hit_times == -1:
+                            continue
+                    except Exception:
+                        if " 0| " in line:
+                            hit_times = 0
+                        else:
+                            continue
+                    cp.covmap[curr_func].append((line_number, hit_times))
+    if cache_key is not None:
+        with _LLVM_COVERAGE_PROFILE_CACHE_LOCK:
+            _LLVM_COVERAGE_PROFILE_CACHE[cache_key] = cp
+        return cp.clone_with_shared_data()
+    return cp
+
+
 def load_llvm_coverage(target_dir: str,
                        target_name: Optional[str] = None,
                        is_rust: bool = False) -> CoverageProfile:
@@ -617,6 +811,9 @@ def load_llvm_coverage(target_dir: str,
     if len(coverage_reports) == 0:
         coverage_reports = all_coverage_reports
 
+    shadow_mode = _parse_bool_env(FI_LLVM_COV_LOADER_SHADOW_ENV, False)
+    strict_mode = _parse_bool_env(FI_LLVM_COV_LOADER_STRICT_ENV, False)
+
     selected_backend, external_payload = backend_loaders.load_json_with_backend(
         backend_env="FI_LLVM_COV_LOADER",
         command_env_prefix="FI_LLVM_COV_LOADER",
@@ -634,6 +831,31 @@ def load_llvm_coverage(target_dir: str,
         profile = _coverage_profile_from_external_payload(
             external_payload, coverage_reports, is_rust)
         if profile is not None:
+            if shadow_mode:
+                logger.info(
+                    "%s enabled; native backend executed and Python authoritative path will run for comparison",
+                    FI_LLVM_COV_LOADER_SHADOW_ENV,
+                )
+                python_profile = _load_llvm_coverage_python_reports(
+                    coverage_reports, is_rust)
+                mismatch_details = _collect_llvm_cov_parity_details(
+                    profile, python_profile)
+                if mismatch_details["covmap_mismatches"] or mismatch_details[
+                        "branch_mismatches"]:
+                    if strict_mode:
+                        raise exceptions.DataLoaderError(
+                            f"{FI_LLVM_COV_PARITY_MISMATCH}: Native LLVM coverage differs from Python authoritative path | details={json.dumps(mismatch_details, sort_keys=True)}"
+                        )
+                    logger.warning(
+                        "%s: Native LLVM coverage differs from Python authoritative path; using Python result | details=%s",
+                        FI_LLVM_COV_PARITY_MISMATCH,
+                        json.dumps(mismatch_details, sort_keys=True),
+                    )
+                else:
+                    logger.info(
+                        "Shadow comparison for llvm coverage completed with 0 mismatches"
+                    )
+                return python_profile
             logger.info(
                 "Loaded LLVM coverage with %s backend (%d reports)",
                 selected_backend,
@@ -646,185 +868,7 @@ def load_llvm_coverage(target_dir: str,
         )
 
     logger.info("[llvm-cov-loader] using python backend")
-    cache_disabled_values = {"0", "false", "no", "off"}
-    cache_enabled = (os.getenv(LLVM_COVERAGE_CACHE_ENV, "1").strip().lower()
-                     not in cache_disabled_values)
-    cache_key: Optional[Tuple[Any, ...]] = None
-    if cache_enabled:
-        cache_entries: List[Tuple[str, int, int]] = []
-        for coverage_report in coverage_reports:
-            try:
-                stat_result = os.stat(coverage_report)
-            except OSError:
-                cache_entries = []
-                break
-            cache_entries.append((coverage_report, stat_result.st_mtime_ns,
-                                  stat_result.st_size))
-        if cache_entries:
-            cache_key = (tuple(cache_entries), is_rust)
-            with _LLVM_COVERAGE_PROFILE_CACHE_LOCK:
-                cached_profile = _LLVM_COVERAGE_PROFILE_CACHE.get(cache_key)
-            if cached_profile is not None:
-                logger.info("Reusing cached LLVM coverage for %d reports",
-                            len(coverage_reports))
-                return cached_profile.clone_with_shared_data()
-
-    cp = CoverageProfile()
-    logger.info(f"Using the following coverages {coverage_reports}")
-    cp.set_type("function")
-    for profile_file in coverage_reports:
-        cp.coverage_files.append(profile_file)
-        logger.info(f"Reading coverage report: {profile_file}")
-        with open(profile_file, "rb") as pf:
-            curr_func = None
-            switch_string = str()
-            switch_line_number = None
-            case_line_numbers: Set[int] = set()
-            for raw_line in pf:
-                line = utils.safe_decode(raw_line)
-                if line is None:
-                    continue
-
-                line = line.replace("\n", "")
-                logger.debug(f"cov-readline: {line}")
-
-                # Parse lines that signal function names. These linse indicate that the
-                # lines following this line will be the specific source code lines of
-                # the given function.
-                # Example line:
-                #  "LLVMFuzzerTestOneInput:\n"
-                if len(line) > 0 and line[-1] == ":" and "|" not in line:
-                    if len(line.split(":")) == 3:
-                        curr_func = line.split(":")[1].replace(" ",
-                                                               "").replace(
-                                                                   ":", "")
-                    else:
-                        curr_func = line.replace(" ", "").replace(":", "")
-                    if is_rust:
-                        curr_func = utils.demangle_rust_func(curr_func)
-                    else:
-                        curr_func = utils.demangle_cpp_func(curr_func)
-                    cp.covmap[curr_func] = list()
-                    switch_string = ""
-                    switch_line_number = None
-                # Special treatment for switch statement coverage:
-                # The line for switch MAY get one Branch entry; We use it for collecting
-                # overall hitcout of statement.
-                # Each `case` gets its own Branch entry for coverage. The important part
-                # is true_hit because that means if a `case` is taken or not.
-                if curr_func and COVERAGE_SWITCH_REGEX.match(line):
-                    line_segs = line.split("|")
-                    try:
-                        switch_line_number = int(line_segs[0])
-                    except Exception:
-                        continue
-
-                    try:
-                        # Calculate the column of the switch keyword.
-                        column_number = line_segs[2].find("switch") + 1
-                    except Exception:
-                        continue
-                    case_line_numbers = set()  # To keep track of switch cases.
-                    # This string may be updated if there is Branch pattern for this line.
-                    switch_string = f"{curr_func}:{switch_line_number},{column_number}"
-                    logger.debug(f"Seen switch in coverage: {switch_string}")
-
-                # This parses Branch cov info in the form of:
-                #  |  Branch (81:7): [True: 1.2k, False: 0]
-                if curr_func and COVERAGE_BRANCH_REGEX.match(line):
-                    try:
-                        line_number = int(line.split("(")[1].split(":")[0])
-                    except Exception:
-                        continue
-                    try:
-                        column_number = int(line.split(":")[1].split(")")[0])
-                    except Exception:
-                        continue
-
-                    try:
-                        true_hit = extract_hitcount(
-                            line.split("True:")[1].split(",")[0])
-                        if true_hit == -1:
-                            continue
-                    except Exception:
-                        continue
-                    try:
-                        false_hit = extract_hitcount(
-                            line.split("False:")[1].replace("]", ""))
-                        if false_hit == -1:
-                            continue
-                    except Exception:
-                        continue
-
-                    if switch_line_number and line_number == switch_line_number:
-                        # This Branch pattern belongs to switch line.
-                        # Note that the column number is inacurrate as it belongs to
-                        # the variable inside pranthesis. Should not use it for switch_string.
-                        cp.branch_cov_map[switch_string] = [
-                            true_hit, false_hit
-                        ]
-                    elif line_number in case_line_numbers:
-                        # This Branch pattern belongs to a `case`.
-                        try:
-                            # This collects for `case` taken side.
-                            cp.branch_cov_map[switch_string].append(true_hit)
-                        except Exception:
-                            # Taking care of anomalies where the coverage report has no
-                            # Branch pattern for switch line.
-                            logger.debug(
-                                f"The switch had no Branch pattern {switch_string}"
-                            )
-                            cp.branch_cov_map[switch_string] = [
-                                true_hit,
-                                false_hit,
-                                true_hit,
-                            ]
-                    else:
-                        # This Branch pattern belongs to a conditional branch.
-                        branch_string = f"{curr_func}:{line_number},{column_number}"
-                        cp.branch_cov_map[branch_string] = [
-                            true_hit, false_hit
-                        ]
-                # Parse lines that signal specific line of code. These lines only
-                # offer after the function names parsed above.
-                # Example line:
-                #  "   83|  5.99M|    char *kldfj = (char*)malloc(123);\n"
-                elif curr_func is not None and "|" in line:
-                    # Extract source code line number
-                    try:
-                        line_number = int(line.split("|")[0])
-                    except Exception:
-                        continue
-
-                    if COVERAGE_CASE_REGEX.match(line):
-                        if switch_string:
-                            case_line_numbers.add(line_number)
-                        else:
-                            logger.info("found case outside a switch?! \n%s",
-                                        line)
-
-                    # Extract hit count
-                    # Write out numbers e.g. 1.2k into 1200 and 5.99M to 5990000
-                    try:
-                        hit_times = extract_hitcount(line.split("|")[1])
-                        if hit_times == -1:
-                            continue
-                    except Exception:
-                        # Avoid overcounting the code lines by skipping comments and empty lines.
-                        if " 0| " in line:
-                            hit_times = 0
-                        else:
-                            continue
-                    # Add source code line and hitcount to coverage map of current function
-                    logger.debug(
-                        f"reading coverage: {curr_func} -- {line_number} -- {hit_times}"
-                    )
-                    cp.covmap[curr_func].append((line_number, hit_times))
-    if cache_key is not None:
-        with _LLVM_COVERAGE_PROFILE_CACHE_LOCK:
-            _LLVM_COVERAGE_PROFILE_CACHE[cache_key] = cp
-        return cp.clone_with_shared_data()
-    return cp
+    return _load_llvm_coverage_python_reports(coverage_reports, is_rust)
 
 
 def load_python_json_coverage(json_file: str,
