@@ -1889,6 +1889,185 @@ def get_body_script_tags(all_functions_json, fuzzer_table_data) -> str:
     return html_script_tags
 
 
+def _line_identity_name_candidates(
+    report_row: Dict[str, Any]) -> List[str]:
+    candidates: List[str] = []
+    raw_name = report_row.get("raw-function-name", "")
+    for candidate in (
+        report_row.get("Func name", ""),
+        utils.demangle_cpp_func(raw_name),
+        utils.demangle_rust_func(raw_name),
+    ):
+        if not isinstance(candidate, str):
+            continue
+        value = candidate.strip()
+        if value and value not in candidates:
+            candidates.append(value)
+    return candidates
+
+
+def _line_identity_function_key(report_row: Dict[str, Any]) -> str:
+    raw_name = report_row.get("raw-function-name", report_row.get("Func name", ""))
+    filename = report_row.get("Functions filename", "")
+    line_begin = report_row.get("source_line_begin", -1)
+    return f"{raw_name}|{filename}|{line_begin}"
+
+
+def _line_identity_snapshot_metadata(out_dir: str) -> Dict[str, str]:
+    pipeline_id = os.getenv("CI_PIPELINE_ID", "") or os.getenv("BUILD_ID", "")
+    commit_sha = os.getenv("CI_COMMIT_SHA", "") or os.getenv("GIT_COMMIT", "")
+    base_name = os.path.basename(os.path.normpath(out_dir)) or "report"
+    snapshot_suffix = pipeline_id or commit_sha or base_name
+    return {
+        "pipeline_id": pipeline_id,
+        "commit_sha": commit_sha,
+        "coverage_snapshot_id": f"coverage-{snapshot_suffix}",
+        "introspector_report_id": f"introspector-{snapshot_suffix}",
+    }
+
+
+def _index_line_identity_rows(
+    all_functions_json_report: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    rows_by_name: Dict[str, List[Dict[str, Any]]] = {}
+    for report_row in all_functions_json_report:
+        for candidate in _line_identity_name_candidates(report_row):
+            rows_by_name.setdefault(candidate, []).append(report_row)
+    return rows_by_name
+
+
+def _resolve_exact_line_identity_row(
+    rows_by_name: Dict[str, List[Dict[str, Any]]],
+    func_name: str,
+) -> Optional[Dict[str, Any]]:
+    matched_rows = rows_by_name.get(func_name, [])
+    if len(matched_rows) != 1:
+        return None
+    report_row = matched_rows[0]
+    if not report_row.get("Functions filename"):
+        return None
+    if report_row.get("source_line_begin", -1) in (-1, None):
+        return None
+    return report_row
+
+
+def _build_line_identity_payloads(
+    proj_profile: project_profile.MergedProjectProfile,
+    profiles: List[fuzzer_profile.FuzzerProfile],
+    all_functions_json_report: List[Dict[str, Any]],
+    out_dir: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    rows_by_name = _index_line_identity_rows(all_functions_json_report)
+    snapshot_metadata = _line_identity_snapshot_metadata(out_dir)
+
+    executable_records: List[Dict[str, Any]] = []
+    executable_lines_by_function: Dict[str, List[int]] = {}
+    seen_executable = set()
+    for func_name, line_entries in proj_profile.runtime_coverage.covmap.items():
+        report_row = _resolve_exact_line_identity_row(rows_by_name, func_name)
+        if report_row is None:
+            continue
+        function_key = _line_identity_function_key(report_row)
+        raw_name = report_row.get("raw-function-name", report_row.get("Func name", ""))
+        filename = report_row.get("Functions filename", "")
+        executable_lines = sorted({int(line_no) for line_no, _ in line_entries})
+        executable_lines_by_function[function_key] = executable_lines
+        for line_number in executable_lines:
+            dedup_key = (function_key, line_number)
+            if dedup_key in seen_executable:
+                continue
+            seen_executable.add(dedup_key)
+            executable_records.append({
+                "function_key": function_key,
+                "raw_function_name": raw_name,
+                "filename": filename,
+                "line_number": line_number,
+                "introspector_report_id": snapshot_metadata["introspector_report_id"],
+            })
+
+    covered_records: List[Dict[str, Any]] = []
+    covered_dedup: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
+    for profile in profiles:
+        if profile.coverage is None:
+            continue
+        if getattr(profile, "target_lang", "") not in ("c-cpp", "rust"):
+            continue
+        for func_name, line_entries in profile.coverage.covmap.items():
+            report_row = _resolve_exact_line_identity_row(rows_by_name, func_name)
+            if report_row is None:
+                continue
+            filename = report_row.get("Functions filename", "")
+            for line_no, hit_count in line_entries:
+                hit_count = int(hit_count)
+                if hit_count <= 0:
+                    continue
+                dedup_key = (profile.identifier, filename, int(line_no))
+                previous = covered_dedup.get(dedup_key)
+                covered_dedup[dedup_key] = {
+                    "fuzzer_name": profile.identifier,
+                    "filename": filename,
+                    "line_number": int(line_no),
+                    "hit_count": max(hit_count, previous["hit_count"]) if previous else hit_count,
+                    "coverage_snapshot_id": snapshot_metadata["coverage_snapshot_id"],
+                    "pipeline_id": snapshot_metadata["pipeline_id"],
+                    "commit_sha": snapshot_metadata["commit_sha"],
+                }
+    covered_records = list(covered_dedup.values())
+
+    reachable_records: List[Dict[str, Any]] = []
+    reachable_dedup = set()
+    for report_row in all_functions_json_report:
+        function_key = _line_identity_function_key(report_row)
+        executable_lines = executable_lines_by_function.get(function_key)
+        if not executable_lines:
+            continue
+        filename = report_row.get("Functions filename", "")
+        for fuzzer_name in report_row.get("Reached by Fuzzers", []):
+            for line_number in executable_lines:
+                dedup_key = (fuzzer_name, function_key, line_number)
+                if dedup_key in reachable_dedup:
+                    continue
+                reachable_dedup.add(dedup_key)
+                reachable_records.append({
+                    "fuzzer_name": fuzzer_name,
+                    "function_key": function_key,
+                    "filename": filename,
+                    "line_number": line_number,
+                    "introspector_report_id": snapshot_metadata["introspector_report_id"],
+                })
+
+    return executable_records, covered_records, reachable_records
+
+
+def _write_line_identity_artifacts(
+    proj_profile: project_profile.MergedProjectProfile,
+    profiles: List[fuzzer_profile.FuzzerProfile],
+    all_functions_json_report: List[Dict[str, Any]],
+    out_dir: str,
+) -> None:
+    executable_records, covered_records, reachable_records = (
+        _build_line_identity_payloads(
+            proj_profile,
+            profiles,
+            all_functions_json_report,
+            out_dir,
+        ))
+    json_report.create_named_json_artifact(
+        constants.PER_FUNCTION_EXECUTABLE_LINES_JSON,
+        executable_records,
+        out_dir,
+    )
+    json_report.create_named_json_artifact(
+        constants.PER_FUZZER_COVERED_LINES_JSON,
+        covered_records,
+        out_dir,
+    )
+    json_report.create_named_json_artifact(
+        constants.PER_FUZZER_STATIC_REACHABLE_LINES_JSON,
+        reachable_records,
+        out_dir,
+    )
+
+
 def create_html_report(
     introspection_proj: analysis.IntrospectionProject,
     analyses_to_run,
@@ -2079,6 +2258,12 @@ def create_html_report(
         if dump_files:
             json_report.create_all_fi_functions_json(all_functions_json_report,
                                                      out_dir)
+            _write_line_identity_artifacts(
+                introspection_proj.proj_profile,
+                introspection_proj.profiles,
+                all_functions_json_report,
+                out_dir,
+            )
 
         # Write jvm constructor details to all-fuzz-introspector-jvm-constructor.json
         if (introspection_proj.proj_profile.target_lang == "jvm"

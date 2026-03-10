@@ -31,6 +31,9 @@ ALL_JVM_CONSTRUCTOR_JSON = "all-fuzz-introspector-jvm-constructor.json"
 BRANCH_BLOCKERS_FILE = "branch-blockers.json"
 TEST_FILES_JSON = "test-files.json"
 ALL_SOURCE_FILES = "all-files.json"
+PER_FUZZER_COVERED_LINES_JSON = "per-fuzzer-covered-lines.json"
+PER_FUNCTION_EXECUTABLE_LINES_JSON = "per-function-executable-lines.json"
+PER_FUZZER_STATIC_REACHABLE_LINES_JSON = "per-fuzzer-statically-reachable-lines.json"
 
 HTML_REPORT = "fuzz_report.html"
 

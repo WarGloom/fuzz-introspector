@@ -208,6 +208,25 @@ def create_all_jvm_constructor_json(functions_dict, out_dir) -> None:
         json.dump(functions_dict, f)
 
 
+def create_named_json_artifact(filename: str, payload: Any, out_dir) -> None:
+    """Write a named JSON artifact to the report output directory."""
+    if not constants.should_dump_files:
+        return
+
+    collector = merge_intents.get_active_merge_intent_collector()
+    if collector is not None:
+        intent = merge_intents.create_artifact_write_intent(
+            filename,
+            json.dumps(payload),
+            out_dir,
+        )
+        collector.add_intent(intent)
+        return
+
+    with open(os.path.join(out_dir, filename), "w") as artifact_fd:
+        json.dump(payload, artifact_fd)
+
+
 def add_branch_blocker_key_value_to_report(profile_identifier, unused_key,
                                            branch_blockers_list, out_dir):
     """Write branch blocker data for a profile.

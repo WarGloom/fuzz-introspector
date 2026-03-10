@@ -389,3 +389,157 @@ def test_render_calltree_bitmaps_native_uses_go_backend(
     assert captured["payload"]["jobs"][0]["output_path"].endswith(
         "/tmp/output/bitmap.png")
     assert result == {"bitmap.png": ["red", "gold"]}
+
+
+def test_build_line_identity_payloads_exports_expected_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CI_PIPELINE_ID", "pipeline-123")
+    monkeypatch.setenv("CI_COMMIT_SHA", "commit-abc")
+
+    proj_profile = SimpleNamespace(
+        runtime_coverage=SimpleNamespace(covmap={"foo()": [(10, 1), (11, 0), (12, 3)]}))
+    profiles = [
+        SimpleNamespace(
+            identifier="fuzzA",
+            target_lang="c-cpp",
+            coverage=SimpleNamespace(covmap={"foo()": [(10, 1), (11, 0), (12, 2)]}),
+        ),
+        SimpleNamespace(
+            identifier="fuzzB",
+            target_lang="c-cpp",
+            coverage=SimpleNamespace(covmap={"foo()": [(10, 0), (11, 0), (12, 1)]}),
+        ),
+    ]
+    all_functions_json_report = [{
+        "Func name": "foo()",
+        "raw-function-name": "_Z3foov",
+        "Functions filename": "/src/demo.c",
+        "source_line_begin": 10,
+        "Reached by Fuzzers": ["fuzzA", "fuzzB"],
+    }]
+
+    executable, covered, reachable = html_report._build_line_identity_payloads(
+        proj_profile,
+        profiles,
+        all_functions_json_report,
+        "/tmp/report-out",
+    )
+
+    assert executable == [{
+        "function_key": "_Z3foov|/src/demo.c|10",
+        "raw_function_name": "_Z3foov",
+        "filename": "/src/demo.c",
+        "line_number": 10,
+        "introspector_report_id": "introspector-pipeline-123",
+    }, {
+        "function_key": "_Z3foov|/src/demo.c|10",
+        "raw_function_name": "_Z3foov",
+        "filename": "/src/demo.c",
+        "line_number": 11,
+        "introspector_report_id": "introspector-pipeline-123",
+    }, {
+        "function_key": "_Z3foov|/src/demo.c|10",
+        "raw_function_name": "_Z3foov",
+        "filename": "/src/demo.c",
+        "line_number": 12,
+        "introspector_report_id": "introspector-pipeline-123",
+    }]
+    assert covered == [{
+        "fuzzer_name": "fuzzA",
+        "filename": "/src/demo.c",
+        "line_number": 10,
+        "hit_count": 1,
+        "coverage_snapshot_id": "coverage-pipeline-123",
+        "pipeline_id": "pipeline-123",
+        "commit_sha": "commit-abc",
+    }, {
+        "fuzzer_name": "fuzzA",
+        "filename": "/src/demo.c",
+        "line_number": 12,
+        "hit_count": 2,
+        "coverage_snapshot_id": "coverage-pipeline-123",
+        "pipeline_id": "pipeline-123",
+        "commit_sha": "commit-abc",
+    }, {
+        "fuzzer_name": "fuzzB",
+        "filename": "/src/demo.c",
+        "line_number": 12,
+        "hit_count": 1,
+        "coverage_snapshot_id": "coverage-pipeline-123",
+        "pipeline_id": "pipeline-123",
+        "commit_sha": "commit-abc",
+    }]
+    assert reachable == [{
+        "fuzzer_name": "fuzzA",
+        "function_key": "_Z3foov|/src/demo.c|10",
+        "filename": "/src/demo.c",
+        "line_number": 10,
+        "introspector_report_id": "introspector-pipeline-123",
+    }, {
+        "fuzzer_name": "fuzzA",
+        "function_key": "_Z3foov|/src/demo.c|10",
+        "filename": "/src/demo.c",
+        "line_number": 11,
+        "introspector_report_id": "introspector-pipeline-123",
+    }, {
+        "fuzzer_name": "fuzzA",
+        "function_key": "_Z3foov|/src/demo.c|10",
+        "filename": "/src/demo.c",
+        "line_number": 12,
+        "introspector_report_id": "introspector-pipeline-123",
+    }, {
+        "fuzzer_name": "fuzzB",
+        "function_key": "_Z3foov|/src/demo.c|10",
+        "filename": "/src/demo.c",
+        "line_number": 10,
+        "introspector_report_id": "introspector-pipeline-123",
+    }, {
+        "fuzzer_name": "fuzzB",
+        "function_key": "_Z3foov|/src/demo.c|10",
+        "filename": "/src/demo.c",
+        "line_number": 11,
+        "introspector_report_id": "introspector-pipeline-123",
+    }, {
+        "fuzzer_name": "fuzzB",
+        "function_key": "_Z3foov|/src/demo.c|10",
+        "filename": "/src/demo.c",
+        "line_number": 12,
+        "introspector_report_id": "introspector-pipeline-123",
+    }]
+
+
+def test_build_line_identity_payloads_skips_ambiguous_name_matches() -> None:
+    proj_profile = SimpleNamespace(
+        runtime_coverage=SimpleNamespace(covmap={"dup()": [(10, 1), (11, 1)]}))
+    profiles = [
+        SimpleNamespace(
+            identifier="fuzzA",
+            target_lang="c-cpp",
+            coverage=SimpleNamespace(covmap={"dup()": [(10, 1), (11, 1)]}),
+        )
+    ]
+    all_functions_json_report = [{
+        "Func name": "dup()",
+        "raw-function-name": "_Z3dupv",
+        "Functions filename": "/src/a.c",
+        "source_line_begin": 10,
+        "Reached by Fuzzers": ["fuzzA"],
+    }, {
+        "Func name": "dup()",
+        "raw-function-name": "_Z3dupv.1",
+        "Functions filename": "/src/b.c",
+        "source_line_begin": 20,
+        "Reached by Fuzzers": ["fuzzA"],
+    }]
+
+    executable, covered, reachable = html_report._build_line_identity_payloads(
+        proj_profile,
+        profiles,
+        all_functions_json_report,
+        "/tmp/report-out",
+    )
+
+    assert executable == []
+    assert covered == []
+    assert reachable == []
