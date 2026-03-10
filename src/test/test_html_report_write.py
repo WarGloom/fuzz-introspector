@@ -543,3 +543,52 @@ def test_build_line_identity_payloads_skips_ambiguous_name_matches() -> None:
     assert executable == []
     assert covered == []
     assert reachable == []
+
+
+def test_build_line_identity_payloads_omits_fuzzer_without_exact_coverage() -> None:
+    proj_profile = SimpleNamespace(
+        runtime_coverage=SimpleNamespace(covmap={"foo()": [(10, 1), (12, 3)]}))
+    profiles = [
+        SimpleNamespace(
+            identifier="fuzzA",
+            target_lang="c-cpp",
+            coverage=SimpleNamespace(covmap={"foo()": [(10, 1), (12, 2)]}),
+        ),
+        SimpleNamespace(
+            identifier="fuzzB",
+            target_lang="c-cpp",
+            coverage=SimpleNamespace(covmap={}),
+        ),
+    ]
+    all_functions_json_report = [{
+        "Func name": "foo()",
+        "raw-function-name": "_Z3foov",
+        "Functions filename": "/src/demo.c",
+        "source_line_begin": 10,
+        "Reached by Fuzzers": ["fuzzA", "fuzzB"],
+    }]
+
+    _executable, covered, _reachable = html_report._build_line_identity_payloads(
+        proj_profile,
+        profiles,
+        all_functions_json_report,
+        "/tmp/report-out",
+    )
+
+    assert covered == [{
+        "fuzzer_name": "fuzzA",
+        "filename": "/src/demo.c",
+        "line_number": 10,
+        "hit_count": 1,
+        "coverage_snapshot_id": "coverage-report-out",
+        "pipeline_id": "",
+        "commit_sha": "",
+    }, {
+        "fuzzer_name": "fuzzA",
+        "filename": "/src/demo.c",
+        "line_number": 12,
+        "hit_count": 2,
+        "coverage_snapshot_id": "coverage-report-out",
+        "pipeline_id": "",
+        "commit_sha": "",
+    }]

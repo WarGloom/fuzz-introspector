@@ -783,9 +783,10 @@ def load_llvm_coverage(target_dir: str,
     However, files could be moved around, renamed, and so on.
 
     As such, this function accepts an arugment "target_name" which is used to
-    target specific coverage profiles. However, if no coverage profile matches
-    that given name then the function will find *all* coverage reports it can and
-    use all of them.
+    target specific coverage profiles. If no coverage profile matches that
+    target, the function returns an empty coverage profile instead of widening
+    the load to all reports. The merged/global behavior remains unchanged when
+    target_name is not provided.
     """
 
     if target_name is not None:
@@ -806,6 +807,19 @@ def load_llvm_coverage(target_dir: str,
             cov_report_base = os.path.basename(cov_report)
             if cov_report_base == target_name + ".covreport":
                 coverage_reports.append(cov_report)
+
+    # If a specific target was requested but no matching per-target coverage
+    # exists, return empty coverage rather than silently widening to all
+    # available reports. Exact per-fuzzer consumers rely on this behavior.
+    if len(coverage_reports) == 0 and target_name is not None:
+        logger.warning(
+            "No LLVM coverage report found for target %s in %s; returning empty coverage",
+            target_name,
+            target_dir,
+        )
+        cp = CoverageProfile()
+        cp.set_type("function")
+        return cp
 
     # If we found no target coverage report then use all reports.
     if len(coverage_reports) == 0:

@@ -413,3 +413,27 @@ def test_load_llvm_coverage_shadow_mode_strict_raises_on_mismatch(
     with pytest.raises(Exception,
                        match=code_coverage.FI_LLVM_COV_PARITY_MISMATCH):
         code_coverage.load_llvm_coverage(str(tmp_path), "target")
+
+
+def test_load_llvm_coverage_target_name_missing_returns_empty_profile(tmp_path):
+    merged_covreport = tmp_path / "merged.covreport"
+    merged_covreport.write_text(
+        "funcMerged:\n  10| 4| return 0;\n",
+        encoding="utf-8",
+    )
+    target_covreport = tmp_path / "fuzzA.covreport"
+    target_covreport.write_text(
+        "funcA:\n  12| 2| return 1;\n",
+        encoding="utf-8",
+    )
+
+    missing_profile = code_coverage.load_llvm_coverage(str(tmp_path), "fuzzB")
+    matched_profile = code_coverage.load_llvm_coverage(str(tmp_path), "fuzzA")
+    merged_profile = code_coverage.load_llvm_coverage(str(tmp_path))
+
+    assert missing_profile.covmap == {}
+    assert missing_profile.coverage_files == []
+    assert matched_profile.coverage_files == [str(target_covreport)]
+    assert matched_profile.get_hit_summary("funcA") == (1, 1)
+    assert merged_profile.coverage_files == sorted(
+        [str(merged_covreport), str(target_covreport)])
