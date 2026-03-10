@@ -1961,7 +1961,7 @@ def _build_line_identity_payloads(
 
     executable_records: List[Dict[str, Any]] = []
     executable_lines_by_function: Dict[str, List[int]] = {}
-    seen_executable = set()
+    seen_executable: Set[Tuple[str, int]] = set()
     for func_name, line_entries in proj_profile.runtime_coverage.covmap.items():
         report_row = _resolve_exact_line_identity_row(rows_by_name, func_name)
         if report_row is None:
@@ -2014,10 +2014,10 @@ def _build_line_identity_payloads(
     covered_records = list(covered_dedup.values())
 
     reachable_records: List[Dict[str, Any]] = []
-    reachable_dedup = set()
+    reachable_dedup: Set[Tuple[str, str, int]] = set()
     for report_row in all_functions_json_report:
         function_key = _line_identity_function_key(report_row)
-        executable_lines = executable_lines_by_function.get(function_key)
+        executable_lines = executable_lines_by_function.get(function_key, [])
         if not executable_lines:
             continue
         filename = report_row.get("Functions filename", "")
