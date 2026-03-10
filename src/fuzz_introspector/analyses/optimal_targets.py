@@ -55,10 +55,14 @@ def add_func_to_reached_and_clone(
     all_functions = merged_profile.all_functions
     target_lang = merged_profile_old.profiles[0].target_lang
 
+    newly_reached = []
+
     # Update hitcount of the function in the new merged profile
     logger.info("Updating hitcount")
     f = all_functions[func_to_add.function_name]
     if f.cyclomatic_complexity == func_to_add.cyclomatic_complexity:
+        if f.hitcount == 0:
+            newly_reached.append(f)
         f.hitcount = 1
 
     # Update hitcount of all functions reached by the function
@@ -70,6 +74,8 @@ def add_func_to_reached_and_clone(
                 logger.debug("Mismatched function name: %s", func_name)
             continue
         f = all_functions[func_name]
+        if f.hitcount == 0:
+            newly_reached.append(f)
         f.hitcount += 1
 
         if merged_profile.target_lang == "rust":
@@ -79,31 +85,29 @@ def add_func_to_reached_and_clone(
             f.reached_by_fuzzers.append(
                 utils.demangle_cpp_func(func_to_add.function_name))
 
-    # Recompute all analysis that is based on hitcounts in all functions as
-    # hitcount has changed for elements in the dictionary.
+    # Incrementally update unreached complexity. Instead of doing a full O(N*M)
+    # recalculation from scratch, we identify newly reached functions and subtract
+    # their cyclomatic complexity from any function that reaches them.
     logger.info("Updating hitcount-related data")
-    for f_profile in all_functions.values():
-        cc = 0
-        uncovered_cc = 0
-        for reached_func_name in f_profile.functions_reached:
-            if reached_func_name not in all_functions:
-                if target_lang == "jvm":
-                    logger.debug("%s not provided within classpath",
-                                 reached_func_name)
-                else:
-                    logger.debug("Mismatched function name: %s",
-                                 reached_func_name)
-                continue
-            f_reached = all_functions[reached_func_name]
-            cc += f_reached.cyclomatic_complexity
-            if f_reached.hitcount == 0:
-                uncovered_cc += f_reached.cyclomatic_complexity
+    if newly_reached:
+        newly_reached_map = {
+            f.function_name: f.cyclomatic_complexity
+            for f in newly_reached
+        }
 
-        # set complexity fields in the function
-        f_profile.new_unreached_complexity = uncovered_cc
-        if f_profile.hitcount == 0:
-            f_profile.new_unreached_complexity += f_profile.cyclomatic_complexity
-        f_profile.total_cyclomatic_complexity = cc + f_profile.cyclomatic_complexity
+        # A function's unreached complexity includes its own complexity if it is unreached.
+        # If it was newly reached, we first subtract its own complexity from itself.
+        for f in newly_reached:
+            f.new_unreached_complexity -= f.cyclomatic_complexity
+
+        # Then, subtract the complexity of all newly reached functions from their
+        # callers' unreached metrics.
+        for f_profile in all_functions.values():
+            covered_cc = sum(
+                newly_reached_map.get(name, 0)
+                for name in f_profile.functions_reached)
+            if covered_cc > 0:
+                f_profile.new_unreached_complexity -= covered_cc
 
     if all_functions[func_to_add.function_name].hitcount == 0:
         logger.info("Error. Hitcount did not get set for some reason. Exiting")
