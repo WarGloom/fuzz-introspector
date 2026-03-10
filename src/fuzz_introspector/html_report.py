@@ -36,6 +36,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Set,
     Tuple,
 )
 
@@ -1972,10 +1973,10 @@ def _build_line_identity_payloads(
         executable_lines = sorted({int(line_no) for line_no, _ in line_entries})
         executable_lines_by_function[function_key] = executable_lines
         for line_number in executable_lines:
-            dedup_key = (function_key, line_number)
-            if dedup_key in seen_executable:
+            executable_dedup_key: Tuple[str, int] = (function_key, line_number)
+            if executable_dedup_key in seen_executable:
                 continue
-            seen_executable.add(dedup_key)
+            seen_executable.add(executable_dedup_key)
             executable_records.append({
                 "function_key": function_key,
                 "raw_function_name": raw_name,
@@ -2000,9 +2001,13 @@ def _build_line_identity_payloads(
                 hit_count = int(hit_count)
                 if hit_count <= 0:
                     continue
-                dedup_key = (profile.identifier, filename, int(line_no))
-                previous = covered_dedup.get(dedup_key)
-                covered_dedup[dedup_key] = {
+                covered_dedup_key: Tuple[str, str, int] = (
+                    profile.identifier,
+                    filename,
+                    int(line_no),
+                )
+                previous = covered_dedup.get(covered_dedup_key)
+                covered_dedup[covered_dedup_key] = {
                     "fuzzer_name": profile.identifier,
                     "filename": filename,
                     "line_number": int(line_no),
@@ -2023,10 +2028,14 @@ def _build_line_identity_payloads(
         filename = report_row.get("Functions filename", "")
         for fuzzer_name in report_row.get("Reached by Fuzzers", []):
             for line_number in executable_lines:
-                dedup_key = (fuzzer_name, function_key, line_number)
-                if dedup_key in reachable_dedup:
+                reachable_dedup_key: Tuple[str, str, int] = (
+                    fuzzer_name,
+                    function_key,
+                    line_number,
+                )
+                if reachable_dedup_key in reachable_dedup:
                     continue
-                reachable_dedup.add(dedup_key)
+                reachable_dedup.add(reachable_dedup_key)
                 reachable_records.append({
                     "fuzzer_name": fuzzer_name,
                     "function_key": function_key,
