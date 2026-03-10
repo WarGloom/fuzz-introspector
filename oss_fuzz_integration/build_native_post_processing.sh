@@ -119,6 +119,8 @@ export FI_PROFILE_YAML_LOADER_RUST_BIN="${NATIVE_BIN_DIR}/native_yaml_loader_rus
 export FI_LLVM_COV_LOADER_RUST_BIN="${NATIVE_BIN_DIR}/native_llvm_cov_loader_rust"
 export FI_DEBUG_CORRELATOR_RUST_BIN="${NATIVE_BIN_DIR}/native_debug_correlator_rust"
 export FI_DEBUG_CORRELATOR_BIN="${NATIVE_BIN_DIR}/native_debug_correlator_rust"
+export FI_IF_DEBUG_CORRELATOR_RUST_BIN="${NATIVE_BIN_DIR}/native_debug_correlator_rust"
+export FI_IF_DEBUG_CORRELATOR_BIN="${NATIVE_BIN_DIR}/native_debug_correlator_rust"
 export FI_OVERLAY_NATIVE_BIN="${NATIVE_BIN_DIR}/native_overlay_backend_rust"
 export FI_OVERLAY_RUST_BIN="${NATIVE_BIN_DIR}/native_overlay_backend_rust"
 
