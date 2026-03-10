@@ -35,6 +35,35 @@ from fuzz_introspector.datatypes import function_profile, fuzzer_profile
 logger = logging.getLogger(name=__name__)
 
 
+def _safe_line_number_for_merge(line_value) -> int:
+    try:
+        return int(line_value)
+    except (TypeError, ValueError):
+        return 1 << 30
+
+
+def _canonical_profile_merge_key(
+        fd: function_profile.FunctionProfile) -> Tuple[int, str, int, str]:
+    source_file = os.path.normpath(getattr(fd, "function_source_file", "") or "")
+    has_source = 0 if source_file else 1
+    return (
+        has_source,
+        source_file,
+        _safe_line_number_for_merge(getattr(fd, "function_linenumber", -1)),
+        getattr(fd, "raw_function_name", getattr(fd, "function_name", "")),
+    )
+
+
+def _choose_canonical_profile(
+        current_fd: function_profile.FunctionProfile,
+        candidate_fd: function_profile.FunctionProfile
+) -> function_profile.FunctionProfile:
+    if _canonical_profile_merge_key(candidate_fd) < _canonical_profile_merge_key(
+            current_fd):
+        return candidate_fd
+    return current_fd
+
+
 class MergedProjectProfile:
     """
     Class for storing information about all fuzzers combined in a given project.
@@ -97,8 +126,12 @@ class MergedProjectProfile:
         for profile in profiles:
             # Handles jvm constructors
             for fd in profile.all_class_constructors.values():
-                if fd.function_name not in self.all_constructors:
+                current_fd = self.all_constructors.get(fd.function_name)
+                if current_fd is None:
                     self.all_constructors[fd.function_name] = fd
+                else:
+                    self.all_constructors[fd.function_name] = _choose_canonical_profile(
+                        current_fd, fd)
 
             # Handles normal functions
             for fd in profile.all_class_functions.values():
@@ -107,8 +140,12 @@ class MergedProjectProfile:
                        for to_exclude in excluded_functions):
                     continue
 
-                if fd.function_name not in self.all_functions:
+                current_fd = self.all_functions.get(fd.function_name)
+                if current_fd is None:
                     self.all_functions[fd.function_name] = fd
+                else:
+                    self.all_functions[fd.function_name] = _choose_canonical_profile(
+                        current_fd, fd)
 
                 static_reached = static_reached_by_fuzzers.get(
                     fd.function_name, set())

@@ -447,6 +447,55 @@ class _FilterProfileStub:
         return self._profile_key
 
 
+class _MergedFunctionStub:
+    def __init__(
+        self,
+        name: str,
+        source_file: str,
+        line_number: int,
+        raw_name: str | None = None,
+    ):
+        self.function_name = name
+        self.raw_function_name = raw_name or name
+        self.function_source_file = source_file
+        self.function_linenumber = line_number
+        self.function_line_number_end = line_number
+        self.functions_reached = []
+        self.incoming_references = []
+        self.cyclomatic_complexity = 0
+        self.hitcount = 0
+        self.hitcount_runtime = 0
+        self.hitcount_combined = 0
+        self.reached_by_fuzzers = []
+        self.reached_by_fuzzers_runtime = []
+        self.reached_by_fuzzers_combined = []
+        self.new_unreached_complexity = 0
+        self.total_cyclomatic_complexity = 0
+
+    @property
+    def has_source_file(self):
+        return bool(self.function_source_file)
+
+
+class _MergedProfileStub:
+    def __init__(self, identifier: str, functions: list[_MergedFunctionStub]):
+        self._identifier = identifier
+        self.target_lang = "c-cpp"
+        self.functions_reached_by_fuzzer = set()
+        self.functions_reached_by_fuzzer_runtime = set()
+        self.functions_unreached_by_fuzzer = set()
+        self.all_class_functions = {
+            function.function_name: function
+            for function in functions
+        }
+        self.all_class_constructors = {}
+        self.coverage = None
+
+    @property
+    def identifier(self):
+        return self._identifier
+
+
 def _make_batch_success_response(profiles_data):
     """Build a JSON string mimicking a successful native binary response."""
     return json.dumps({
@@ -526,6 +575,75 @@ def test_batch_returns_false_on_nonzero_returncode(monkeypatch):
     profiles = [_FuzzerProfileStub("p1", {"f": []})]
     assert fuzzer_profile.propagate_reachability_native_batch(
         profiles) is False
+
+
+def test_merged_project_profile_chooses_stable_duplicate_function_source():
+    profile_a = _MergedProfileStub(
+        "fuzz-a",
+        [
+            _MergedFunctionStub(
+                "LLVMFuzzerCustomMutator",
+                "/src/test/cgptests/src/test_BERPackedData_Print_Fuzzer.cpp",
+                7,
+            )
+        ],
+    )
+    profile_b = _MergedProfileStub(
+        "fuzz-b",
+        [
+            _MergedFunctionStub(
+                "LLVMFuzzerCustomMutator",
+                "/src/test/cgptests/src/test_BERCertificateParse_Fuzzer.cpp",
+                8,
+            )
+        ],
+    )
+
+    merged = project_profile.MergedProjectProfile([profile_a, profile_b],
+                                                  "c-cpp")
+
+    chosen = merged.all_functions["LLVMFuzzerCustomMutator"]
+    assert (chosen.function_source_file,
+            chosen.function_linenumber) == (
+                "/src/test/cgptests/src/test_BERCertificateParse_Fuzzer.cpp",
+                8,
+            )
+
+
+def test_merged_project_profile_duplicate_choice_is_order_independent():
+    packed = _MergedFunctionStub(
+        "LLVMFuzzerCustomCrossOver",
+        "/src/test/cgptests/src/test_BERPackedData_Print_Fuzzer.cpp",
+        7,
+    )
+    cert = _MergedFunctionStub(
+        "LLVMFuzzerCustomCrossOver",
+        "/src/test/cgptests/src/test_BERCertificateParse_Fuzzer.cpp",
+        8,
+    )
+
+    merged_a = project_profile.MergedProjectProfile(
+        [
+            _MergedProfileStub("fuzz-a", [packed]),
+            _MergedProfileStub("fuzz-b", [cert]),
+        ],
+        "c-cpp",
+    )
+    merged_b = project_profile.MergedProjectProfile(
+        [
+            _MergedProfileStub("fuzz-b", [cert]),
+            _MergedProfileStub("fuzz-a", [packed]),
+        ],
+        "c-cpp",
+    )
+
+    chosen_a = merged_a.all_functions["LLVMFuzzerCustomCrossOver"]
+    chosen_b = merged_b.all_functions["LLVMFuzzerCustomCrossOver"]
+    assert (chosen_a.function_source_file,
+            chosen_a.function_linenumber) == (
+                chosen_b.function_source_file,
+                chosen_b.function_linenumber,
+            )
 
 
 def test_batch_returns_false_on_invalid_json(monkeypatch):
