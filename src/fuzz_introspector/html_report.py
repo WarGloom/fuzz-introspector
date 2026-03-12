@@ -1507,6 +1507,7 @@ def create_section_project_overview(table_of_contents, proj_profile,
         html_helpers.HTML_HEADING.H1,
         table_of_contents,
         link="Project-overview",
+        extra_classes="no-pseudo",
     )
     html_overview += '<div class="collapsible">'
 
