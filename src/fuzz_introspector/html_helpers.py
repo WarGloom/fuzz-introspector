@@ -276,6 +276,7 @@ def html_add_header_with_link(
     table_of_contents: HtmlTableOfContents,
     link: Optional[str] = None,
     experimental: Optional[bool] = False,
+    extra_classes: Optional[str] = None,
 ) -> str:
     if link is None:
         link = header_title.replace(" ", "-")
@@ -283,13 +284,19 @@ def html_add_header_with_link(
     if not experimental:
         table_of_contents.add_entry(header_title, link, title_type)
 
-    html_attributes = ""
+    classes = []
     if title_type == HTML_HEADING.H1 or experimental:
-        html_attributes += ' class="report-title"'
+        classes.append("report-title")
+    if extra_classes:
+        classes.append(extra_classes)
+
+    html_attributes = ""
+    if classes:
+        html_attributes = ' class="%s"' % (" ".join(classes))
 
     html_string = f'<a id="{link}">'
     html_string += (
-        f"<h{title_type.value} {html_attributes}>{header_title}</h{title_type.value}>\n"
+        f"<h{title_type.value}{html_attributes}>{header_title}</h{title_type.value}>\n"
     )
     return html_string
 

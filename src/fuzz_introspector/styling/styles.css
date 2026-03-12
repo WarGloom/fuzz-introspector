@@ -914,6 +914,9 @@ h1.report-title.collapsed::before {
 	content: "\27A4";
 	transform: rotate(0deg);
 }
+.no-pseudo {
+	padding-left: 0px;
+}
 .no-pseudo::before {
 	display: none;
 }
