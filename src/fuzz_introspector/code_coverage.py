@@ -454,12 +454,12 @@ class CoverageProfile:
         """
         func_hit_details = self.get_hit_details(func_name)
 
+        if not func_hit_details:
+            return False
+
         for line_info in func_hit_details:
             if lineno == line_info[0]:
-                if line_info[1] != 0:
-                    return True
-                else:
-                    return False
+                return line_info[1] > 0
         return False
 
 
