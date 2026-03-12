@@ -467,8 +467,8 @@ def _run_parallel_analyses(
         if backend != "process" and thread_worker_args:
             with ThreadPoolExecutor(max_workers=total_workers) as executor:
                 thread_futures = {
-                    analysis_name: executor.submit(_run_analysis_worker,
-                                                   *worker_args)
+                    analysis_name:
+                    executor.submit(_run_analysis_worker, *worker_args)
                     for analysis_name, worker_args in
                     thread_worker_args.items()
                 }
