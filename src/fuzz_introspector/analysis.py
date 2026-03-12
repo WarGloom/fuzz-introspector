@@ -3268,7 +3268,8 @@ def correlate_introspection_functions_to_debug_info(
     try:
         if forced_shadow_mode and not shadow_mode:
             logger.info(
-                "%s backend forced shadow mode for %s with proj_lang=%s; Python remains authoritative",
+                "%s backend forced shadow mode for %s with proj_lang=%s; "
+                "Python remains authoritative",
                 configured_backend,
                 _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
                 proj_lang,
@@ -3304,7 +3305,8 @@ def correlate_introspection_functions_to_debug_info(
                         for func in native_target
                     ]
                     logger.info(
-                        "%s enabled for %s; native backend executed and Python authoritative path will run for comparison",
+                        "%s enabled for %s; native backend executed and "
+                        "Python authoritative path will run for comparison",
                         FI_IF_DEBUG_CORRELATOR_SHADOW_ENV,
                         _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
                     )
