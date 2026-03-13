@@ -437,3 +437,29 @@ def test_load_llvm_coverage_target_name_missing_returns_empty_profile(tmp_path):
     assert matched_profile.get_hit_summary("funcA") == (1, 1)
     assert merged_profile.coverage_files == sorted(
         [str(merged_covreport), str(target_covreport)])
+
+
+def test_is_func_lineno_hit() -> None:
+    """Test is_func_lineno_hit function."""
+    cp = code_coverage.CoverageProfile()
+    cp.covmap = {
+        "func1": [(10, 1), (11, 0), (12, 5), (13, -1)],
+        "func2": [(20, 0)]
+    }
+
+    # Case 1: Function exists, line exists, and it is hit.
+    assert cp.is_func_lineno_hit("func1", 10) is True
+    assert cp.is_func_lineno_hit("func1", 12) is True
+
+    # Case 2: Function exists, line exists, but it is not hit.
+    assert cp.is_func_lineno_hit("func1", 11) is False
+    assert cp.is_func_lineno_hit("func2", 20) is False
+
+    # Case 3: Negative hit counts are treated as not hit.
+    assert cp.is_func_lineno_hit("func1", 13) is False
+
+    # Case 4: Function exists, but the line does not exist.
+    assert cp.is_func_lineno_hit("func1", 14) is False
+
+    # Case 5: Function does not exist.
+    assert cp.is_func_lineno_hit("unknown_func", 10) is False
