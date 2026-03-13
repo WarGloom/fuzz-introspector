@@ -41,11 +41,9 @@ FI_REACHABILITY_BACKEND_RUST = "rust"
 FI_PROFILE_WORKERS_RUST_DEFAULT = 3
 
 
-def _get_profile_executor_backend() -> tuple[
-    type[concurrent.futures.ThreadPoolExecutor]
-    | type[concurrent.futures.ProcessPoolExecutor],
-    str,
-]:
+def _get_profile_executor_backend(
+) -> tuple[type[concurrent.futures.ThreadPoolExecutor]
+           | type[concurrent.futures.ProcessPoolExecutor], str, ]:
     """Returns configured parallel backend for profile loading."""
     backend = (os.environ.get(FI_PROFILE_BACKEND_ENV,
                               FI_PROFILE_BACKEND_THREAD).strip().lower())
@@ -368,8 +366,7 @@ def load_all_profiles(
                         data_file,
                         language,
                         preloaded_profile_yaml.get(data_file),
-                    ):
-                    idx
+                    ): idx
                     for idx, data_file in enumerate(data_files)
                 }
                 for future in concurrent.futures.as_completed(future_to_idx):

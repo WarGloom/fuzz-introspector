@@ -44,7 +44,8 @@ def _safe_line_number_for_merge(line_value) -> int:
 
 def _canonical_profile_merge_key(
         fd: function_profile.FunctionProfile) -> Tuple[int, str, int, str]:
-    source_file = os.path.normpath(getattr(fd, "function_source_file", "") or "")
+    source_file = os.path.normpath(
+        getattr(fd, "function_source_file", "") or "")
     has_source = 0 if source_file else 1
     return (
         has_source,
@@ -55,11 +56,11 @@ def _canonical_profile_merge_key(
 
 
 def _choose_canonical_profile(
-        current_fd: function_profile.FunctionProfile,
-        candidate_fd: function_profile.FunctionProfile
+    current_fd: function_profile.FunctionProfile,
+    candidate_fd: function_profile.FunctionProfile
 ) -> function_profile.FunctionProfile:
-    if _canonical_profile_merge_key(candidate_fd) < _canonical_profile_merge_key(
-            current_fd):
+    if _canonical_profile_merge_key(
+            candidate_fd) < _canonical_profile_merge_key(current_fd):
         return candidate_fd
     return current_fd
 
@@ -130,8 +131,9 @@ class MergedProjectProfile:
                 if current_fd is None:
                     self.all_constructors[fd.function_name] = fd
                 else:
-                    self.all_constructors[fd.function_name] = _choose_canonical_profile(
-                        current_fd, fd)
+                    self.all_constructors[
+                        fd.function_name] = _choose_canonical_profile(
+                            current_fd, fd)
 
             # Handles normal functions
             for fd in profile.all_class_functions.values():
@@ -144,8 +146,9 @@ class MergedProjectProfile:
                 if current_fd is None:
                     self.all_functions[fd.function_name] = fd
                 else:
-                    self.all_functions[fd.function_name] = _choose_canonical_profile(
-                        current_fd, fd)
+                    self.all_functions[
+                        fd.function_name] = _choose_canonical_profile(
+                            current_fd, fd)
 
                 static_reached = static_reached_by_fuzzers.get(
                     fd.function_name, set())
