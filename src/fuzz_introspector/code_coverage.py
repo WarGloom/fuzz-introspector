@@ -587,32 +587,39 @@ def _coverage_profile_from_external_payload(
 
 
 def _normalise_covmap(
-        covmap: Dict[str, List[Tuple[int, int]]]) -> Dict[str, List[Tuple[int,
-                                                                       int]]]:
+    covmap: Dict[str, List[Tuple[int, int]]],
+) -> Dict[str, List[Tuple[int, int]]]:
     return {
-        key: sorted((int(line_no), int(hit_count))
-                    for line_no, hit_count in entries)
+        key:
+        sorted((int(line_no), int(hit_count))
+               for line_no, hit_count in entries)
         for key, entries in covmap.items()
     }
 
 
 def _normalise_branch_cov_map(
-        branch_cov_map: Dict[str, List[int]]) -> Dict[str, List[int]]:
-    return {key: [int(value) for value in values]
-            for key, values in branch_cov_map.items()}
+    branch_cov_map: Dict[str, List[int]], ) -> Dict[str, List[int]]:
+    return {
+        key: [int(value) for value in values]
+        for key, values in branch_cov_map.items()
+    }
 
 
-def _collect_llvm_cov_parity_details(native_profile: "CoverageProfile",
-                                     python_profile: "CoverageProfile") -> Dict[str, int]:
+def _collect_llvm_cov_parity_details(
+        native_profile: "CoverageProfile",
+        python_profile: "CoverageProfile") -> Dict[str, int]:
     native_covmap = _normalise_covmap(native_profile.covmap)
     python_covmap = _normalise_covmap(python_profile.covmap)
-    native_branch_map = _normalise_branch_cov_map(native_profile.branch_cov_map)
-    python_branch_map = _normalise_branch_cov_map(python_profile.branch_cov_map)
+    native_branch_map = _normalise_branch_cov_map(
+        native_profile.branch_cov_map)
+    python_branch_map = _normalise_branch_cov_map(
+        python_profile.branch_cov_map)
 
     covmap_keys = set(native_covmap) | set(python_covmap)
     branch_keys = set(native_branch_map) | set(python_branch_map)
     covmap_mismatches = sum(
-        1 for key in covmap_keys if native_covmap.get(key) != python_covmap.get(key))
+        1 for key in covmap_keys
+        if native_covmap.get(key) != python_covmap.get(key))
     branch_mismatches = sum(
         1 for key in branch_keys
         if native_branch_map.get(key) != python_branch_map.get(key))
@@ -624,8 +631,8 @@ def _collect_llvm_cov_parity_details(native_profile: "CoverageProfile",
     }
 
 
-def _load_llvm_coverage_python_reports(
-        coverage_reports: List[str], is_rust: bool) -> CoverageProfile:
+def _load_llvm_coverage_python_reports(coverage_reports: List[str],
+                                       is_rust: bool) -> CoverageProfile:
     cache_disabled_values = {"0", "false", "no", "off"}
     cache_enabled = (os.getenv(LLVM_COVERAGE_CACHE_ENV, "1").strip().lower()
                      not in cache_disabled_values)
@@ -670,8 +677,9 @@ def _load_llvm_coverage_python_reports(
 
                 if len(line) > 0 and line[-1] == ":" and "|" not in line:
                     if len(line.split(":")) == 3:
-                        curr_func = line.split(":")[1].replace(" ", "").replace(
-                            ":", "")
+                        curr_func = line.split(":")[1].replace(" ",
+                                                               "").replace(
+                                                                   ":", "")
                     else:
                         curr_func = line.replace(" ", "").replace(":", "")
                     if is_rust:
@@ -721,17 +729,23 @@ def _load_llvm_coverage_python_reports(
                         continue
 
                     if switch_line_number and line_number == switch_line_number:
-                        cp.branch_cov_map[switch_string] = [true_hit, false_hit]
+                        cp.branch_cov_map[switch_string] = [
+                            true_hit, false_hit
+                        ]
                     elif line_number in case_line_numbers:
                         try:
                             cp.branch_cov_map[switch_string].append(true_hit)
                         except Exception:
                             cp.branch_cov_map[switch_string] = [
-                                true_hit, false_hit, true_hit
+                                true_hit,
+                                false_hit,
+                                true_hit,
                             ]
                     else:
                         branch_string = f"{curr_func}:{line_number},{column_number}"
-                        cp.branch_cov_map[branch_string] = [true_hit, false_hit]
+                        cp.branch_cov_map[branch_string] = [
+                            true_hit, false_hit
+                        ]
                 elif curr_func is not None and "|" in line:
                     try:
                         line_number = int(line.split("|")[0])
@@ -847,21 +861,26 @@ def load_llvm_coverage(target_dir: str,
         if profile is not None:
             if shadow_mode:
                 logger.info(
-                    "%s enabled; native backend executed and Python authoritative path will run for comparison",
+                    ("%s enabled; native backend executed and Python "
+                     "authoritative path will run for comparison"),
                     FI_LLVM_COV_LOADER_SHADOW_ENV,
                 )
                 python_profile = _load_llvm_coverage_python_reports(
                     coverage_reports, is_rust)
                 mismatch_details = _collect_llvm_cov_parity_details(
                     profile, python_profile)
-                if mismatch_details["covmap_mismatches"] or mismatch_details[
-                        "branch_mismatches"]:
+                if (mismatch_details["covmap_mismatches"]
+                        or mismatch_details["branch_mismatches"]):
                     if strict_mode:
-                        raise exceptions.DataLoaderError(
-                            f"{FI_LLVM_COV_PARITY_MISMATCH}: Native LLVM coverage differs from Python authoritative path | details={json.dumps(mismatch_details, sort_keys=True)}"
-                        )
+                        raise exceptions.DataLoaderError((
+                            f"{FI_LLVM_COV_PARITY_MISMATCH}: Native LLVM "
+                            "coverage differs from Python authoritative "
+                            "path | details="
+                            f"{json.dumps(mismatch_details, sort_keys=True)}"))
                     logger.warning(
-                        "%s: Native LLVM coverage differs from Python authoritative path; using Python result | details=%s",
+                        ("%s: Native LLVM coverage differs from Python "
+                         "authoritative path; using Python result | "
+                         "details=%s"),
                         FI_LLVM_COV_PARITY_MISMATCH,
                         json.dumps(mismatch_details, sort_keys=True),
                     )

@@ -1891,14 +1891,13 @@ def get_body_script_tags(all_functions_json, fuzzer_table_data) -> str:
     return html_script_tags
 
 
-def _line_identity_name_candidates(
-    report_row: Dict[str, Any]) -> List[str]:
+def _line_identity_name_candidates(report_row: Dict[str, Any]) -> List[str]:
     candidates: List[str] = []
     raw_name = report_row.get("raw-function-name", "")
     for candidate in (
-        report_row.get("Func name", ""),
-        utils.demangle_cpp_func(raw_name),
-        utils.demangle_rust_func(raw_name),
+            report_row.get("Func name", ""),
+            utils.demangle_cpp_func(raw_name),
+            utils.demangle_rust_func(raw_name),
     ):
         if not isinstance(candidate, str):
             continue
@@ -1909,7 +1908,8 @@ def _line_identity_name_candidates(
 
 
 def _line_identity_function_key(report_row: Dict[str, Any]) -> str:
-    raw_name = report_row.get("raw-function-name", report_row.get("Func name", ""))
+    raw_name = report_row.get("raw-function-name",
+                              report_row.get("Func name", ""))
     filename = report_row.get("Functions filename", "")
     line_begin = report_row.get("source_line_begin", -1)
     return f"{raw_name}|{filename}|{line_begin}"
@@ -1929,7 +1929,8 @@ def _line_identity_snapshot_metadata(out_dir: str) -> Dict[str, str]:
 
 
 def _index_line_identity_rows(
-    all_functions_json_report: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    all_functions_json_report: List[Dict[str, Any]]
+) -> Dict[str, List[Dict[str, Any]]]:
     rows_by_name: Dict[str, List[Dict[str, Any]]] = collections.defaultdict(
         list)
     for report_row in all_functions_json_report:
@@ -1965,14 +1966,18 @@ def _build_line_identity_payloads(
     executable_records: List[Dict[str, Any]] = []
     executable_lines_by_function: Dict[str, List[int]] = {}
     seen_executable: Set[Tuple[str, int]] = set()
-    for func_name, line_entries in proj_profile.runtime_coverage.covmap.items():
+    for func_name, line_entries in proj_profile.runtime_coverage.covmap.items(
+    ):
         report_row = _resolve_exact_line_identity_row(rows_by_name, func_name)
         if report_row is None:
             continue
         function_key = _line_identity_function_key(report_row)
-        raw_name = report_row.get("raw-function-name", report_row.get("Func name", ""))
+        raw_name = report_row.get("raw-function-name",
+                                  report_row.get("Func name", ""))
         filename = report_row.get("Functions filename", "")
-        executable_lines = sorted({int(line_no) for line_no, _ in line_entries})
+        executable_lines = sorted(
+            {int(line_no)
+             for line_no, _ in line_entries})
         executable_lines_by_function[function_key] = executable_lines
         for line_number in executable_lines:
             executable_dedup_key: Tuple[str, int] = (function_key, line_number)
@@ -1980,11 +1985,16 @@ def _build_line_identity_payloads(
                 continue
             seen_executable.add(executable_dedup_key)
             executable_records.append({
-                "function_key": function_key,
-                "raw_function_name": raw_name,
-                "filename": filename,
-                "line_number": line_number,
-                "introspector_report_id": snapshot_metadata["introspector_report_id"],
+                "function_key":
+                function_key,
+                "raw_function_name":
+                raw_name,
+                "filename":
+                filename,
+                "line_number":
+                line_number,
+                "introspector_report_id":
+                snapshot_metadata["introspector_report_id"],
             })
 
     covered_records: List[Dict[str, Any]] = []
@@ -1995,7 +2005,8 @@ def _build_line_identity_payloads(
         if getattr(profile, "target_lang", "") not in ("c-cpp", "rust"):
             continue
         for func_name, line_entries in profile.coverage.covmap.items():
-            report_row = _resolve_exact_line_identity_row(rows_by_name, func_name)
+            report_row = _resolve_exact_line_identity_row(
+                rows_by_name, func_name)
             if report_row is None:
                 continue
             filename = report_row.get("Functions filename", "")
@@ -2010,13 +2021,21 @@ def _build_line_identity_payloads(
                 )
                 previous = covered_dedup.get(covered_dedup_key)
                 covered_dedup[covered_dedup_key] = {
-                    "fuzzer_name": profile.identifier,
-                    "filename": filename,
-                    "line_number": int(line_no),
-                    "hit_count": max(hit_count, previous["hit_count"]) if previous else hit_count,
-                    "coverage_snapshot_id": snapshot_metadata["coverage_snapshot_id"],
-                    "pipeline_id": snapshot_metadata["pipeline_id"],
-                    "commit_sha": snapshot_metadata["commit_sha"],
+                    "fuzzer_name":
+                    profile.identifier,
+                    "filename":
+                    filename,
+                    "line_number":
+                    int(line_no),
+                    "hit_count":
+                    max(hit_count, previous["hit_count"])
+                    if previous else hit_count,
+                    "coverage_snapshot_id":
+                    snapshot_metadata["coverage_snapshot_id"],
+                    "pipeline_id":
+                    snapshot_metadata["pipeline_id"],
+                    "commit_sha":
+                    snapshot_metadata["commit_sha"],
                 }
     covered_records = list(covered_dedup.values())
 
@@ -2039,11 +2058,16 @@ def _build_line_identity_payloads(
                     continue
                 reachable_dedup.add(reachable_dedup_key)
                 reachable_records.append({
-                    "fuzzer_name": fuzzer_name,
-                    "function_key": function_key,
-                    "filename": filename,
-                    "line_number": line_number,
-                    "introspector_report_id": snapshot_metadata["introspector_report_id"],
+                    "fuzzer_name":
+                    fuzzer_name,
+                    "function_key":
+                    function_key,
+                    "filename":
+                    filename,
+                    "line_number":
+                    line_number,
+                    "introspector_report_id":
+                    snapshot_metadata["introspector_report_id"],
                 })
 
     return executable_records, covered_records, reachable_records
