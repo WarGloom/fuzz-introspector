@@ -300,15 +300,15 @@ def extract_local_report_function_list(report_dir):
 
 def extract_local_report_branch_blockers(report_dir):
     artifacts_dir = _get_local_report_artifacts_dir(report_dir)
-    return _load_local_json(
-        os.path.join(artifacts_dir, 'branch-blockers.json'), {})
+    return _load_local_json(os.path.join(artifacts_dir,
+                                         'branch-blockers.json'), {})
 
 
 def extract_local_report_constructor_list(report_dir):
     artifacts_dir = _get_local_report_artifacts_dir(report_dir)
     return _load_local_json(
-        os.path.join(artifacts_dir,
-                     'all-fuzz-introspector-jvm-constructor.json'), [])
+        os.path.join(artifacts_dir, 'all-fuzz-introspector-jvm-constructor.json'),
+        [])
 
 
 def extract_local_report(report_dir):
@@ -322,8 +322,8 @@ def extract_local_report_typedef(report_dir):
     if os.path.isfile(typedef_path):
         return _load_local_json(typedef_path, {})
     return _load_local_json(
-        os.path.join(artifacts_dir, 'second-frontend-run',
-                     'full_type_defs.json'), {})
+        os.path.join(artifacts_dir, 'second-frontend-run', 'full_type_defs.json'),
+        {})
 
 
 def extract_local_report_macro_block(report_dir):
@@ -332,8 +332,8 @@ def extract_local_report_macro_block(report_dir):
     if os.path.isfile(macro_path):
         return _load_local_json(macro_path, {})
     return _load_local_json(
-        os.path.join(artifacts_dir, 'second-frontend-run',
-                     'macro_block_info.json'), {})
+        os.path.join(artifacts_dir, 'second-frontend-run', 'macro_block_info.json'),
+        {})
 
 
 def extract_local_report_all_files(report_dir):
@@ -354,20 +354,20 @@ def extract_local_report_test_files_xref(report_dir):
 
 def extract_local_report_light_test_files(report_dir):
     artifacts_dir = _get_local_report_artifacts_dir(report_dir)
-    return _load_local_json(
-        os.path.join(artifacts_dir, 'light', 'all_tests.json'), {})
+    return _load_local_json(os.path.join(artifacts_dir, 'light', 'all_tests.json'),
+                            {})
 
 
 def extract_local_report_light_pairs(report_dir):
     artifacts_dir = _get_local_report_artifacts_dir(report_dir)
-    return _load_local_json(
-        os.path.join(artifacts_dir, 'light', 'all_pairs.json'), {})
+    return _load_local_json(os.path.join(artifacts_dir, 'light', 'all_pairs.json'),
+                            {})
 
 
 def extract_local_report_light_all_files(report_dir):
     artifacts_dir = _get_local_report_artifacts_dir(report_dir)
-    return _load_local_json(
-        os.path.join(artifacts_dir, 'light', 'all_files.json'), {})
+    return _load_local_json(os.path.join(artifacts_dir, 'light', 'all_files.json'),
+                            {})
 
 
 def extract_local_report_debug_info(report_dir):
