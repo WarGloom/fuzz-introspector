@@ -1045,7 +1045,7 @@ def load_jvm_coverage(target_dir: str, ) -> CoverageProfile:
 
     Return a CoverageProfile
     """
-    import xml.etree.ElementTree as ET
+    import defusedxml.ElementTree as ET
 
     cp = CoverageProfile()
     cp.set_type("function")
