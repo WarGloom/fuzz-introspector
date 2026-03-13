@@ -1931,8 +1931,8 @@ def _line_identity_snapshot_metadata(out_dir: str) -> Dict[str, str]:
 def _index_line_identity_rows(
     all_functions_json_report: List[Dict[str, Any]]
 ) -> Dict[str, List[Dict[str, Any]]]:
-    rows_by_name: Dict[str, List[Dict[str, Any]]] = collections.defaultdict(
-        list)
+    rows_by_name: Dict[str, List[Dict[str,
+                                      Any]]] = collections.defaultdict(list)
     for report_row in all_functions_json_report:
         for candidate in _line_identity_name_candidates(report_row):
             rows_by_name[candidate].append(report_row)
