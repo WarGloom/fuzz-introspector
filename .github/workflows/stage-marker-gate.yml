@@ -35,6 +35,10 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install dependencies
+        run: |
+          python -m pip install pytest
+
       - name: Run stage-marker unit tests
         run: |
           PYTHONPATH=src python -m pytest -vv src/test/test_stage_markers.py src/test/test_run_stage_marker_gate.py
