@@ -404,7 +404,8 @@ def _normalize_local_report_specs(
         if not project_name:
             raise ValueError(f'Invalid local report spec: {raw_spec}')
         if not os.path.isdir(report_dir):
-            raise ValueError(f'Local report directory does not exist: {report_dir}')
+            raise ValueError(
+                f'Local report directory does not exist: {report_dir}')
         if project_name in normalized_specs:
             raise ValueError(f'Duplicate local project name: {project_name}')
 
@@ -473,9 +474,9 @@ def _line_identity_function_name_candidates(func: Dict[str, Any]) -> List[str]:
     return candidates
 
 
-def _match_coverage_lines_for_function(func: Dict[str, Any],
-                                       coverage_profile: code_coverage.CoverageProfile
-                                       ) -> List[Tuple[int, int]]:
+def _match_coverage_lines_for_function(
+        func: Dict[str, Any], coverage_profile: code_coverage.CoverageProfile
+) -> List[Tuple[int, int]]:
     for candidate in _line_identity_function_name_candidates(func):
         if candidate in coverage_profile.covmap:
             return list(coverage_profile.covmap[candidate])
@@ -501,17 +502,24 @@ def _extract_function_executable_line_records(
         function_key = _build_function_key(func)
         filename = os.path.normpath(func.get('Functions filename', 'N/A'))
         raw_name = func.get('raw-function-name', 'N/A')
-        matched_lines = _match_coverage_lines_for_function(func, coverage_profile)
+        matched_lines = _match_coverage_lines_for_function(
+            func, coverage_profile)
         unique_lines = sorted({int(line_no) for line_no, _ in matched_lines})
-        executable_line_map[function_key] = [(line_no, hit_count)
-                                             for line_no, hit_count in matched_lines]
+        executable_line_map[function_key] = [
+            (line_no, hit_count) for line_no, hit_count in matched_lines
+        ]
         for line_no in unique_lines:
             executable_line_records.append({
-                'function_key': function_key,
-                'raw_function_name': raw_name,
-                'filename': filename,
-                'line_number': line_no,
-                'introspector_report_id': introspector_report_id,
+                'function_key':
+                function_key,
+                'raw_function_name':
+                raw_name,
+                'filename':
+                filename,
+                'line_number':
+                line_no,
+                'introspector_report_id':
+                introspector_report_id,
             })
 
     return executable_line_records, executable_line_map
@@ -551,13 +559,21 @@ def _extract_per_fuzzer_covered_line_records(
                 dedup_key = (filename, int(line_no))
                 previous = dedup.get(dedup_key)
                 dedup[dedup_key] = {
-                    'fuzzer_name': fuzzer_name,
-                    'filename': filename,
-                    'line_number': int(line_no),
-                    'hit_count': max(int(hit_count), previous['hit_count']) if previous else int(hit_count),
-                    'coverage_snapshot_id': coverage_snapshot_id,
-                    'pipeline_id': pipeline_id,
-                    'commit_sha': commit_sha,
+                    'fuzzer_name':
+                    fuzzer_name,
+                    'filename':
+                    filename,
+                    'line_number':
+                    int(line_no),
+                    'hit_count':
+                    max(int(hit_count), previous['hit_count'])
+                    if previous else int(hit_count),
+                    'coverage_snapshot_id':
+                    coverage_snapshot_id,
+                    'pipeline_id':
+                    pipeline_id,
+                    'commit_sha':
+                    commit_sha,
                 }
         covered_line_records[fuzzer_name] = list(dedup.values())
 
@@ -575,13 +591,19 @@ def _derive_reachable_line_records(
         filename = os.path.normpath(func.get('Functions filename', 'N/A'))
         for fuzzer_name in func.get('Reached by Fuzzers', []):
             reachable_line_records.setdefault(fuzzer_name, [])
-            for line_no, _hit_count in executable_line_map.get(function_key, []):
+            for line_no, _hit_count in executable_line_map.get(
+                    function_key, []):
                 reachable_line_records[fuzzer_name].append({
-                    'fuzzer_name': fuzzer_name,
-                    'function_key': function_key,
-                    'filename': filename,
-                    'line_number': int(line_no),
-                    'introspector_report_id': introspector_report_id,
+                    'fuzzer_name':
+                    fuzzer_name,
+                    'function_key':
+                    function_key,
+                    'filename':
+                    filename,
+                    'line_number':
+                    int(line_no),
+                    'introspector_report_id':
+                    introspector_report_id,
                 })
 
     for fuzzer_name, records in reachable_line_records.items():
@@ -629,7 +651,8 @@ def _persist_line_identity_data(
     fuzzer_names: List[str],
     source_hint: str,
 ) -> None:
-    introspector_report_id = _build_line_snapshot_id('introspector', source_hint)
+    introspector_report_id = _build_line_snapshot_id('introspector',
+                                                     source_hint)
     coverage_snapshot_id = _build_line_snapshot_id('coverage', source_hint)
     executable_line_records, executable_line_map = _extract_function_executable_line_records(
         all_function_list, coverage_root, introspector_report_id)
@@ -638,10 +661,8 @@ def _persist_line_identity_data(
     reachable_line_records = _derive_reachable_line_records(
         all_function_list, executable_line_map, introspector_report_id)
     _save_line_identity_bundle(output_directory, project_name,
-                               introspector_report_id,
-                               coverage_snapshot_id,
-                               executable_line_records,
-                               covered_line_records,
+                               introspector_report_id, coverage_snapshot_id,
+                               executable_line_records, covered_line_records,
                                reachable_line_records)
 
 
@@ -730,7 +751,9 @@ def extract_local_project_data(project_name, oss_fuzz_path,
 
     fuzzer_names = []
     if cov_fuzz_stats is not None:
-        fuzzer_names = [fuzzer for fuzzer in cov_fuzz_stats.split('\n') if fuzzer]
+        fuzzer_names = [
+            fuzzer for fuzzer in cov_fuzz_stats.split('\n') if fuzzer
+        ]
     if not fuzzer_names:
         fuzzer_names = sorted(introspector_report.get('fuzzers', {}).keys())
     coverage_root = os.path.join(oss_fuzz_path, 'build', 'out', project_name)
@@ -833,8 +856,8 @@ def extract_local_report_data(project_name, report_dir, manager_return_dict):
     print(f'Analysing {project_name}')
 
     introspector_report = oss_fuzz.extract_local_report(report_dir)
-    overview = introspector_report.get('MergedProjectProfile', {}).get(
-        'overview', {})
+    overview = introspector_report.get('MergedProjectProfile',
+                                       {}).get('overview', {})
     project_language = overview.get('language', 'c++')
     if project_language == 'jvm':
         project_language = 'java'
@@ -852,10 +875,8 @@ def extract_local_report_data(project_name, report_dir, manager_return_dict):
     light_report = {
         'test-files':
         oss_fuzz.extract_local_report_light_test_files(report_dir),
-        'all-files':
-        oss_fuzz.extract_local_report_light_all_files(report_dir),
-        'all-pairs':
-        oss_fuzz.extract_local_report_light_pairs(report_dir),
+        'all-files': oss_fuzz.extract_local_report_light_all_files(report_dir),
+        'all-pairs': oss_fuzz.extract_local_report_light_pairs(report_dir),
     }
 
     all_files = oss_fuzz.extract_local_report_all_files(report_dir)
@@ -896,8 +917,8 @@ def extract_local_report_data(project_name, report_dir, manager_return_dict):
     _persist_line_identity_data(os.getcwd(), project_name, all_function_list,
                                 report_dir, fuzzer_names, report_dir)
 
-    project_stats = introspector_report.get('MergedProjectProfile', {}).get(
-        'stats', {})
+    project_stats = introspector_report.get('MergedProjectProfile',
+                                            {}).get('stats', {})
     amount_of_fuzzers = project_stats.get('harness-count', 0)
     functions_covered_estimate = project_stats.get(
         'code-coverage-function-percentage', 0.0)
