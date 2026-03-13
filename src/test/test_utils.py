@@ -79,12 +79,12 @@ def test_longest_common_prefix(strs: str, expected: str):
         ),
     ],
 )
-def test_get_target_coverage_url(
-    coverage_url: str, fuzz_target: str, res: str, lang: str
-):
+def test_get_target_coverage_url(coverage_url: str, fuzz_target: str, res: str,
+                                 lang: str):
     # Use environment as set by OSS-Fuzz.
     os.environ["FUZZ_INTROSPECTOR"] = "1"
-    assert utils.get_target_coverage_url(coverage_url, fuzz_target, lang) == res
+    assert utils.get_target_coverage_url(coverage_url, fuzz_target,
+                                         lang) == res
     del os.environ["FUZZ_INTROSPECTOR"]
 
 
@@ -108,7 +108,8 @@ def test_get_target_coverage_url(
             None,
             "https://coverage-url.com/fuzzlib/fuzzlib.c.html#L13",
         ),
-        ("https://coverage-url.com/", "Class", "13", "name", "python", None, "#"),
+        ("https://coverage-url.com/", "Class", "13", "name", "python", None,
+         "#"),
         (
             "https://coverage-url.com/",
             "Class",
@@ -225,9 +226,8 @@ def test_resolve_coverage_link(
         with open("temp_html_status.json", "w+") as f:
             f.write(temp_file)
 
-    actual = utils.resolve_coverage_link(
-        cov_url, source_file, lineno, function_name, target_lang
-    )
+    actual = utils.resolve_coverage_link(cov_url, source_file, lineno,
+                                         function_name, target_lang)
     assert expect == actual
 
     if temp_file is not None:
