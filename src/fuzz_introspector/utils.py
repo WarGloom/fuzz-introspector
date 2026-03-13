@@ -300,7 +300,7 @@ def get_target_coverage_url(coverage_url: str, target_name: str,
     This function changes overall coverage URL to per-target coverage URL. Like:
         https://storage.googleapis.com/oss-fuzz-coverage/<project>/reports/<report-date>/linux
         to
-        https://storage.googleapis.com/oss-fuzz-coverage/<project>/reports-by-target/<report-date>/<target-name>/linux
+        https://storage.googleapis.com/oss-fuzz-coverage/<project>/reports-by-target/<report-date>/<target-name>/linux  # noqa: E501
     """
     logger.info("Extracting coverage for %s -- %s", coverage_url, target_name)
     if os.environ.get("FUZZ_INTROSPECTOR"):

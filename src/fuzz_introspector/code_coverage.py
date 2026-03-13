@@ -587,8 +587,8 @@ def _coverage_profile_from_external_payload(
 
 
 def _normalise_covmap(
-        covmap: Dict[str, List[Tuple[int, int]]]) -> Dict[str, List[Tuple[int,
-                                                                       int]]]:
+    covmap: Dict[str, List[Tuple[int, int]]]
+) -> Dict[str, List[Tuple[int, int]]]:
     return {
         key: sorted((int(line_no), int(hit_count))
                     for line_no, hit_count in entries)
@@ -597,7 +597,8 @@ def _normalise_covmap(
 
 
 def _normalise_branch_cov_map(
-        branch_cov_map: Dict[str, List[int]]) -> Dict[str, List[int]]:
+    branch_cov_map: Dict[str, List[int]]
+) -> Dict[str, List[int]]:
     return {key: [int(value) for value in values]
             for key, values in branch_cov_map.items()}
 
@@ -847,7 +848,8 @@ def load_llvm_coverage(target_dir: str,
         if profile is not None:
             if shadow_mode:
                 logger.info(
-                    "%s enabled; native backend executed and Python authoritative path will run for comparison",
+                    "%s enabled; native backend executed and Python authoritative "
+                    "path will run for comparison",
                     FI_LLVM_COV_LOADER_SHADOW_ENV,
                 )
                 python_profile = _load_llvm_coverage_python_reports(
@@ -856,12 +858,16 @@ def load_llvm_coverage(target_dir: str,
                     profile, python_profile)
                 if mismatch_details["covmap_mismatches"] or mismatch_details[
                         "branch_mismatches"]:
+                    mismatch_info = (
+                        f"{FI_LLVM_COV_PARITY_MISMATCH}: Native LLVM coverage "
+                        "differs from Python authoritative path | details="
+                        f"{json.dumps(mismatch_details, sort_keys=True)}"
+                    )
                     if strict_mode:
-                        raise exceptions.DataLoaderError(
-                            f"{FI_LLVM_COV_PARITY_MISMATCH}: Native LLVM coverage differs from Python authoritative path | details={json.dumps(mismatch_details, sort_keys=True)}"
-                        )
+                        raise exceptions.DataLoaderError(mismatch_info)
                     logger.warning(
-                        "%s: Native LLVM coverage differs from Python authoritative path; using Python result | details=%s",
+                        "%s: Native LLVM coverage differs from Python "
+                        "authoritative path; using Python result | details=%s",
                         FI_LLVM_COV_PARITY_MISMATCH,
                         json.dumps(mismatch_details, sort_keys=True),
                     )
