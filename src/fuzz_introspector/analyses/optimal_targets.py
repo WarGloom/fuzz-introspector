@@ -58,10 +58,10 @@ def add_func_to_reached_and_clone(
     # ⚡ Bolt: Optimize hitcount and complexity updates
     # Instead of recomputing `new_unreached_complexity` for all functions
     # by iterating over their full `functions_reached` lists (O(N*M)), we
-    # track the newly reached functions here and subtract their complexities
-    # from any referencing functions. We also avoid updating
-    # `total_cyclomatic_complexity` since it is a static property
-    # of the call graph and does not change when hitcounts are updated.
+    # track the newly reached functions here and iterate over all functions'
+    # reached functions to subtract their complexities from their callers. We
+    # avoid updating `total_cyclomatic_complexity` since it is a static
+    # property of the call graph and does not change when hitcounts update.
 
     newly_reached = set()
 
@@ -97,11 +97,11 @@ def add_func_to_reached_and_clone(
     # hitcount has changed for elements in the dictionary.
     logger.info("Updating hitcount-related data")
     if newly_reached:
+        # new_unreached_complexity and total_cyclomatic_complexity are
+        # initialized during MergedProjectProfile instantiation. We just
+        # need to do delta updates to new_unreached_complexity for newly
+        # reached functions.
         for f_profile in all_functions.values():
-            # new_unreached_complexity and total_cyclomatic_complexity are
-            # initialized during MergedProjectProfile instantiation. We just
-            # need to do delta updates to new_unreached_complexity for newly
-            # reached functions.
             if f_profile.function_name in newly_reached:
                 f_profile.new_unreached_complexity -= (
                     f_profile.cyclomatic_complexity)
@@ -523,6 +523,5 @@ class OptimalTargets(analysis.AnalysisInterface):
                                  constants.OPTIMAL_TARGETS_ALL_FUNCTIONS),
                     "w") as func_file:
                 func_file.write("var analysis_1_data = ")
-                func_file.write(
-                    json.dumps(all_functions_json))
+                func_file.write(json.dumps(all_functions_json))
         return html_string
