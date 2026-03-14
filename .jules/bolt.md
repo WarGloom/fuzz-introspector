@@ -1,4 +1,3 @@
-
-## 2025-03-05 - Optimize Multimap Accumulation
-**Learning:** Using `dict.setdefault(key, []).append(...)` for accumulating values into lists allocates an empty list on every single iteration, creating significant garbage collection pressure and CPU overhead in tight loops parsing debug info and profiling data. `collections.defaultdict(list)` avoids this allocation overhead and operates 30-50% faster.
-**Action:** Always prefer `collections.defaultdict(list)` (or `set`) when constructing dictionary multimaps.
+## 2024-05-20 - Optimal Targets complexity update
+**Learning:** Recomputing `new_unreached_complexity` by iterating over all functions and their reached functions is $O(N \times M)$ where $N$ is the number of all functions and $M$ is the average number of reached functions. We can track newly reached functions when updating hitcounts and subtract their complexities from `new_unreached_complexity` of all functions instead, reducing operations and skipping `total_cyclomatic_complexity` which doesn't change since it's a static property of the call graph.
+**Action:** When updating hitcounts incrementally, compute the delta to `new_unreached_complexity` by tracking `newly_reached` functions and subtracting their `cyclomatic_complexity` from callers, instead of recomputing from scratch.

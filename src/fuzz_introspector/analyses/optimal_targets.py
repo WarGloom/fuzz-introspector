@@ -55,10 +55,22 @@ def add_func_to_reached_and_clone(
     all_functions = merged_profile.all_functions
     target_lang = merged_profile_old.profiles[0].target_lang
 
+    # ⚡ Bolt: Optimize hitcount and complexity updates
+    # Instead of recomputing `new_unreached_complexity` for all functions
+    # by iterating over their full `functions_reached` lists (O(N*M)), we
+    # track the newly reached functions here and subtract their complexities
+    # from any referencing functions. We also avoid updating
+    # `total_cyclomatic_complexity` since it is a static property
+    # of the call graph and does not change when hitcounts are updated.
+
+    newly_reached = set()
+
     # Update hitcount of the function in the new merged profile
     logger.info("Updating hitcount")
     f = all_functions[func_to_add.function_name]
     if f.cyclomatic_complexity == func_to_add.cyclomatic_complexity:
+        if f.hitcount == 0:
+            newly_reached.add(func_to_add.function_name)
         f.hitcount = 1
 
     # Update hitcount of all functions reached by the function
@@ -70,6 +82,8 @@ def add_func_to_reached_and_clone(
                 logger.debug("Mismatched function name: %s", func_name)
             continue
         f = all_functions[func_name]
+        if f.hitcount == 0:
+            newly_reached.add(func_name)
         f.hitcount += 1
 
         if merged_profile.target_lang == "rust":
@@ -82,28 +96,19 @@ def add_func_to_reached_and_clone(
     # Recompute all analysis that is based on hitcounts in all functions as
     # hitcount has changed for elements in the dictionary.
     logger.info("Updating hitcount-related data")
-    for f_profile in all_functions.values():
-        cc = 0
-        uncovered_cc = 0
-        for reached_func_name in f_profile.functions_reached:
-            if reached_func_name not in all_functions:
-                if target_lang == "jvm":
-                    logger.debug("%s not provided within classpath",
-                                 reached_func_name)
-                else:
-                    logger.debug("Mismatched function name: %s",
-                                 reached_func_name)
-                continue
-            f_reached = all_functions[reached_func_name]
-            cc += f_reached.cyclomatic_complexity
-            if f_reached.hitcount == 0:
-                uncovered_cc += f_reached.cyclomatic_complexity
-
-        # set complexity fields in the function
-        f_profile.new_unreached_complexity = uncovered_cc
-        if f_profile.hitcount == 0:
-            f_profile.new_unreached_complexity += f_profile.cyclomatic_complexity
-        f_profile.total_cyclomatic_complexity = cc + f_profile.cyclomatic_complexity
+    if newly_reached:
+        for f_profile in all_functions.values():
+            # new_unreached_complexity and total_cyclomatic_complexity are
+            # initialized during MergedProjectProfile instantiation. We just
+            # need to do delta updates to new_unreached_complexity for newly
+            # reached functions.
+            if f_profile.function_name in newly_reached:
+                f_profile.new_unreached_complexity -= (
+                    f_profile.cyclomatic_complexity)
+            for reached_func_name in f_profile.functions_reached:
+                if reached_func_name in newly_reached:
+                    f_profile.new_unreached_complexity -= (
+                        all_functions[reached_func_name].cyclomatic_complexity)
 
     if all_functions[func_to_add.function_name].hitcount == 0:
         logger.info("Error. Hitcount did not get set for some reason. Exiting")
@@ -186,7 +191,8 @@ class OptimalTargets(analysis.AnalysisInterface):
                                 proj_profile.all_functions[fname])
                     new_profile = proj_profile
                     logger.info(
-                        "[native] OptimalTargets: used Rust result (%d functions)",
+                        "[native] OptimalTargets: used Rust result "
+                        "(%d functions)",
                         len(optimal_target_functions),
                     )
             except (KeyError, IndexError, TypeError):
@@ -486,7 +492,7 @@ class OptimalTargets(analysis.AnalysisInterface):
         basefolder: str,
         out_dir: str = "",
     ) -> str:
-        """Create section showing state of project if optimal targets are hit"""
+        """Create section showing state if optimal targets are hit"""
         # pylint: disable=unused-argument
         html_string = (
             "<p>Implementing fuzzers that target the above functions "
@@ -517,5 +523,6 @@ class OptimalTargets(analysis.AnalysisInterface):
                                  constants.OPTIMAL_TARGETS_ALL_FUNCTIONS),
                     "w") as func_file:
                 func_file.write("var analysis_1_data = ")
-                func_file.write(json.dumps(all_functions_json))
+                func_file.write(
+                    json.dumps(all_functions_json))
         return html_string
