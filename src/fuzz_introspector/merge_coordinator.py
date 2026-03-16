@@ -15,6 +15,7 @@
 
 import hashlib
 import json
+
 import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
@@ -277,22 +278,26 @@ class MergeCoordinator:
 
         analyses_updates = self.merged_json_report.get("analyses")
         if analyses_updates:
-            summary_contents.setdefault("analyses", {})
+            if "analyses" not in summary_contents:
+                summary_contents["analyses"] = {}
             self._merge_nested_dict(summary_contents["analyses"],
                                     analyses_updates)
 
         project_updates = self.merged_json_report.get("project")
         if project_updates:
-            summary_contents.setdefault(constants.JSON_REPORT_KEY_PROJECT, {})
+            if constants.JSON_REPORT_KEY_PROJECT not in summary_contents:
+                summary_contents[constants.JSON_REPORT_KEY_PROJECT] = {}
             self._merge_nested_dict(
                 summary_contents[constants.JSON_REPORT_KEY_PROJECT],
                 project_updates)
 
         fuzzer_updates = self.merged_json_report.get("fuzzers")
         if fuzzer_updates:
-            summary_contents.setdefault("fuzzers", {})
+            if "fuzzers" not in summary_contents:
+                summary_contents["fuzzers"] = {}
             for fuzzer_name, updates in fuzzer_updates.items():
-                summary_contents["fuzzers"].setdefault(fuzzer_name, {})
+                if fuzzer_name not in summary_contents["fuzzers"]:
+                    summary_contents["fuzzers"][fuzzer_name] = {}
                 self._merge_nested_dict(
                     summary_contents["fuzzers"][fuzzer_name], updates)
 
