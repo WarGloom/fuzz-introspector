@@ -1934,7 +1934,11 @@ def _index_line_identity_rows(
     rows_by_name: Dict[str, List[Dict[str, Any]]] = {}
     for report_row in all_functions_json_report:
         for candidate in _line_identity_name_candidates(report_row):
-            rows_by_name.setdefault(candidate, []).append(report_row)
+            # Bolt optimization: explicit `if not in` instead of `setdefault`
+            # avoids allocating an empty list [] on every iteration.
+            if candidate not in rows_by_name:
+                rows_by_name[candidate] = []
+            rows_by_name[candidate].append(report_row)
     return rows_by_name
 
 

@@ -132,14 +132,14 @@ def pair_stage_events(
 
     if include_stages is not None:
         for stage_name in include_stages:
-            paired.setdefault(
-                stage_name,
-                {
+            # Bolt optimization: explicit `if not in` check avoids dict allocation
+            # overhead on every iteration unlike `setdefault`.
+            if stage_name not in paired:
+                paired[stage_name] = {
                     "durations": [],
                     "missing_starts": 0,
                     "missing_ends": 0,
-                },
-            )
+                }
 
     return dict(paired)
 
