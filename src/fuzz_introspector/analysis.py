@@ -909,8 +909,7 @@ def _parse_if_debug_correlator_backend_env() -> str:
 
 
 def _if_debug_correlator_backend_forces_shadow_mode(
-    backend: str, proj_lang: str
-) -> bool:
+        backend: str, proj_lang: str) -> bool:
     return backend == backend_loaders.BACKEND_GO and proj_lang == "c-cpp"
 
 
@@ -2940,8 +2939,7 @@ def _get_introspector_debug_name_candidates(if_func):
     for raw_name in (
         if_func.get("Func name", ""),
         utils.demangle_rust_func(
-            utils.demangle_cpp_func(if_func.get("raw-function-name", ""))
-        ),
+            utils.demangle_cpp_func(if_func.get("raw-function-name", ""))),
     ):
         if not isinstance(raw_name, str):
             continue
@@ -3270,10 +3268,8 @@ def correlate_introspection_functions_to_debug_info(
     try:
         if forced_shadow_mode and not shadow_mode:
             logger.info(
-                (
-                    "%s backend forced shadow mode for %s with proj_lang=%s; "
-                    "Python remains authoritative"
-                ),
+                "%s backend forced shadow mode for %s with proj_lang=%s; "
+                "Python remains authoritative",
                 configured_backend,
                 _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
                 proj_lang,
@@ -3309,10 +3305,8 @@ def correlate_introspection_functions_to_debug_info(
                         for func in native_target
                     ]
                     logger.info(
-                        (
-                            "%s enabled for %s; native backend executed and "
-                            "Python authoritative path will run for comparison"
-                        ),
+                        "%s enabled for %s; native backend executed and Python "
+                        "authoritative path will run for comparison",
                         FI_IF_DEBUG_CORRELATOR_SHADOW_ENV,
                         _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
                     )

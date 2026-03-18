@@ -62,7 +62,8 @@ def _parse_bool_env(env_name: str, default: bool) -> bool:
         return True
     if raw_value in _BOOL_FALSE_VALUES:
         return False
-    logger.warning("Invalid %s=%r; defaulting to %s", env_name, raw_value, default)
+    logger.warning("Invalid %s=%r; defaulting to %s", env_name, raw_value,
+                   default)
     return default
 
 
@@ -135,9 +136,10 @@ class CoverageProfile:
                         return 100
         return 0
 
-    def is_file_lineno_hit(
-        self, target_file: str, lineno: int, resolve_name: bool = False
-    ) -> bool:
+    def is_file_lineno_hit(self,
+                           target_file: str,
+                           lineno: int,
+                           resolve_name: bool = False) -> bool:
         """Checks if a given linenumber in a file is hit.
 
         :param target_file: file to inspect
@@ -306,7 +308,8 @@ class CoverageProfile:
             for potential_key in self.file_map:
                 logger.debug("Scanning %s", str(potential_key))
                 if potential_key.endswith(potential_init_path):
-                    logger.debug("Found __init__ match: %s", str(potential_key))
+                    logger.debug("Found __init__ match: %s",
+                                 str(potential_key))
                     init_matches.append(potential_key)
 
         # Return the last match, as this signals the path with most precise
@@ -328,7 +331,8 @@ class CoverageProfile:
         function_internals: Dict[str, List[Tuple[str, int, int]]] = dict()
         for cov_file, function_specs in file_and_function_mappings.items():
             # Sort by line number
-            sorted_func_specs = list(sorted(function_specs, key=lambda x: x[1]))
+            sorted_func_specs = list(sorted(function_specs,
+                                            key=lambda x: x[1]))
 
             function_internals[cov_file] = []
             for i in range(len(sorted_func_specs)):
@@ -338,8 +342,7 @@ class CoverageProfile:
                 if i < len(sorted_func_specs) - 1:
                     fnext_name, fnext_start = sorted_func_specs[i + 1]
                     function_internals[cov_file].append(
-                        (fname, fstart, fnext_start - 1)
-                    )
+                        (fname, fstart, fnext_start - 1))
                 else:
                     # Last function identified by end lineno being -1
                     function_internals[cov_file].append((fname, fstart, -1))
@@ -365,14 +368,16 @@ class CoverageProfile:
                     continue
 
                 # Create the covmap
-                for exec_line in self.dual_file_map[filename]["executed_lines"]:
-                    if (exec_line > fstart) and (exec_line < fend or fend == -1):
+                for exec_line in self.dual_file_map[filename][
+                        "executed_lines"]:
+                    if (exec_line > fstart) and (exec_line < fend
+                                                 or fend == -1):
                         logger.debug("E: %s", exec_line)
                         self.covmap[fname].append((exec_line, 1000))
-                for non_exec_line in self.dual_file_map[filename]["missing_lines"]:
-                    if (non_exec_line > fstart) and (
-                        non_exec_line < fend or fend == -1
-                    ):
+                for non_exec_line in self.dual_file_map[filename][
+                        "missing_lines"]:
+                    if (non_exec_line > fstart) and (non_exec_line < fend
+                                                     or fend == -1):
                         logger.debug("N: %s", non_exec_line)
                         self.covmap[fname].append((non_exec_line, 0))
 
@@ -392,7 +397,8 @@ class CoverageProfile:
             function_name = func.function_name
             function_line = func.function_linenumber
 
-            logger.debug(f"Correlated init: {function_name} ---- {function_line}")
+            logger.debug(
+                f"Correlated init: {function_name} ---- {function_line}")
             cov_file = self._python_ast_funcname_to_cov_file(function_name)
             if cov_file is None:
                 continue
@@ -405,10 +411,12 @@ class CoverageProfile:
             if cov_file not in file_and_function_mappings:
                 file_and_function_mappings[cov_file] = []
 
-            file_and_function_mappings[cov_file].append((function_name, function_line))
+            file_and_function_mappings[cov_file].append(
+                (function_name, function_line))
 
         # Sort and retrieve line range of all functions
-        function_internals = self._retrieve_func_line(file_and_function_mappings)
+        function_internals = self._retrieve_func_line(
+            file_and_function_mappings)
 
         # Map the source codes of each line with coverage information.
         # Store the result in covmap to be compatible with other languages.
@@ -416,7 +424,8 @@ class CoverageProfile:
 
         return
 
-    def get_hit_summary(self, funcname: str) -> Tuple[Optional[int], Optional[int]]:
+    def get_hit_summary(self,
+                        funcname: str) -> Tuple[Optional[int], Optional[int]]:
         """Returns the hit summary of a give function.
 
         This should only be used for coverage profiles that are non-file type.
@@ -435,7 +444,8 @@ class CoverageProfile:
             return None, None
 
         coverage_entries = self.covmap[fuzz_key]
-        hit_lines = sum(1 for _, hit_count in coverage_entries if hit_count > 0)
+        hit_lines = sum(1 for _, hit_count in coverage_entries
+                        if hit_count > 0)
         return len(coverage_entries), hit_lines
 
     def is_func_lineno_hit(self, func_name: str, lineno: int) -> bool:
@@ -477,7 +487,8 @@ def extract_hitcount(coverage_line: str) -> int:
             return -1
 
     if unit not in ["k", "M", "G"]:
-        logger.error(f"Unexpected coverage count unit: {unit} as in {coverage_line}")
+        logger.error(
+            f"Unexpected coverage count unit: {unit} as in {coverage_line}")
         return -1
     num = float(coverage_line[:-1])
     if unit == "k":
@@ -496,7 +507,8 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _normalise_external_cov_function_name(func_name: str, is_rust: bool) -> str:
+def _normalise_external_cov_function_name(func_name: str,
+                                          is_rust: bool) -> str:
     if is_rust:
         return utils.demangle_rust_func(func_name)
     return utils.demangle_cpp_func(func_name)
@@ -511,39 +523,40 @@ def _normalise_external_branch_key(branch_key: str, is_rust: bool) -> str:
     return f"{normalised_name}:{line_no},{column_no}"
 
 
-def _coerce_external_covmap(
-    raw_covmap: Any, is_rust: bool
-) -> Dict[str, List[Tuple[int, int]]]:
+def _coerce_external_covmap(raw_covmap: Any,
+                            is_rust: bool) -> Dict[str, List[Tuple[int, int]]]:
     covmap: Dict[str, List[Tuple[int, int]]] = {}
     if not isinstance(raw_covmap, dict):
         return covmap
 
     for func_name, line_entries in raw_covmap.items():
-        if not isinstance(func_name, str) or not isinstance(line_entries, list):
+        if not isinstance(func_name, str) or not isinstance(
+                line_entries, list):
             continue
         parsed_entries: List[Tuple[int, int]] = []
         for entry in line_entries:
             if not isinstance(entry, (list, tuple)) or len(entry) != 2:
                 continue
             parsed_entries.append(
-                (_safe_int(entry[0], default=0), _safe_int(entry[1], default=0))
-            )
-        normalised_name = _normalise_external_cov_function_name(func_name, is_rust)
+                (_safe_int(entry[0], default=0), _safe_int(entry[1],
+                                                           default=0)))
+        normalised_name = _normalise_external_cov_function_name(
+            func_name, is_rust)
         if normalised_name not in covmap:
             covmap[normalised_name] = []
         covmap[normalised_name].extend(parsed_entries)
     return covmap
 
 
-def _coerce_external_branch_cov_map(
-    raw_branch_map: Any, is_rust: bool
-) -> Dict[str, List[int]]:
+def _coerce_external_branch_cov_map(raw_branch_map: Any,
+                                    is_rust: bool) -> Dict[str, List[int]]:
     branch_map: Dict[str, List[int]] = {}
     if not isinstance(raw_branch_map, dict):
         return branch_map
 
     for branch_key, branch_values in raw_branch_map.items():
-        if not isinstance(branch_key, str) or not isinstance(branch_values, list):
+        if not isinstance(branch_key, str) or not isinstance(
+                branch_values, list):
             continue
         normalised_key = _normalise_external_branch_key(branch_key, is_rust)
         branch_map[normalised_key] = [
@@ -553,8 +566,8 @@ def _coerce_external_branch_cov_map(
 
 
 def _coverage_profile_from_external_payload(
-    payload: Any, fallback_coverage_files: List[str], is_rust: bool
-) -> Optional[CoverageProfile]:
+        payload: Any, fallback_coverage_files: List[str],
+        is_rust: bool) -> Optional[CoverageProfile]:
     if not isinstance(payload, dict):
         return None
 
@@ -562,13 +575,11 @@ def _coverage_profile_from_external_payload(
     cp.set_type("function")
     cp.covmap = _coerce_external_covmap(payload.get("covmap", {}), is_rust)
     cp.branch_cov_map = _coerce_external_branch_cov_map(
-        payload.get("branch_cov_map", {}), is_rust
-    )
+        payload.get("branch_cov_map", {}), is_rust)
 
     raw_files = payload.get("coverage_files")
     if isinstance(raw_files, list) and all(
-        isinstance(file_path, str) for file_path in raw_files
-    ):
+            isinstance(file_path, str) for file_path in raw_files):
         cp.coverage_files = raw_files
     else:
         cp.coverage_files = list(fallback_coverage_files)
@@ -576,25 +587,23 @@ def _coverage_profile_from_external_payload(
 
 
 def _normalise_covmap(
-    covmap: Dict[str, List[Tuple[int, int]]],
+    covmap: Dict[str, List[Tuple[int, int]]]
 ) -> Dict[str, List[Tuple[int, int]]]:
     return {
-        key: sorted((int(line_no), int(hit_count)) for line_no, hit_count in entries)
+        key: sorted((int(line_no), int(hit_count))
+                    for line_no, hit_count in entries)
         for key, entries in covmap.items()
     }
 
 
 def _normalise_branch_cov_map(
-    branch_cov_map: Dict[str, List[int]],
-) -> Dict[str, List[int]]:
-    return {
-        key: [int(value) for value in values] for key, values in branch_cov_map.items()
-    }
+        branch_cov_map: Dict[str, List[int]]) -> Dict[str, List[int]]:
+    return {key: [int(value) for value in values]
+            for key, values in branch_cov_map.items()}
 
 
-def _collect_llvm_cov_parity_details(
-    native_profile: "CoverageProfile", python_profile: "CoverageProfile"
-) -> Dict[str, int]:
+def _collect_llvm_cov_parity_details(native_profile: "CoverageProfile",
+                                     python_profile: "CoverageProfile") -> Dict[str, int]:
     native_covmap = _normalise_covmap(native_profile.covmap)
     python_covmap = _normalise_covmap(python_profile.covmap)
     native_branch_map = _normalise_branch_cov_map(native_profile.branch_cov_map)
@@ -603,13 +612,10 @@ def _collect_llvm_cov_parity_details(
     covmap_keys = set(native_covmap) | set(python_covmap)
     branch_keys = set(native_branch_map) | set(python_branch_map)
     covmap_mismatches = sum(
-        1 for key in covmap_keys if native_covmap.get(key) != python_covmap.get(key)
-    )
+        1 for key in covmap_keys if native_covmap.get(key) != python_covmap.get(key))
     branch_mismatches = sum(
-        1
-        for key in branch_keys
-        if native_branch_map.get(key) != python_branch_map.get(key)
-    )
+        1 for key in branch_keys
+        if native_branch_map.get(key) != python_branch_map.get(key))
     return {
         "covmap_key_count": len(covmap_keys),
         "covmap_mismatches": covmap_mismatches,
@@ -619,13 +625,10 @@ def _collect_llvm_cov_parity_details(
 
 
 def _load_llvm_coverage_python_reports(
-    coverage_reports: List[str], is_rust: bool
-) -> CoverageProfile:
+        coverage_reports: List[str], is_rust: bool) -> CoverageProfile:
     cache_disabled_values = {"0", "false", "no", "off"}
-    cache_enabled = (
-        os.getenv(LLVM_COVERAGE_CACHE_ENV, "1").strip().lower()
-        not in cache_disabled_values
-    )
+    cache_enabled = (os.getenv(LLVM_COVERAGE_CACHE_ENV, "1").strip().lower()
+                     not in cache_disabled_values)
     cache_key: Optional[Tuple[Any, ...]] = None
     if cache_enabled:
         cache_entries: List[Tuple[str, int, int]] = []
@@ -635,17 +638,15 @@ def _load_llvm_coverage_python_reports(
             except OSError:
                 cache_entries = []
                 break
-            cache_entries.append(
-                (coverage_report, stat_result.st_mtime_ns, stat_result.st_size)
-            )
+            cache_entries.append((coverage_report, stat_result.st_mtime_ns,
+                                  stat_result.st_size))
         if cache_entries:
             cache_key = (tuple(cache_entries), is_rust)
             with _LLVM_COVERAGE_PROFILE_CACHE_LOCK:
                 cached_profile = _LLVM_COVERAGE_PROFILE_CACHE.get(cache_key)
             if cached_profile is not None:
-                logger.info(
-                    "Reusing cached LLVM coverage for %d reports", len(coverage_reports)
-                )
+                logger.info("Reusing cached LLVM coverage for %d reports",
+                            len(coverage_reports))
                 return cached_profile.clone_with_shared_data()
 
     cp = CoverageProfile()
@@ -669,7 +670,8 @@ def _load_llvm_coverage_python_reports(
 
                 if len(line) > 0 and line[-1] == ":" and "|" not in line:
                     if len(line.split(":")) == 3:
-                        curr_func = line.split(":")[1].replace(" ", "").replace(":", "")
+                        curr_func = line.split(":")[1].replace(" ", "").replace(
+                            ":", "")
                     else:
                         curr_func = line.replace(" ", "").replace(":", "")
                     if is_rust:
@@ -705,16 +707,14 @@ def _load_llvm_coverage_python_reports(
 
                     try:
                         true_hit = extract_hitcount(
-                            line.split("True:")[1].split(",")[0]
-                        )
+                            line.split("True:")[1].split(",")[0])
                         if true_hit == -1:
                             continue
                     except Exception:
                         continue
                     try:
                         false_hit = extract_hitcount(
-                            line.split("False:")[1].replace("]", "")
-                        )
+                            line.split("False:")[1].replace("]", ""))
                         if false_hit == -1:
                             continue
                     except Exception:
@@ -727,9 +727,7 @@ def _load_llvm_coverage_python_reports(
                             cp.branch_cov_map[switch_string].append(true_hit)
                         except Exception:
                             cp.branch_cov_map[switch_string] = [
-                                true_hit,
-                                false_hit,
-                                true_hit,
+                                true_hit, false_hit, true_hit
                             ]
                     else:
                         branch_string = f"{curr_func}:{line_number},{column_number}"
@@ -744,7 +742,8 @@ def _load_llvm_coverage_python_reports(
                         if switch_string:
                             case_line_numbers.add(line_number)
                         else:
-                            logger.info("found case outside a switch?! \n%s", line)
+                            logger.info("found case outside a switch?! \n%s",
+                                        line)
 
                     try:
                         hit_times = extract_hitcount(line.split("|")[1])
@@ -763,9 +762,9 @@ def _load_llvm_coverage_python_reports(
     return cp
 
 
-def load_llvm_coverage(
-    target_dir: str, target_name: Optional[str] = None, is_rust: bool = False
-) -> CoverageProfile:
+def load_llvm_coverage(target_dir: str,
+                       target_name: Optional[str] = None,
+                       is_rust: bool = False) -> CoverageProfile:
     """
     Scans a directory to read one or more coverage reports, and returns a CoverageProfile
 
@@ -796,9 +795,9 @@ def load_llvm_coverage(
         logger.info(f"Loading LLVM coverage for directory {target_dir}")
 
     all_coverage_reports = sorted(
-        utils.get_all_files_in_tree_with_regex(target_dir, r".*\.covreport$")
-    )
-    logger.info(f"Found {len(all_coverage_reports)} coverage reports in {target_dir}")
+        utils.get_all_files_in_tree_with_regex(target_dir, r".*\.covreport$"))
+    logger.info(
+        f"Found {len(all_coverage_reports)} coverage reports in {target_dir}")
 
     coverage_reports = list()
 
@@ -839,48 +838,35 @@ def load_llvm_coverage(
             "coverage_reports": coverage_reports,
         },
         default_backend=backend_loaders.resolve_component_backend(
-            "FI_LLVM_COV_LOADER",
-        ),
+            "FI_LLVM_COV_LOADER", ),
         timeout_env="FI_LLVM_COV_LOADER_TIMEOUT_SEC",
     )
     if external_payload is not None:
         profile = _coverage_profile_from_external_payload(
-            external_payload, coverage_reports, is_rust
-        )
+            external_payload, coverage_reports, is_rust)
         if profile is not None:
             if shadow_mode:
                 logger.info(
-                    (
-                        "%s enabled; native backend executed and Python "
-                        "authoritative path will run for comparison"
-                    ),
+                    "%s enabled; native backend executed and Python "
+                    "authoritative path will run for comparison",
                     FI_LLVM_COV_LOADER_SHADOW_ENV,
                 )
                 python_profile = _load_llvm_coverage_python_reports(
-                    coverage_reports, is_rust
-                )
+                    coverage_reports, is_rust)
                 mismatch_details = _collect_llvm_cov_parity_details(
-                    profile, python_profile
-                )
-                if (
-                    mismatch_details["covmap_mismatches"]
-                    or mismatch_details["branch_mismatches"]
-                ):
+                    profile, python_profile)
+                if (mismatch_details["covmap_mismatches"]
+                        or mismatch_details["branch_mismatches"]):
                     if strict_mode:
-                        raise exceptions.DataLoaderError(
-                            (
-                                f"{FI_LLVM_COV_PARITY_MISMATCH}: Native LLVM "
-                                "coverage differs from Python authoritative "
-                                "path | details="
-                                f"{json.dumps(mismatch_details, sort_keys=True)}"
-                            )
+                        msg = (
+                            f"{FI_LLVM_COV_PARITY_MISMATCH}: Native LLVM coverage differs "
+                            f"from Python authoritative path | details="
+                            f"{json.dumps(mismatch_details, sort_keys=True)}"
                         )
+                        raise exceptions.DataLoaderError(msg)
                     logger.warning(
-                        (
-                            "%s: Native LLVM coverage differs from Python "
-                            "authoritative path; using Python result | "
-                            "details=%s"
-                        ),
+                        "%s: Native LLVM coverage differs from Python authoritative path; "
+                        "using Python result | details=%s",
                         FI_LLVM_COV_PARITY_MISMATCH,
                         json.dumps(mismatch_details, sort_keys=True),
                     )
@@ -904,7 +890,8 @@ def load_llvm_coverage(
     return _load_llvm_coverage_python_reports(coverage_reports, is_rust)
 
 
-def load_python_json_coverage(json_file: str, strip_pyinstaller_prefix: bool = True):
+def load_python_json_coverage(json_file: str,
+                              strip_pyinstaller_prefix: bool = True):
     """Loads a python json coverage file.
 
     The specific json file that is handled by the coverage output from:
@@ -918,8 +905,7 @@ def load_python_json_coverage(json_file: str, strip_pyinstaller_prefix: bool = T
     cp.set_type("file")
 
     coverage_reports = utils.get_all_files_in_tree_with_regex(
-        json_file, ".*all_cov.json$"
-    )
+        json_file, ".*all_cov.json$")
     logger.info(f"FOUND JSON FILES: {str(coverage_reports)}")
 
     if len(coverage_reports) > 0:
@@ -943,11 +929,9 @@ def load_python_json_coverage(json_file: str, strip_pyinstaller_prefix: bool = T
         cp.file_map[cov_entry] = data["files"][entry]["executed_lines"]
         cp.dual_file_map[cov_entry] = dict()
         cp.dual_file_map[cov_entry]["executed_lines"] = data["files"][entry][
-            "executed_lines"
-        ]
+            "executed_lines"]
         cp.dual_file_map[cov_entry]["missing_lines"] = data["files"][entry][
-            "missing_lines"
-        ]
+            "missing_lines"]
     return cp
 
 
@@ -985,7 +969,8 @@ def load_go_coverage(
     cp.set_type("function")
 
     # Retrieve all fuzz.cov coverage summary
-    coverage_summary = utils.get_all_files_in_tree_with_regex(target_dir, "fuzz.cov")
+    coverage_summary = utils.get_all_files_in_tree_with_regex(
+        target_dir, "fuzz.cov")
     logger.info(f"FOUND fuzz.cov COVERAGE FILES: {str(coverage_summary)}")
 
     if len(coverage_summary) > 0:
@@ -1031,14 +1016,13 @@ def load_go_coverage(
             for file, coverage in line_coverage.items():
                 if file.endswith(source_file):
                     for line_no in range(start_line, end_line + 1):
-                        cp.covmap[name].append((line_no, coverage.get(line_no, 0)))
+                        cp.covmap[name].append(
+                            (line_no, coverage.get(line_no, 0)))
 
     return cp
 
 
-def load_jvm_coverage(
-    target_dir: str,
-) -> CoverageProfile:
+def load_jvm_coverage(target_dir: str, ) -> CoverageProfile:
     """Find and load jacoco.xml, a jvm xml coverage report file
 
     The xml file is generated from Jacoco plugin. The specific dtd of the xml can
@@ -1053,7 +1037,8 @@ def load_jvm_coverage(
     cp.set_type("function")
 
     # Retrieve jacoco.xml coverage report
-    coverage_reports = utils.get_all_files_in_tree_with_regex(target_dir, "jacoco.xml")
+    coverage_reports = utils.get_all_files_in_tree_with_regex(
+        target_dir, "jacoco.xml")
     logger.info(f"FOUND XML COVERAGE FILES: {str(coverage_reports)}")
 
     if len(coverage_reports) > 0:
@@ -1084,14 +1069,16 @@ def load_jvm_coverage(
             line_list = []
             for line in src.findall("line"):
                 # Process each line
-                line_list.append((int(line.attrib["nr"]), int(line.attrib["ci"])))
+                line_list.append(
+                    (int(line.attrib["nr"]), int(line.attrib["ci"])))
             if line_list:
                 source_file_map[src.attrib["name"]] = line_list
 
         # Process all methods in all classes within this package
         for cl in package.findall("class"):
             class_name = cl.attrib.get("name", "").replace("/", ".")
-            line_list = source_file_map.get(cl.attrib.get("sourcefilename", ""), [])
+            line_list = source_file_map.get(
+                cl.attrib.get("sourcefilename", ""), [])
             if not class_name or not line_list:
                 # Fail safe for malformed or invalid jacoco.xml report or
                 # no source file found because target class not compiled
