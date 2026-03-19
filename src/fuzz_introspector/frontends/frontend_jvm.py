@@ -28,6 +28,44 @@ from fuzz_introspector.frontends.datatypes import Project, SourceCodeFile
 
 logger = logging.getLogger(name=__name__)
 
+# Optimization: Static sets for faster O(1) membership testing during AST traversal
+BRANCH_NODES = {
+    "if_statement",
+    "while_statsment",
+    "for_statement",
+    "enhanced_for_statement",
+    "do_statement",
+    "break_statement",
+    "continue_statement",
+    "return_statement",
+    "yield_statement",
+    "switch_label",
+    "throw_statement",
+    "try_statement",
+    "try_with_resources_statement",
+    "catch_clause",
+    "finally_clause",
+    "lambda_expression",
+}
+
+INSTR_NODES = {
+    "assignment_expression",
+    "update_expression",
+    "unary_expression",
+    "binary_expression",
+    "instanceof_expression",
+    "ternary_expression",
+    "cast_expression",
+    "method_invocation",
+    "super_interfaces",
+    "object_creation_expression",
+    "array_creation_expression",
+    "field_access",
+    "array_access",
+    "class_literal",
+}
+
+
 FUZZING_METHOD_RETURN_TYPE_MAP = {
     "consumeBoolean": "boolean",
     "consumeBooleans": "boolean[]",
