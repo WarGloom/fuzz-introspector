@@ -46,25 +46,28 @@ BRANCH_NODES = {
     "catch_clause",
     "finally_clause",
     "lambda_expression",
+    "ternary_expression",
+    "switch_expression",
+    "&&",
+    "||",
 }
 
 INSTR_NODES = {
     "assignment_expression",
-    "update_expression",
-    "unary_expression",
     "binary_expression",
     "instanceof_expression",
+    "lambda_expression",
     "ternary_expression",
+    "update_expression",
+    "primary_expression",
+    "unary_expression",
     "cast_expression",
-    "method_invocation",
-    "super_interfaces",
+    "switch_expression",
     "object_creation_expression",
     "array_creation_expression",
-    "field_access",
-    "array_access",
-    "class_literal",
+    "method_invocation",
+    "explicit_constructor_invocation",
 }
-
 
 FUZZING_METHOD_RETURN_TYPE_MAP = {
     "consumeBoolean": "boolean",
@@ -430,32 +433,9 @@ class JavaMethod:
         """Gets complexity measure based on counting branch nodes in a
         function."""
 
-        branch_nodes = [
-            "if_statement",
-            "while_statsment",
-            "for_statement",
-            "enhanced_for_statement",
-            "do_statement",
-            "break_statement",
-            "continue_statement",
-            "return_statement",
-            "yield_statement",
-            "switch_label",
-            "throw_statement",
-            "try_statement",
-            "try_with_resources_statement",
-            "catch_clause",
-            "finally_clause",
-            "lambda_expression",
-            "ternary_expression",
-            "switch_expression",
-            "&&",
-            "||",
-        ]
-
         def _traverse_node_complexity(node: Node):
             count = 0
-            if node.type in branch_nodes:
+            if node.type in BRANCH_NODES:
                 count += 1
             for item in node.children:
                 count += _traverse_node_complexity(item)
@@ -466,26 +446,9 @@ class JavaMethod:
     def _process_icount(self, stmt: Node):
         """Get a pseudo measurement of instruction count."""
 
-        instr_nodes = [
-            "assignment_expression",
-            "binary_expression",
-            "instanceof_expression",
-            "lambda_expression",
-            "ternary_expression",
-            "update_expression",
-            "primary_expression",
-            "unary_expression",
-            "cast_expression",
-            "switch_expression",
-            "object_creation_expression",
-            "array_creation_expression",
-            "method_invocation",
-            "explicit_constructor_invocation",
-        ]
-
         def _traverse_node_instr_count(node: Node) -> int:
             count = 0
-            if node.type in instr_nodes:
+            if node.type in INSTR_NODES:
                 count += 1
             for item in node.children:
                 count += _traverse_node_instr_count(item)

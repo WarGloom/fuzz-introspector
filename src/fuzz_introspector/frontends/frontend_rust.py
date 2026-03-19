@@ -46,7 +46,6 @@ BRANCH_NODES = {
 }
 
 
-
 class RustSourceCodeFile(datatypes.SourceCodeFile):
     """Class for holding file-specific information."""
 
