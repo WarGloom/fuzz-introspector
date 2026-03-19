@@ -26,6 +26,25 @@ from fuzz_introspector.frontends import datatypes
 
 logger = logging.getLogger(name=__name__)
 
+# Optimization: Static sets for faster O(1) membership testing during AST traversal
+BRANCH_NODES = {
+    'if_expression',
+    'match_expression',
+    'while_expression',
+    'loop_expression',
+    'for_expression',
+    'try_expression',
+    'try_block',
+    'async_block',
+    'await_expression',
+    'unsafe_block',
+    'gen_block',
+    'break_expression',
+    'continue_expression',
+    '&&',
+    '||',
+}
+
 
 class RustSourceCodeFile(datatypes.SourceCodeFile):
     """Class for holding file-specific information."""
@@ -377,27 +396,9 @@ class RustFunction():
         """Gets complexity measure based on counting branch nodes in a
         function."""
 
-        branch_nodes = [
-            'if_expression',
-            'match_expression',
-            'while_expression',
-            'loop_expression',
-            'for_expression',
-            'try_expression',
-            'try_block',
-            'async_block',
-            'await_expression',
-            'unsafe_block',
-            'gen_block',
-            'break_expression',
-            'continue_expression',
-            '&&',
-            '||',
-        ]
-
         def _traverse_node_complexity(node: Node):
             count = 0
-            if node.type in branch_nodes:
+            if node.type in BRANCH_NODES:
                 count += 1
             for item in node.children:
                 count += _traverse_node_complexity(item)

@@ -28,6 +28,33 @@ from fuzz_introspector.frontends.datatypes import Project, SourceCodeFile
 
 logger = logging.getLogger(name=__name__)
 
+
+# Optimization: Static sets for faster O(1) membership testing during AST traversal
+BRANCH_NODES = {
+    "if_statement",
+    "case_statement",
+    "do_statement",
+    "for_range_loop",
+    "for_statement",
+    "goto_statement",
+    "function_declarator",
+    "pointer_declarator",
+    "struct_specifier",
+    "preproc_elif",
+    "while_statement",
+    "switch_statement",
+    "&&",
+    "||",
+}
+
+INSTR_NODES = {
+    "binary_expression",
+    "unary_expression",
+    "call_expression",
+    "compound_statement",
+    "assignment_expression",
+}
+
 LITERAL_TYPE_MAP = {
     "_string_literal": "string",
     "int_literal": "int",
@@ -607,26 +634,9 @@ class FunctionMethod:
         """Gets complexity measure based on counting branch nodes in a
         function."""
 
-        branch_nodes = [
-            "if_statement",
-            "case_statement",
-            "do_statement",
-            "for_range_loop",
-            "for_statement",
-            "goto_statement",
-            "function_declarator",
-            "pointer_declarator",
-            "struct_specifier",
-            "preproc_elif",
-            "while_statement",
-            "switch_statement",
-            "&&",
-            "||",
-        ]
-
         def _traverse_node_complexity(node: Node) -> int:
             count = 0
-            if node.type in branch_nodes:
+            if node.type in BRANCH_NODES:
                 count += 1
             for item in node.children:
                 count += _traverse_node_complexity(item)
@@ -637,17 +647,9 @@ class FunctionMethod:
     def _process_icount(self):
         """Returns a pseudo measurement of instruction count."""
 
-        instr_nodes = [
-            "binary_expression",
-            "unary_expression",
-            "call_expression",
-            "compound_statement",
-            "assignment_expression",
-        ]
-
         def _traverse_node_instr_count(node: Node) -> int:
             count = 0
-            if node.type in instr_nodes:
+            if node.type in INSTR_NODES:
                 count += 1
             for item in node.children:
                 count += _traverse_node_instr_count(item)

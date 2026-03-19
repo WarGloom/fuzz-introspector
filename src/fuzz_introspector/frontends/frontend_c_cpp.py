@@ -30,6 +30,27 @@ from fuzz_introspector.frontends.datatypes import SourceCodeFile, Project
 
 logger = logging.getLogger(name=__name__)
 
+# Optimization: Static sets for faster O(1) membership testing during AST traversal
+BRANCH_NODES = {
+    "if_statement",
+    "switch_statement",
+    "do_statement",
+    "while_statement",
+    "for_statement",
+    "for_range_loop",
+    "try_statement",
+    "seh_try_statement",
+    "throw_statement",
+    "goto_statement",
+    "co_return_statement",
+    "co_yield_statement",
+    "break_statement",
+    "continue_statement",
+    "&&",
+    "||",
+}
+
+
 # For caching function nodes to increase processing speed
 _function_node_cache: dict[tuple[str, str, bool], "FunctionDefinition"] = {}
 
@@ -779,28 +800,9 @@ class FunctionDefinition:
         """Gets complexity measure based on counting branch nodes in a
         function."""
 
-        branch_nodes = [
-            "if_statement",
-            "switch_statement",
-            "do_statement",
-            "while_statement",
-            "for_statement",
-            "for_range_loop",
-            "try_statement",
-            "seh_try_statement",
-            "throw_statement",
-            "goto_statement",
-            "co_return_statement",
-            "co_yield_statement",
-            "break_statement",
-            "continue_statement",
-            "&&",
-            "||",
-        ]
-
         def _traverse_node_complexity(node: Node):
             count = 0
-            if node.type in branch_nodes:
+            if node.type in BRANCH_NODES:
                 count += 1
             for item in node.children:
                 count += _traverse_node_complexity(item)
