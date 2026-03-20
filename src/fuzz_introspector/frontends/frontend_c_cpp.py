@@ -50,7 +50,6 @@ BRANCH_NODES = {
     "||",
 }
 
-
 # For caching function nodes to increase processing speed
 _function_node_cache: dict[tuple[str, str, bool], "FunctionDefinition"] = {}
 

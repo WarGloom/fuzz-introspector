@@ -28,7 +28,6 @@ from fuzz_introspector.frontends.datatypes import Project, SourceCodeFile
 
 logger = logging.getLogger(name=__name__)
 
-
 # Optimization: Static sets for faster O(1) membership testing during AST traversal
 BRANCH_NODES = {
     "if_statement",
