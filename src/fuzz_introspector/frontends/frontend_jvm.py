@@ -148,14 +148,14 @@ class JvmSourceCodeFile(SourceCodeFile):
         for nodes in res.values():
             for node in nodes:
                 for package in node.children:
-                    if package.type in ["scoped_identifier", "identifier"]:
+                    if package.type in {"scoped_identifier", "identifier"}:
                         self.package = package.text.decode(encoding="utf-8",
                                                            errors="ignore")
 
     def _set_class_interface_declaration(self):
         """Internal helper for retrieving all classes."""
         for node in self.root.children:
-            if node.type in ["class_declaration", "interface_declaration"]:
+            if node.type in {"class_declaration", "interface_declaration"}:
                 self.classes.append(
                     JavaClassInterface(node, self.tree_sitter_lang, self))
 
@@ -409,10 +409,10 @@ class JavaMethod:
                                                      errors="ignore")
 
             # Process body and store statment nodes
-            elif child.type in ["block", "constructor_body"]:
+            elif child.type in {"block", "constructor_body"}:
                 for stmt in child.children:
-                    if stmt.type not in ["{", "}"
-                                         ] and "comment" not in stmt.type:
+                    if stmt.type not in {"{", "}"
+                                         } and "comment" not in stmt.type:
                         self.stmts.append(stmt)
 
             # Process exceptions
@@ -980,7 +980,7 @@ class JavaClassInterface:
                     self.name = f"{self.package}.{self.name}"
 
             # Process body
-            elif child.type in ["class_body", "interface_body"]:
+            elif child.type in {"class_body", "interface_body"}:
                 for body in child.children:
                     # Process constructors
                     if body.type == "constructor_declaration":
@@ -1014,9 +1014,9 @@ class JavaClassInterface:
                             self.class_fields[field_name] = field_type
 
                     # Process inner classes or interfaces
-                    elif body.type in [
+                    elif body.type in {
                             "class_declaration", "interface_declaration"
-                    ]:
+                    }:
                         inner_class_nodes.append(body)
 
         return inner_class_nodes

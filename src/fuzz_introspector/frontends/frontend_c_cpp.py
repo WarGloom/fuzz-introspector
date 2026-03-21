@@ -50,7 +50,6 @@ BRANCH_NODES = {
     "||",
 }
 
-
 # For caching function nodes to increase processing speed
 _function_node_cache: dict[tuple[str, str, bool], "FunctionDefinition"] = {}
 
@@ -117,7 +116,7 @@ class CppSourceCodeFile(SourceCodeFile):
         # TODO handles namespace for all nodes
         # TODO Add more C++ specific type defintions and macros
         for child in node.children:
-            if child.type in ["function_definition", "preproc_function_def"]:
+            if child.type in {"function_definition", "preproc_function_def"}:
                 self._process_function_node(child, namespace)
             elif child.type == "namespace_definition":
                 # Only valid for Cpp projects
@@ -134,7 +133,7 @@ class CppSourceCodeFile(SourceCodeFile):
                 self._process_typedef(child, namespace)
             elif child.type == "preproc_include":
                 self._process_include(child, namespace)
-            elif child.type in ["preproc_ifdef", "preproc_if"]:
+            elif child.type in {"preproc_ifdef", "preproc_if"}:
                 self._process_macro_block(child, namespace, [])
 
             # Ensure recursive into nested items
@@ -261,7 +260,7 @@ class CppSourceCodeFile(SourceCodeFile):
         else:
             parent = struct.parent
             declarator = None
-            if parent and parent.type in ["declaration", "type_definition"]:
+            if parent and parent.type in {"declaration", "type_definition"}:
                 declarator = parent.child_by_field_name("declarator")
             if declarator and declarator.text:
                 struct_name = declarator.text.decode(encoding="utf-8",
@@ -313,7 +312,7 @@ class CppSourceCodeFile(SourceCodeFile):
         else:
             parent = union.parent
             declarator = None
-            if parent and parent.type in ["declaration", "type_definition"]:
+            if parent and parent.type in {"declaration", "type_definition"}:
                 declarator = parent.child_by_field_name("declarator")
             if declarator and declarator.text:
                 union_name = declarator.text.decode(encoding="utf-8",
@@ -437,7 +436,7 @@ class CppSourceCodeFile(SourceCodeFile):
                 "condition":
                 var_name.text.decode(encoding="utf-8", errors="ignore"),
             })
-        elif macro.type in ["preproc_if", "preproc_elif"]:
+        elif macro.type in {"preproc_if", "preproc_elif"}:
             condition = macro.child_by_field_name("condition")
 
             # Skip invalid macro
@@ -737,13 +736,13 @@ class FunctionDefinition:
                     if not param_type and not param_name:
                         continue
 
-                    while param_name is not None and param_name.type not in [
+                    while param_name is not None and param_name.type not in {
                             "identifier",
                             "qualified_identifier",
                             "pointer_declarator",
                             "array_declarator",
                             "reference_declarator",
-                    ]:
+                    }:
                         param_name = param_name.child_by_field_name(
                             "declarator")
                         if param_name is None:
@@ -880,9 +879,9 @@ class FunctionDefinition:
             # identifier indicates general function calls
             # qualified_identifier indicates namespace function calls
             # template_function indicates standard function calls
-            if (func.type in [
+            if (func.type in {
                     "identifier", "qualified_identifier", "template_function"
-            ] and func.text):
+            } and func.text):
                 target_name = func.text.decode(encoding="utf-8",
                                                errors="ignore")
 
@@ -963,7 +962,7 @@ class FunctionDefinition:
             object_type = self.namespace_or_class
 
         # Named object
-        elif arg.type in ["identifier", "qualified_identifier"]:
+        elif arg.type in {"identifier", "qualified_identifier"}:
             if arg.text:
                 object_type = self.var_map.get(
                     arg.text.decode(encoding="utf-8", errors="ignore"))
@@ -1015,7 +1014,7 @@ class FunctionDefinition:
             if var_type_obj is None:
                 return []
 
-            if var_type_obj.type in ["primitive_type", "sized_type_specifier"]:
+            if var_type_obj.type in {"primitive_type", "sized_type_specifier"}:
                 logger.debug("Skipping.")
                 return []
 
@@ -1080,13 +1079,13 @@ class FunctionDefinition:
                 #        added = True
                 #        callsites.append((cls, stmt.byte_range[1],
                 #                          stmt.start_point.row + 1))
-            while var_name is not None and var_name.type not in [
+            while var_name is not None and var_name.type not in {
                     "identifier",
                     "qualified_identifier",
                     "pointer_declarator",
                     "array_declarator",
                     "reference_declarator",
-            ]:
+            }:
                 var_name = var_name.child_by_field_name("declarator")
 
             if var_name is None:

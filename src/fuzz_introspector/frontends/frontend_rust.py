@@ -440,7 +440,7 @@ class RustFunction():
             # Handle function call
             if func:
                 # Simple function call
-                if func.type in ['identifier', 'scoped_identifier']:
+                if func.type in {'identifier', 'scoped_identifier'}:
                     if func.text:
                         target_name = func.text.decode(encoding='utf-8',
                                                        errors='ignore')
@@ -494,7 +494,7 @@ class RustFunction():
             object_type = None
             if obj.type == 'call_expression':
                 object_type = _retrieve_return_type(obj)
-            elif obj.type in ['identifier', 'scoped_identifier']:
+            elif obj.type in {'identifier', 'scoped_identifier'}:
                 object_text = obj.text.decode(
                     encoding='utf-8', errors='ignore') if obj.text else ''
                 node = get_function_node(object_text, functions)
@@ -524,7 +524,7 @@ class RustFunction():
 
             func = call_expr.child_by_field_name('function')
             if func:
-                if func.type in ['identifier', 'scoped_identifier']:
+                if func.type in {'identifier', 'scoped_identifier'}:
                     func_name = func.text.decode(
                         encoding='utf-8', errors='ignore') if func.text else ''
                     node = get_function_node(func_name, functions)
