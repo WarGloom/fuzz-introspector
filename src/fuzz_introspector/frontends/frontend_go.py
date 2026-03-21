@@ -28,7 +28,6 @@ from fuzz_introspector.frontends.datatypes import Project, SourceCodeFile
 
 logger = logging.getLogger(name=__name__)
 
-
 # Optimization: Static sets for faster O(1) membership testing during AST traversal
 BRANCH_NODES = {
     "if_statement",
@@ -800,7 +799,7 @@ class FunctionMethod:
                     return target_name
 
             # Index expression / Slice expression
-            elif child.type in ["index_expression", "slice_expression"]:
+            elif child.type in {"index_expression", "slice_expression"}:
                 op = child.child_by_field_name("operand")
                 if not op or not op.text:
                     continue
@@ -904,7 +903,7 @@ class FunctionMethod:
                     error_prefix = self._get_error_selector_prefix(call_expr)
                     if error_prefix:
                         target_name = f"{error_prefix}.{target_name}"
-                if target_name in ["new", "make"]:
+                if target_name in {"new", "make"}:
                     if target_name not in all_funcs_meths:
                         target_name = None
 
