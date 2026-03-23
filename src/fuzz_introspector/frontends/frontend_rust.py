@@ -397,11 +397,15 @@ class RustFunction():
         function."""
 
         def _traverse_node_complexity(node: Node):
+            # Iterative stack-based traversal avoids recursion limits
+            # and reduces function call overhead for deep ASTs.
             count = 0
-            if node.type in BRANCH_NODES:
-                count += 1
-            for item in node.children:
-                count += _traverse_node_complexity(item)
+            stack = [node]
+            while stack:
+                curr = stack.pop()
+                if curr.type in BRANCH_NODES:
+                    count += 1
+                stack.extend(curr.children)
             return count
 
         if self.fuzzing_token_tree:
@@ -414,11 +418,15 @@ class RustFunction():
         """Get a pseudo measurement of instruction count."""
 
         def _traverse_node_instr_count(node: Node) -> int:
+            # Iterative stack-based traversal avoids recursion limits
+            # and reduces function call overhead for deep ASTs.
             count = 0
-            if 'expression' in node.type:
-                count += 1
-            for item in node.children:
-                count += _traverse_node_instr_count(item)
+            stack = [node]
+            while stack:
+                curr = stack.pop()
+                if 'expression' in curr.type:
+                    count += 1
+                stack.extend(curr.children)
             return count
 
         if self.fuzzing_token_tree:
