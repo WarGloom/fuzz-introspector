@@ -635,10 +635,12 @@ class FunctionMethod:
 
         def _traverse_node_complexity(node: Node) -> int:
             count = 0
-            if node.type in BRANCH_NODES:
-                count += 1
-            for item in node.children:
-                count += _traverse_node_complexity(item)
+            stack = [node]
+            while stack:
+                curr = stack.pop()
+                if curr.type in BRANCH_NODES:
+                    count += 1
+                stack.extend(curr.children)
             return count
 
         self.complexity = _traverse_node_complexity(self.root)
@@ -648,10 +650,12 @@ class FunctionMethod:
 
         def _traverse_node_instr_count(node: Node) -> int:
             count = 0
-            if node.type in INSTR_NODES:
-                count += 1
-            for item in node.children:
-                count += _traverse_node_instr_count(item)
+            stack = [node]
+            while stack:
+                curr = stack.pop()
+                if curr.type in INSTR_NODES:
+                    count += 1
+                stack.extend(curr.children)
             return count
 
         self.icount = _traverse_node_instr_count(self.root)

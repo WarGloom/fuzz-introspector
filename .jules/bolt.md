@@ -10,3 +10,7 @@
 ## 2025-03-05 - Avoid list re-creation for O(1) membership tests
 **Learning:** Using an inline list `[...]` for membership checking (`in`) forces the Python interpreter to recreate the list object on every single execution, giving an O(N) lookup. Using an inline set `{...}` instead tells the compiler to pre-allocate a `frozenset` constant, saving list recreation and executing in O(1) time. We measured this to be 3-4x faster for a 5-element check (1.04s vs 0.27s over 10M iterations).
 **Action:** Always prefer inline sets `{...}` over inline lists `[...]` for membership (`in`) checks.
+
+## 2025-03-05 - Avoid Recursion in Tree-sitter AST Traversals
+**Learning:** The Tree-sitter frontend parsers (Go, JVM, Rust, C++) frequently measured node complexity and instruction counts recursively. In addition to Python function call overhead across potentially tens of thousands of nodes (creating noticeable CPU overhead), deep ASTs risk hitting Python's `RecursionError` limit.
+**Action:** When traversing deep `tree-sitter` AST nodes in Python, prefer iterative stack-based traversal (e.g., `while stack: curr = stack.pop(); ... stack.extend(curr.children)`) over recursive traversal to avoid `RecursionError` limitations and reduce function call overhead, yielding measurable speedups.
