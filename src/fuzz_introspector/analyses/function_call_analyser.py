@@ -119,13 +119,15 @@ class ThirdPartyAPICoverageAnalyser(analysis.AnalysisInterface):
         ]
 
         target_func_list = [func.function_name for func in target_list]
+        target_func_set = set(target_func_list)
 
         # Add unreachable target functions
         for function in function_list:
-            if function.function_name not in target_func_list:
+            if function.function_name not in target_func_set:
                 if not function.function_source_file:
                     target_list.append(function)
                     target_func_list.append(function.function_name)
+                    target_func_set.add(function.function_name)
 
         # Create list of call site for each funcitons
         callsite_dict: Dict[str, List[str]] = dict()
