@@ -18,7 +18,7 @@
 
 import logging
 
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Set
 
 from fuzz_introspector import analysis
 from fuzz_introspector import cfg_load
@@ -82,7 +82,7 @@ class ThirdPartyAPICoverageAnalyser(analysis.AnalysisInterface):
 
     def add_callsite_record(
         self,
-        target_func_list: List[str],
+        target_func_set: Set[str],
         func_name: str,
         source_file_list: List[str],
         callsites: Dict[str, List[str]],
@@ -91,14 +91,16 @@ class ThirdPartyAPICoverageAnalyser(analysis.AnalysisInterface):
         source location and line number mapping to a combined dictionary.
         """
         exist_list = []
-        if func_name in target_func_list:
+        if func_name in target_func_set:
             if func_name in callsites.keys():
                 func_list = callsites[func_name]
             else:
                 func_list = []
+            func_set = set(func_list)
             for item in source_file_list:
-                if item not in func_list:
+                if item not in func_set:
                     func_list.append(item)
+                    func_set.add(item)
                 else:
                     exist_list.append(item)
             callsites.update({func_name: func_list})
@@ -118,14 +120,14 @@ class ThirdPartyAPICoverageAnalyser(analysis.AnalysisInterface):
             if not fd.function_source_file
         ]
 
-        target_func_list = [func.function_name for func in target_list]
+        target_func_set = {func.function_name for func in target_list}
 
         # Add unreachable target functions
         for function in function_list:
-            if function.function_name not in target_func_list:
+            if function.function_name not in target_func_set:
                 if not function.function_source_file:
                     target_list.append(function)
-                    target_func_list.append(function.function_name)
+                    target_func_set.add(function.function_name)
 
         # Create list of call site for each funcitons
         callsite_dict: Dict[str, List[str]] = dict()
@@ -139,7 +141,7 @@ class ThirdPartyAPICoverageAnalyser(analysis.AnalysisInterface):
                 parent_func,
                 callsite.src_linenumber,
             )
-            self.add_callsite_record(target_func_list, func_name,
+            self.add_callsite_record(target_func_set, func_name,
                                      [src_file_with_line], callsite_dict)
 
         # Discover reachable func calls
@@ -149,7 +151,7 @@ class ThirdPartyAPICoverageAnalyser(analysis.AnalysisInterface):
             for func_name in function.callsite.keys():
                 reachable_func_list.extend(
                     self.add_callsite_record(
-                        target_func_list,
+                        target_func_set,
                         func_name,
                         function.callsite[func_name],
                         callsite_dict,
