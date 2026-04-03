@@ -396,35 +396,30 @@ class RustFunction():
         """Gets complexity measure based on counting branch nodes in a
         function."""
 
-        def _traverse_node_complexity(node: Node):
-            count = 0
-            if node.type in BRANCH_NODES:
+        count = 0
+        root_node = self.fuzzing_token_tree if self.fuzzing_token_tree else self.root
+        stack = [root_node]
+        while stack:
+            curr = stack.pop()
+            if curr.type in BRANCH_NODES:
                 count += 1
-            for item in node.children:
-                count += _traverse_node_complexity(item)
-            return count
+            stack.extend(curr.children)
 
-        if self.fuzzing_token_tree:
-            self.complexity += _traverse_node_complexity(
-                self.fuzzing_token_tree)
-        else:
-            self.complexity += _traverse_node_complexity(self.root)
+        self.complexity += count
 
     def _process_icount(self):
         """Get a pseudo measurement of instruction count."""
 
-        def _traverse_node_instr_count(node: Node) -> int:
-            count = 0
-            if 'expression' in node.type:
+        count = 0
+        root_node = self.fuzzing_token_tree if self.fuzzing_token_tree else self.root
+        stack = [root_node]
+        while stack:
+            curr = stack.pop()
+            if 'expression' in curr.type:
                 count += 1
-            for item in node.children:
-                count += _traverse_node_instr_count(item)
-            return count
+            stack.extend(curr.children)
 
-        if self.fuzzing_token_tree:
-            self.icount += _traverse_node_instr_count(self.fuzzing_token_tree)
-        else:
-            self.icount += _traverse_node_instr_count(self.root)
+        self.icount += count
 
     def extract_callsites(self, functions: dict[str, 'RustFunction']):
         """Extract callsites."""

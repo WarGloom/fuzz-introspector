@@ -1,4 +1,3 @@
-
 ## 2025-03-05 - Optimize Multimap Accumulation
 **Learning:** Using `dict.setdefault(key, []).append(...)` for accumulating values into lists allocates an empty list on every single iteration, creating significant garbage collection pressure and CPU overhead in tight loops parsing debug info and profiling data. `collections.defaultdict(list)` avoids this allocation overhead and operates 30-50% faster.
 **Action:** Always prefer `collections.defaultdict(list)` (or `set`) when constructing dictionary multimaps.
@@ -10,3 +9,7 @@
 ## 2025-03-05 - Avoid list re-creation for O(1) membership tests
 **Learning:** Using an inline list `[...]` for membership checking (`in`) forces the Python interpreter to recreate the list object on every single execution, giving an O(N) lookup. Using an inline set `{...}` instead tells the compiler to pre-allocate a `frozenset` constant, saving list recreation and executing in O(1) time. We measured this to be 3-4x faster for a 5-element check (1.04s vs 0.27s over 10M iterations).
 **Action:** Always prefer inline sets `{...}` over inline lists `[...]` for membership (`in`) checks.
+
+## 2025-03-05 - Avoid deep recursive AST traversal
+**Learning:** The AST traversal functions (e.g., `_process_complexity` and `_process_icount`) in frontend parsers used heavy recursion to iterate over tree-sitter nodes. This incurs significant overhead from recursive function calls and can trigger a `RecursionError` on very deep trees.
+**Action:** Use an iterative approach with a `while stack` loop (DFS using `.extend(curr.children)`) to traverse ASTs. This eliminates the call stack overhead and prevents recursion limits entirely.
