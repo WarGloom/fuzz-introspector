@@ -103,7 +103,10 @@ def add_func_to_reached_and_clone(
     # an O(V x N x R) bottleneck. We now pre-compute a dictionary and set of
     # the newly reached functions, allowing us to use Python's C-accelerated
     # set intersection to find overlapping functions in O(R) time.
-    nr_dict = {nr.function_name: nr.cyclomatic_complexity for nr in newly_reached}
+    nr_dict = {
+        nr.function_name: nr.cyclomatic_complexity
+        for nr in newly_reached
+    }
     nr_keys = set(nr_dict.keys())
 
     for f_profile in all_functions.values():
