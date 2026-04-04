@@ -96,13 +96,22 @@ def add_func_to_reached_and_clone(
     # transitively reach them, as well from their own new_unreached_complexity.
     # We do not recompute total_cyclomatic_complexity since it is a static
     # property precomputed beforehand.
+
+    # ⚡ Bolt Optimization:
+    # Previously, this used a nested loop over `newly_reached` and did an O(N)
+    # lookup inside `f_profile.functions_reached` for every profile, creating
+    # an O(V x N x R) bottleneck. We now pre-compute a dictionary and set of
+    # the newly reached functions, allowing us to use Python's C-accelerated
+    # set intersection to find overlapping functions in O(R) time.
+    nr_dict = {nr.function_name: nr.cyclomatic_complexity for nr in newly_reached}
+    nr_keys = set(nr_dict.keys())
+
     for f_profile in all_functions.values():
-        sub_cc = 0
-        for nr in newly_reached:
-            nr_name = nr.function_name
-            if (nr_name in f_profile.functions_reached
-                    or nr_name == f_profile.function_name):
-                sub_cc += nr.cyclomatic_complexity
+        common = nr_keys.intersection(f_profile.functions_reached)
+        if f_profile.function_name in nr_keys:
+            common.add(f_profile.function_name)
+
+        sub_cc = sum(nr_dict[name] for name in common)
         f_profile.new_unreached_complexity -= sub_cc
 
     if all_functions[func_to_add.function_name].hitcount == 0:
