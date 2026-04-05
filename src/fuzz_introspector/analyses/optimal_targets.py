@@ -96,13 +96,28 @@ def add_func_to_reached_and_clone(
     # transitively reach them, as well from their own new_unreached_complexity.
     # We do not recompute total_cyclomatic_complexity since it is a static
     # property precomputed beforehand.
+    # ⚡ Bolt: Optimize newly_reached intersection
+    # Converts an O(N x M) nested loop into an O(N) set intersection.
+    # We pre-compute a set of newly reached function names and map their
+    # complexity for O(1) lookups. This significantly speeds up
+    # new_unreached_complexity delta updates during large profile merges.
+    newly_reached_dict = {
+        nr.function_name: nr.cyclomatic_complexity
+        for nr in newly_reached
+    }
+    newly_reached_names = set(newly_reached_dict.keys())
+
     for f_profile in all_functions.values():
         sub_cc = 0
-        for nr in newly_reached:
-            nr_name = nr.function_name
-            if (nr_name in f_profile.functions_reached
-                    or nr_name == f_profile.function_name):
-                sub_cc += nr.cyclomatic_complexity
+        intersected = newly_reached_names.intersection(
+            f_profile.functions_reached)
+        for name in intersected:
+            sub_cc += newly_reached_dict[name]
+
+        if (f_profile.function_name in newly_reached_names
+                and f_profile.function_name not in intersected):
+            sub_cc += newly_reached_dict[f_profile.function_name]
+
         f_profile.new_unreached_complexity -= sub_cc
 
     if all_functions[func_to_add.function_name].hitcount == 0:
