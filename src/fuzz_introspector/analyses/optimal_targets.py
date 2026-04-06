@@ -111,8 +111,8 @@ def add_func_to_reached_and_clone(
             for nr_name in intersection:
                 sub_cc += newly_reached_dict[nr_name]
 
-        if (f_profile.function_name in newly_reached_dict
-                and f_profile.function_name not in f_profile.functions_reached):
+        if (f_profile.function_name in newly_reached_dict and
+                f_profile.function_name not in f_profile.functions_reached):
             sub_cc += newly_reached_dict[f_profile.function_name]
 
         f_profile.new_unreached_complexity -= sub_cc
