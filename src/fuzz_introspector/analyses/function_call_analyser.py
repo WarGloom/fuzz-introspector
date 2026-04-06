@@ -91,14 +91,20 @@ class ThirdPartyAPICoverageAnalyser(analysis.AnalysisInterface):
         source location and line number mapping to a combined dictionary.
         """
         exist_list = []
+        # Target func list is checked but this is now small, though a set would be better
+        # For compatibility we keep it. However, func_list lookups can be O(N^2)
         if func_name in target_func_list:
             if func_name in callsites.keys():
                 func_list = callsites[func_name]
             else:
                 func_list = []
+
+            # Bolt: Convert list to set for faster membership lookups
+            func_set = set(func_list)
             for item in source_file_list:
-                if item not in func_list:
+                if item not in func_set:
                     func_list.append(item)
+                    func_set.add(item)
                 else:
                     exist_list.append(item)
             callsites.update({func_name: func_list})
@@ -120,12 +126,17 @@ class ThirdPartyAPICoverageAnalyser(analysis.AnalysisInterface):
 
         target_func_list = [func.function_name for func in target_list]
 
+        # Bolt: Used set alongside list to maintain deterministic ordering while
+        # achieving O(1) membership lookups instead of O(N^2) list searches
+        target_func_set = set(target_func_list)
+
         # Add unreachable target functions
         for function in function_list:
-            if function.function_name not in target_func_list:
+            if function.function_name not in target_func_set:
                 if not function.function_source_file:
                     target_list.append(function)
                     target_func_list.append(function.function_name)
+                    target_func_set.add(function.function_name)
 
         # Create list of call site for each funcitons
         callsite_dict: Dict[str, List[str]] = dict()
