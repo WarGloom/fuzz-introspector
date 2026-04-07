@@ -152,13 +152,13 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         """
         callsite_list: list[cfg_load.CalltreeCallsite] = []
         function_list: list[function_profile.FunctionProfile] = []
-        function_name_list: list[str] = []
+        function_name_set: set[str] = set()
         fuzzer_name_list: list[str] = []
 
         for key, function in proj_profile.all_functions.items():
-            if key not in function_name_list:
+            if key not in function_name_set:
                 function_list.append(function)
-                function_name_list.append(function.function_name)
+                function_name_set.add(function.function_name)
 
         for profile in profiles:
             # Retrieve plain fuzzer name
@@ -169,9 +169,9 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
 
             # Retrieve all functions
             for key, function in profile.all_class_functions.items():
-                if key not in function_name_list:
+                if key not in function_name_set:
                     function_list.append(function)
-                    function_name_list.append(function.function_name)
+                    function_name_set.add(function.function_name)
 
         # callsite_list is retained for backward compatibility with callers,
         # but this analyser no longer needs to precompute all callsites.
