@@ -168,7 +168,7 @@ class FunctionProfile:
         cs_loaded: Dict[str, List[str]] = {}
         for callsite in yaml_callsites:
             if callsite["Dst"] not in cs_loaded:
-                callsite_list = []
+                callsite_list: List[str] = []
                 cs_loaded[callsite["Dst"]] = callsite_list
             else:
                 callsite_list = cs_loaded[callsite["Dst"]]
