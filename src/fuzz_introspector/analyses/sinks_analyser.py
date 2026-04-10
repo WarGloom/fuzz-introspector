@@ -153,10 +153,12 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         callsite_list: list[cfg_load.CalltreeCallsite] = []
         function_list: list[function_profile.FunctionProfile] = []
         function_name_list: list[str] = []
+        seen_functions: set[str] = set()
         fuzzer_name_list: list[str] = []
 
         for key, function in proj_profile.all_functions.items():
-            if key not in function_name_list:
+            if key not in seen_functions:
+                seen_functions.add(key)
                 function_list.append(function)
                 function_name_list.append(function.function_name)
 
@@ -169,7 +171,8 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
 
             # Retrieve all functions
             for key, function in profile.all_class_functions.items():
-                if key not in function_name_list:
+                if key not in seen_functions:
+                    seen_functions.add(key)
                     function_list.append(function)
                     function_name_list.append(function.function_name)
 
