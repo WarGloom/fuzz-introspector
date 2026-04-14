@@ -19,7 +19,6 @@ import functools
 import json
 import logging
 import os
-import pathlib
 import re
 import shutil
 import sys
@@ -676,26 +675,38 @@ def locate_rust_fuzz_item(funcname: str, item_list: list[str]) -> str:
     return ""
 
 
+_PATHS_TO_AVOID_TUPLE = (
+    "/src/aflplusplus",
+    "/src/honggfuzz",
+    "/src/libfuzzer",
+    "/src/fuzztest",
+)
+
+
+def _build_ext_map() -> dict[str, str]:
+    ext_map = {}
+    for language, extensions in constants.LANGUAGE_EXTENSIONS.items():
+        for ext in extensions:
+            ext_map[ext] = language
+    return ext_map
+
+
+_EXT_MAP = _build_ext_map()
+
+
 def detect_language(directory) -> str:
     """Given a folder finds the likely programming language of the project"""
 
-    paths_to_avoid = [
-        "/src/aflplusplus",
-        "/src/honggfuzz",
-        "/src/libfuzzer",
-        "/src/fuzztest",
-    ]
-
     language_counts: dict[str, int] = {}
     for dirpath, _, filenames in os.walk(directory):
-        if any([x for x in paths_to_avoid if dirpath.startswith(x)]):
+        if dirpath.startswith(_PATHS_TO_AVOID_TUPLE):
             continue
         for filename in filenames:
             # pylint: disable-next=no-member
-            for language, extensions in constants.LANGUAGE_EXTENSIONS.items():
-                if pathlib.Path(filename).suffix in extensions:
-                    curr_count = language_counts.get(language, 0)
-                    language_counts[language] = curr_count + 1
+            _, ext = os.path.splitext(filename)
+            lang = _EXT_MAP.get(ext)
+            if lang:
+                language_counts[lang] = language_counts.get(lang, 0) + 1
 
     max_lang = ""
     max_count = -1
