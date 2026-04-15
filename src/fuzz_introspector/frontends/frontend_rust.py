@@ -398,10 +398,14 @@ class RustFunction():
 
         def _traverse_node_complexity(node: Node):
             count = 0
-            if node.type in BRANCH_NODES:
-                count += 1
-            for item in node.children:
-                count += _traverse_node_complexity(item)
+            # Optimization: Use an iterative stack instead of recursion to
+            # avoid function call overhead and prevent RecursionError on deep ASTs
+            stack = [node]
+            while stack:
+                curr = stack.pop()
+                if curr.type in BRANCH_NODES:
+                    count += 1
+                stack.extend(curr.children)
             return count
 
         if self.fuzzing_token_tree:
@@ -415,10 +419,14 @@ class RustFunction():
 
         def _traverse_node_instr_count(node: Node) -> int:
             count = 0
-            if 'expression' in node.type:
-                count += 1
-            for item in node.children:
-                count += _traverse_node_instr_count(item)
+            # Optimization: Use an iterative stack instead of recursion to
+            # avoid function call overhead and prevent RecursionError on deep ASTs
+            stack = [node]
+            while stack:
+                curr = stack.pop()
+                if 'expression' in curr.type:
+                    count += 1
+                stack.extend(curr.children)
             return count
 
         if self.fuzzing_token_tree:
