@@ -10,3 +10,7 @@
 ## 2025-03-05 - Avoid list re-creation for O(1) membership tests
 **Learning:** Using an inline list `[...]` for membership checking (`in`) forces the Python interpreter to recreate the list object on every single execution, giving an O(N) lookup. Using an inline set `{...}` instead tells the compiler to pre-allocate a `frozenset` constant, saving list recreation and executing in O(1) time. We measured this to be 3-4x faster for a 5-element check (1.04s vs 0.27s over 10M iterations).
 **Action:** Always prefer inline sets `{...}` over inline lists `[...]` for membership (`in`) checks.
+
+## 2025-03-05 - Replace O(N^2) list membership checks with O(1) set lookups
+**Learning:** When iterating over a large number of items and accumulating them into a list without duplicates, using `if item not in my_list` results in O(N^2) complexity because list lookups are O(N). This becomes a severe bottleneck in Python when the list grows large. In `function_call_analyser.py` and `sinks_analyser.py`, we found instances where maintaining a parallel `set` to track seen items reduced the time complexity from O(N^2) to O(N).
+**Action:** When accumulating unique items into a list, always use an auxiliary `set` to track seen items, or use `set.add()` directly if the order does not need to be preserved.
