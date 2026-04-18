@@ -679,16 +679,16 @@ def locate_rust_fuzz_item(funcname: str, item_list: list[str]) -> str:
 def detect_language(directory) -> str:
     """Given a folder finds the likely programming language of the project"""
 
-    paths_to_avoid = [
+    paths_to_avoid = (
         "/src/aflplusplus",
         "/src/honggfuzz",
         "/src/libfuzzer",
         "/src/fuzztest",
-    ]
+    )
 
     language_counts: dict[str, int] = {}
     for dirpath, _, filenames in os.walk(directory):
-        if any([x for x in paths_to_avoid if dirpath.startswith(x)]):
+        if dirpath.startswith(paths_to_avoid):
             continue
         for filename in filenames:
             # pylint: disable-next=no-member

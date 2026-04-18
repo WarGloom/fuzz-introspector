@@ -3390,17 +3390,16 @@ def _scan_source_tree(
     interesting_source_files: set[str] = set()
 
     if language == "jvm":
-        source_extensions = [
-            ".java", ".scala", ".sc", ".groovy", ".kt", ".kts"
-        ]
+        source_extensions = (".java", ".scala", ".sc", ".groovy", ".kt",
+                             ".kts")
     elif language == "python":
-        source_extensions = [".py"]
+        source_extensions = (".py", )
     elif language == "rust":
-        source_extensions = [".rs"]
+        source_extensions = (".rs", )
     elif language == "go":
-        source_extensions = [".go", ".cgo"]
+        source_extensions = (".go", ".cgo")
     else:
-        source_extensions = [".cc", ".cpp", ".cxx", ".c++", ".c", ".h", ".hpp"]
+        source_extensions = (".cc", ".cpp", ".cxx", ".c++", ".c", ".h", ".hpp")
 
     to_avoid = [
         "fuzztest",
@@ -3420,15 +3419,13 @@ def _scan_source_tree(
     ]
 
     def is_interesting_source_file(path):
-        if not any(path.endswith(ext) for ext in source_extensions):
+        if not path.endswith(source_extensions):
             return False
         if _matches_any_pattern(path, compiled_exclude_patterns):
             return False
         if any(avoid in path for avoid in to_avoid):
             return False
-        if path.startswith("/src/source-code"):
-            return False
-        if path.startswith("/src/inspector/"):
+        if path.startswith(("/src/source-code", "/src/inspector/")):
             return False
         return True
 
