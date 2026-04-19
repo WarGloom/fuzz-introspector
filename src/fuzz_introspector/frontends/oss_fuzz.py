@@ -47,7 +47,12 @@ def capture_source_files_in_tree(directory_tree: str,
 
     for dirpath, _, filenames in os.walk(directory_tree):
         # Skip some non project directories
-        if any(exclude in dirpath for exclude in EXCLUDE_DIRECTORIES):
+        should_skip = False
+        for exclude in EXCLUDE_DIRECTORIES:
+            if exclude in dirpath:
+                should_skip = True
+                break
+        if should_skip:
             continue
 
         for filename in filenames:

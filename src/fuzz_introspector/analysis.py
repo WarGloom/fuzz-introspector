@@ -3390,17 +3390,16 @@ def _scan_source_tree(
     interesting_source_files: set[str] = set()
 
     if language == "jvm":
-        source_extensions = [
-            ".java", ".scala", ".sc", ".groovy", ".kt", ".kts"
-        ]
+        source_extensions = (".java", ".scala", ".sc", ".groovy", ".kt",
+                             ".kts")
     elif language == "python":
-        source_extensions = [".py"]
+        source_extensions = (".py", )
     elif language == "rust":
-        source_extensions = [".rs"]
+        source_extensions = (".rs", )
     elif language == "go":
-        source_extensions = [".go", ".cgo"]
+        source_extensions = (".go", ".cgo")
     else:
-        source_extensions = [".cc", ".cpp", ".cxx", ".c++", ".c", ".h", ".hpp"]
+        source_extensions = (".cc", ".cpp", ".cxx", ".c++", ".c", ".h", ".hpp")
 
     to_avoid = [
         "fuzztest",
@@ -3420,24 +3419,28 @@ def _scan_source_tree(
     ]
 
     def is_interesting_source_file(path):
-        if not any(path.endswith(ext) for ext in source_extensions):
+        if not path.endswith(source_extensions):
             return False
         if _matches_any_pattern(path, compiled_exclude_patterns):
             return False
-        if any(avoid in path for avoid in to_avoid):
-            return False
-        if path.startswith("/src/source-code"):
-            return False
-        if path.startswith("/src/inspector/"):
+        for avoid in to_avoid:
+            if avoid in path:
+                return False
+        if path.startswith(("/src/source-code", "/src/inspector/")):
             return False
         return True
 
+    def _should_keep_dir(d, current_root):
+        d_path = os.path.join(current_root, d)
+        if _matches_any_pattern(d_path, compiled_exclude_patterns):
+            return False
+        for avoid in to_avoid:
+            if avoid in d_path:
+                return False
+        return True
+
     for root, dirs, files in os.walk(scan_root):
-        dirs[:] = [
-            d for d in dirs if not _matches_any_pattern(
-                os.path.join(root, d), compiled_exclude_patterns) and not any(
-                    avoid in os.path.join(root, d) for avoid in to_avoid)
-        ]
+        dirs[:] = [d for d in dirs if _should_keep_dir(d, root)]
         for f in files:
             path = os.path.join(root, f)
             if not is_interesting_source_file(path):
@@ -3582,13 +3585,10 @@ def extract_tests_from_directories(
     def is_candidate_source(absolute_path):
         if _matches_any_pattern(absolute_path, compiled_exclude_patterns):
             return False
-        if any(avoid in absolute_path for avoid in to_avoid):
-            return False
-        if absolute_path.startswith("/out/"):
-            return False
-        if absolute_path.startswith("/src/inspector/"):
-            return False
-        if absolute_path.startswith("/usr/"):
+        for avoid in to_avoid:
+            if avoid in absolute_path:
+                return False
+        if absolute_path.startswith(("/out/", "/src/inspector/", "/usr/")):
             return False
         return True
 
@@ -3646,8 +3646,12 @@ def extract_tests_from_directories(
                 continue
 
             root = os.path.dirname(normalized_path)
-            if any(ins in root for ins in
-                   inspirations) and is_non_fuzz_harness(normalized_path):
+            is_inspiration = False
+            for ins in inspirations:
+                if ins in root:
+                    is_inspiration = True
+                    break
+            if is_inspiration and is_non_fuzz_harness(normalized_path):
                 all_test_files.add(normalized_path)
     else:
         # Traverse each seed directory once and apply both matching heuristics.
@@ -3666,7 +3670,12 @@ def extract_tests_from_directories(
                         file_count,
                     )
 
-                is_inspiration_root = any(ins in root for ins in inspirations)
+                is_inspiration_root = False
+                for ins in inspirations:
+                    if ins in root:
+                        is_inspiration_root = True
+                        break
+
                 for f in files:
                     if not f.endswith(file_extensions):
                         continue
@@ -3727,8 +3736,10 @@ def _extract_test_information_jvm():
             source_paths.add(root)
         if root.endswith("src/test/java"):
             test_paths.add(root)
-        if any(inspiration in root for inspiration in inspirations):
-            sample_paths.add(root)
+        for inspiration in inspirations:
+            if inspiration in root:
+                sample_paths.add(root)
+                break
 
     # Walk through all the packages under test paths and include the test files
     for test_path in test_paths:
@@ -3742,11 +3753,16 @@ def _extract_test_information_jvm():
     for source_path in source_paths:
         for root, _, files in os.walk(source_path):
             for file in files:
-                if file.endswith(source_code_extensions) and any(
-                        inspiration in file for inspiration in inspirations):
-                    path = os.path.relpath(os.path.join(root, file),
-                                           source_path)
-                    all_test_files.add(path)
+                if file.endswith(source_code_extensions):
+                    has_inspiration = False
+                    for inspiration in inspirations:
+                        if inspiration in file:
+                            has_inspiration = True
+                            break
+                    if has_inspiration:
+                        path = os.path.relpath(os.path.join(root, file),
+                                               source_path)
+                        all_test_files.add(path)
 
     # Walk through all the files under possible sample path and locate example sources
     for sample_path in sample_paths:
