@@ -290,7 +290,7 @@ class GoProject(Project[GoSourceCodeFile]):
             function.name: set()
             for function in functions
         }
-        function_names = set(function_uses.keys())
+        function_names = set(function_uses)
 
         for function in functions:
             for callsite_name, _ in function.base_callsites:

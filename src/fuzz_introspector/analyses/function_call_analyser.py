@@ -92,7 +92,7 @@ class ThirdPartyAPICoverageAnalyser(analysis.AnalysisInterface):
         """
         exist_list = []
         if func_name in target_func_list:
-            if func_name in callsites.keys():
+            if func_name in callsites:
                 func_list = callsites[func_name]
             else:
                 func_list = []
@@ -146,7 +146,7 @@ class ThirdPartyAPICoverageAnalyser(analysis.AnalysisInterface):
         reachable_func_list = []
 
         for function in function_list:
-            for func_name in function.callsite.keys():
+            for func_name in function.callsite:
                 reachable_func_list.extend(
                     self.add_callsite_record(
                         target_func_list,
@@ -189,7 +189,7 @@ class ThirdPartyAPICoverageAnalyser(analysis.AnalysisInterface):
             callsite_list.extend(
                 cfg_load.extract_all_callsites(
                     profile.fuzzer_callsite_calltree))
-            for key in profile.all_class_functions.keys():
+            for key in profile.all_class_functions:
                 function_list.append(profile.all_class_functions[key])
         (func_profile_list, called_func_dict,
          reachable_func_list) = (self.third_party_func_profile(
@@ -282,7 +282,7 @@ class ThirdPartyAPICoverageAnalyser(analysis.AnalysisInterface):
                 continue
 
             # Retrieve called location as a list for this function
-            if fd.function_name in called_func_dict.keys():
+            if fd.function_name in called_func_dict:
                 called_location_list = called_func_dict[fd.function_name]
                 if len(called_location_list) == 0:
                     called_location_list = [""]

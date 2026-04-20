@@ -172,7 +172,7 @@ class RuntimeCoverageAnalysis(analysis.AnalysisInterface):
         """
         logger.info("Extracting low cov high line funcs")
         functions_of_interest: List[str] = []
-        for funcname in merged_profile.runtime_coverage.covmap.keys():
+        for funcname in merged_profile.runtime_coverage.covmap:
             logger.debug("Going through %s", funcname)
 
             total_lines, hit_lines = merged_profile.runtime_coverage.get_hit_summary(

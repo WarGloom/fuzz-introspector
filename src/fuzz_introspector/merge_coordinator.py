@@ -151,7 +151,7 @@ class MergeCoordinator:
         from fuzz_introspector.analyses import all_analyses
 
         # Filter analyses that actually ran
-        analyses_in_results = set(self.analysis_results.keys())
+        analyses_in_results = set(self.analysis_results)
 
         canonical_order: List[str] = []
         for analysis_cls in all_analyses:

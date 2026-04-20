@@ -86,7 +86,7 @@ class FunctionProfile:
         try:
             self.callsite = self.load_func_callsites(elem["Callsites"])
             # Add missed function called for this function
-            for func_name in self.callsite.keys():
+            for func_name in self.callsite:
                 if func_name not in self.functions_called:
                     self.functions_called.append(func_name)
                 if func_name not in self.functions_reached:
@@ -163,7 +163,7 @@ class FunctionProfile:
     def load_func_callsites(self, yaml_callsites: Any) -> Dict[str, List[str]]:
         cs_loaded: Dict[str, List[str]] = {}
         for callsite in yaml_callsites:
-            if callsite["Dst"] not in cs_loaded.keys():
+            if callsite["Dst"] not in cs_loaded:
                 callsite_list = []
             else:
                 callsite_list = cs_loaded[callsite["Dst"]]

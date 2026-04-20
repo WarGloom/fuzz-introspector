@@ -1123,7 +1123,7 @@ class JvmProject(Project[JvmSourceCodeFile]):
             methods = source_code.get_all_methods()
             report["sources"].append({
                 "source_file": source_code.source_file,
-                "function_names": list(methods.keys()),
+                "function_names": list(methods),
             })
             project_methods.extend(methods.values())
 
@@ -1214,7 +1214,7 @@ class JvmProject(Project[JvmSourceCodeFile]):
             method.name: set()
             for method in methods
         }
-        method_names = set(method_uses.keys())
+        method_names = set(method_uses)
 
         for method in methods:
             for callsite_name, _ in method.base_callsites:

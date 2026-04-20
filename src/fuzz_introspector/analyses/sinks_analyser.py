@@ -363,7 +363,7 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         """
         linenumber = function.function_linenumber
 
-        if target_name and target_name in function.callsite.keys():
+        if target_name and target_name in function.callsite:
             try:
                 linenumber = int(
                     function.callsite[target_name][0].split(":")[1])
@@ -587,7 +587,7 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         html = ""
         count = 0
 
-        for parent_func in callpath_dict.keys():
+        for parent_func in callpath_dict:
             callpath_list = callpath_dict[parent_func]
 
             # Filter inaccessible and invalid callpaths and sort

@@ -103,7 +103,7 @@ def get_canonical_analysis_order(
         List of analysis names in canonical order
     """
     # Get all available analysis names from registry
-    available_analyses = list(analysis_registry.keys())
+    available_analyses = list(analysis_registry)
 
     # Filter to only requested analyses that exist in registry
     valid_requested = [
@@ -132,7 +132,7 @@ def validate_analysis_order(requested_analyses: List[str],
         if analysis not in analysis_registry:
             raise FuzzIntrospectorError(
                 f"Analysis '{analysis}' is not registered. "
-                f"Available analyses: {list(analysis_registry.keys())}")
+                f"Available analyses: {list(analysis_registry)}")
 
     # Validate that we can get canonical order
     try:
