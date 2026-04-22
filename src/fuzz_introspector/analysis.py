@@ -3419,13 +3419,17 @@ def _scan_source_tree(
         "/src/source-code/",
     ]
 
+    source_extensions_tuple = tuple(source_extensions)
+    to_avoid_tuple = tuple(to_avoid)
+
     def is_interesting_source_file(path):
-        if not any(path.endswith(ext) for ext in source_extensions):
+        if not path.endswith(source_extensions_tuple):
             return False
         if _matches_any_pattern(path, compiled_exclude_patterns):
             return False
-        if any(avoid in path for avoid in to_avoid):
-            return False
+        for avoid in to_avoid_tuple:
+            if avoid in path:
+                return False
         if path.startswith("/src/source-code"):
             return False
         if path.startswith("/src/inspector/"):
@@ -3433,11 +3437,17 @@ def _scan_source_tree(
         return True
 
     for root, dirs, files in os.walk(scan_root):
-        dirs[:] = [
-            d for d in dirs if not _matches_any_pattern(
-                os.path.join(root, d), compiled_exclude_patterns) and not any(
-                    avoid in os.path.join(root, d) for avoid in to_avoid)
-        ]
+
+        def _should_keep_dir(d):
+            full_path = os.path.join(root, d)
+            if _matches_any_pattern(full_path, compiled_exclude_patterns):
+                return False
+            for avoid in to_avoid_tuple:
+                if avoid in full_path:
+                    return False
+            return True
+
+        dirs[:] = [d for d in dirs if _should_keep_dir(d)]
         for f in files:
             path = os.path.join(root, f)
             if not is_interesting_source_file(path):
@@ -3524,6 +3534,7 @@ def extract_tests_from_directories(
     file_count = 0
 
     inspirations = ["sample", "test", "example"]
+    inspirations_tuple = tuple(inspirations)
 
     normalized_directories = set()
     for directory in directories:
@@ -3579,11 +3590,14 @@ def extract_tests_from_directories(
         "/src/inspector",
     ]
 
+    to_avoid_tuple = tuple(to_avoid)
+
     def is_candidate_source(absolute_path):
         if _matches_any_pattern(absolute_path, compiled_exclude_patterns):
             return False
-        if any(avoid in absolute_path for avoid in to_avoid):
-            return False
+        for avoid in to_avoid_tuple:
+            if avoid in absolute_path:
+                return False
         if absolute_path.startswith("/out/"):
             return False
         if absolute_path.startswith("/src/inspector/"):
@@ -3646,8 +3660,12 @@ def extract_tests_from_directories(
                 continue
 
             root = os.path.dirname(normalized_path)
-            if any(ins in root for ins in
-                   inspirations) and is_non_fuzz_harness(normalized_path):
+            has_inspiration = False
+            for ins in inspirations_tuple:
+                if ins in root:
+                    has_inspiration = True
+                    break
+            if has_inspiration and is_non_fuzz_harness(normalized_path):
                 all_test_files.add(normalized_path)
     else:
         # Traverse each seed directory once and apply both matching heuristics.
@@ -3666,7 +3684,11 @@ def extract_tests_from_directories(
                         file_count,
                     )
 
-                is_inspiration_root = any(ins in root for ins in inspirations)
+                is_inspiration_root = False
+                for ins in inspirations_tuple:
+                    if ins in root:
+                        is_inspiration_root = True
+                        break
                 for f in files:
                     if not f.endswith(file_extensions):
                         continue
@@ -3712,6 +3734,7 @@ def _extract_test_information_jvm():
     source_code_extensions = (".java", ".scala", ".sc", ".kt", ".kts",
                               ".groovy")
     inspirations = ["sample", "example", "documentation", "demo"]
+    inspirations_tuple = tuple(inspirations)
 
     # Java project source code is meant to exist in the $SRC directory
     base_dir = os.path.abspath(os.environ.get("SRC", "/src"))
@@ -3727,7 +3750,12 @@ def _extract_test_information_jvm():
             source_paths.add(root)
         if root.endswith("src/test/java"):
             test_paths.add(root)
-        if any(inspiration in root for inspiration in inspirations):
+        has_ins = False
+        for inspiration in inspirations_tuple:
+            if inspiration in root:
+                has_ins = True
+                break
+        if has_ins:
             sample_paths.add(root)
 
     # Walk through all the packages under test paths and include the test files
@@ -3742,11 +3770,16 @@ def _extract_test_information_jvm():
     for source_path in source_paths:
         for root, _, files in os.walk(source_path):
             for file in files:
-                if file.endswith(source_code_extensions) and any(
-                        inspiration in file for inspiration in inspirations):
-                    path = os.path.relpath(os.path.join(root, file),
-                                           source_path)
-                    all_test_files.add(path)
+                if file.endswith(source_code_extensions):
+                    has_ins = False
+                    for inspiration in inspirations_tuple:
+                        if inspiration in file:
+                            has_ins = True
+                            break
+                    if has_ins:
+                        path = os.path.relpath(os.path.join(root, file),
+                                               source_path)
+                        all_test_files.add(path)
 
     # Walk through all the files under possible sample path and locate example sources
     for sample_path in sample_paths:
