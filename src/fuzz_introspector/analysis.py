@@ -3389,6 +3389,8 @@ def _scan_source_tree(
 ) -> set[str]:
     interesting_source_files: set[str] = set()
 
+    source_extensions: tuple[str, ...]
+
     if language == "jvm":
         source_extensions = (".java", ".scala", ".sc", ".groovy", ".kt",
                              ".kts")
