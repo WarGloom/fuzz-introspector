@@ -102,8 +102,7 @@ class HTMLConclusion:
 
 def html_table_add_row(elems: List[Any]) -> str:
     html_str = "<tr>\n"
-    for elem in elems:
-        html_str += f"<td>{elem}</td>\n"
+    html_str += "".join(f"<td>{elem}</td>\n" for elem in elems)
     html_str += "</tr>\n"
     return html_str
 

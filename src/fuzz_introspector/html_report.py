@@ -1856,40 +1856,39 @@ def _create_section_optional_analyses_impl(
 
 def get_body_script_tags(all_functions_json, fuzzer_table_data) -> str:
     """Add relevant <script> tag at the end of the body."""
+    html_script_parts = []
     if os.environ.get("FI_INLINE_JS", ""):
-        html_script_tags = ""
         styling_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    "styling")
 
         for jsfile in styling.MAIN_JS_FILES:
             with open(os.path.join(styling_dir, jsfile), "r") as f:
                 js_content = f.read()
-            html_script_tags += "<script>\n"
-            html_script_tags += js_content
-            html_script_tags += "</script>\n"
+            html_script_parts.append("<script>\n")
+            html_script_parts.append(js_content)
+            html_script_parts.append("</script>\n")
 
-        html_script_tags += "<script>\n"
-        html_script_tags += "var all_functions_table_data = %s" % (
-            json.dumps(all_functions_json))
-        html_script_tags += "</script>\n"
+        html_script_parts.append("<script>\n")
+        html_script_parts.append("var all_functions_table_data = ")
+        html_script_parts.append(json.dumps(all_functions_json))
+        html_script_parts.append("</script>\n")
 
-        html_script_tags += "<script>\n"
-        html_script_tags += "var fuzzer_table_data = %s" % (
-            json.dumps(fuzzer_table_data))
-        html_script_tags += "</script>\n"
+        html_script_parts.append("<script>\n")
+        html_script_parts.append("var fuzzer_table_data = ")
+        html_script_parts.append(json.dumps(fuzzer_table_data))
+        html_script_parts.append("</script>\n")
 
     else:
-        html_script_tags = ""
         js_files = list(styling.MAIN_JS_FILES)
         js_files.append(constants.ALL_FUNCTION_JS)
         js_files.append(constants.OPTIMAL_TARGETS_ALL_FUNCTIONS)
         js_files.append(constants.FUZZER_TABLE_JS)
         js_files.extend(styling.JAVASCRIPT_REMOTE_SCRIPTS)
         for js_file in js_files:
-            html_script_tags += (
+            html_script_parts.append(
                 f'<script type="text/javascript" src="{js_file}"></script>')
 
-    return html_script_tags
+    return "".join(html_script_parts)
 
 
 def _line_identity_name_candidates(report_row: Dict[str, Any]) -> List[str]:
