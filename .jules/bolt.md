@@ -10,3 +10,7 @@
 ## 2025-03-05 - Avoid list re-creation for O(1) membership tests
 **Learning:** Using an inline list `[...]` for membership checking (`in`) forces the Python interpreter to recreate the list object on every single execution, giving an O(N) lookup. Using an inline set `{...}` instead tells the compiler to pre-allocate a `frozenset` constant, saving list recreation and executing in O(1) time. We measured this to be 3-4x faster for a 5-element check (1.04s vs 0.27s over 10M iterations).
 **Action:** Always prefer inline sets `{...}` over inline lists `[...]` for membership (`in`) checks.
+
+## 2025-03-05 - String Concatenation Optimization in HTML Report Generation
+**Learning:** In Python, building a list of strings and joining them with `"".join()` is significantly more efficient than repeated concatenation with the `+=` operator inside loops or sequential block additions, especially when handling large content like scripts or JSON dumps in HTML report generation. The `+=` operator creates severe O(N^2) memory reallocation bottlenecks as strings are immutable.
+**Action:** Always prefer `.append()` into a list and then joining via `"".join()` over repeated `+=` string concatenations when generating large blocks of HTML, JavaScript, or JSON.
