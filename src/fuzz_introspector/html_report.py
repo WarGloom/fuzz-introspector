@@ -1869,13 +1869,13 @@ def get_body_script_tags(all_functions_json, fuzzer_table_data) -> str:
             html_script_tags_list.append("</script>\n")
 
         html_script_tags_list.append("<script>\n")
-        html_script_tags_list.append("var all_functions_table_data = %s" % (
-            json.dumps(all_functions_json)))
+        html_script_tags_list.append("var all_functions_table_data = %s" %
+                                     (json.dumps(all_functions_json)))
         html_script_tags_list.append("</script>\n")
 
         html_script_tags_list.append("<script>\n")
-        html_script_tags_list.append("var fuzzer_table_data = %s" % (
-            json.dumps(fuzzer_table_data)))
+        html_script_tags_list.append("var fuzzer_table_data = %s" %
+                                     (json.dumps(fuzzer_table_data)))
         html_script_tags_list.append("</script>\n")
 
     else:
