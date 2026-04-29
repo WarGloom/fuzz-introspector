@@ -1872,13 +1872,13 @@ def get_body_script_tags(all_functions_json, fuzzer_table_data) -> str:
             script_tags_list.append("</script>\n")
 
         script_tags_list.append("<script>\n")
-        script_tags_list.append("var all_functions_table_data = %s" % (
-            json.dumps(all_functions_json)))
+        script_tags_list.append("var all_functions_table_data = %s" %
+                                (json.dumps(all_functions_json)))
         script_tags_list.append("</script>\n")
 
         script_tags_list.append("<script>\n")
-        script_tags_list.append("var fuzzer_table_data = %s" % (
-            json.dumps(fuzzer_table_data)))
+        script_tags_list.append("var fuzzer_table_data = %s" %
+                                (json.dumps(fuzzer_table_data)))
         script_tags_list.append("</script>\n")
 
     else:
