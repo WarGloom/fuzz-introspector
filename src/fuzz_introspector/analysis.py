@@ -3402,6 +3402,8 @@ def _scan_source_tree(
     else:
         source_extensions = [".cc", ".cpp", ".cxx", ".c++", ".c", ".h", ".hpp"]
 
+    source_extensions_tuple = tuple(source_extensions)
+
     to_avoid = [
         "fuzztest",
         "aflplusplus",
@@ -3420,12 +3422,13 @@ def _scan_source_tree(
     ]
 
     def is_interesting_source_file(path):
-        if not any(path.endswith(ext) for ext in source_extensions):
+        if not path.endswith(source_extensions_tuple):
             return False
         if _matches_any_pattern(path, compiled_exclude_patterns):
             return False
-        if any(avoid in path for avoid in to_avoid):
-            return False
+        for avoid in to_avoid:
+            if avoid in path:
+                return False
         if path.startswith("/src/source-code"):
             return False
         if path.startswith("/src/inspector/"):
@@ -3433,11 +3436,20 @@ def _scan_source_tree(
         return True
 
     for root, dirs, files in os.walk(scan_root):
-        dirs[:] = [
-            d for d in dirs if not _matches_any_pattern(
-                os.path.join(root, d), compiled_exclude_patterns) and not any(
-                    avoid in os.path.join(root, d) for avoid in to_avoid)
-        ]
+        new_dirs = []
+        for d in dirs:
+            dir_path = os.path.join(root, d)
+            if _matches_any_pattern(dir_path, compiled_exclude_patterns):
+                continue
+            avoided = False
+            for avoid in to_avoid:
+                if avoid in dir_path:
+                    avoided = True
+                    break
+            if not avoided:
+                new_dirs.append(d)
+        dirs[:] = new_dirs
+
         for f in files:
             path = os.path.join(root, f)
             if not is_interesting_source_file(path):
