@@ -10,3 +10,6 @@
 ## 2025-03-05 - Avoid list re-creation for O(1) membership tests
 **Learning:** Using an inline list `[...]` for membership checking (`in`) forces the Python interpreter to recreate the list object on every single execution, giving an O(N) lookup. Using an inline set `{...}` instead tells the compiler to pre-allocate a `frozenset` constant, saving list recreation and executing in O(1) time. We measured this to be 3-4x faster for a 5-element check (1.04s vs 0.27s over 10M iterations).
 **Action:** Always prefer inline sets `{...}` over inline lists `[...]` for membership (`in`) checks.
+## 2025-03-05 - Avoid list comprehensions with `any()` inside hot file loops
+**Learning:** In highly-executed paths like `os.walk` or filtering large lists of source paths, using inline generator expressions like `any(avoid in path for avoid in to_avoid)` causes noticeable performance overhead due to Python creating and destroying the generator object millions of times. An explicit `for/break` loop runs significantly faster since no intermediate object is allocated. Also, `str.endswith` supports passing a `tuple` natively, dropping the need for a comprehension altogether.
+**Action:** Replace `any()` comprehensions over constant string sequences with native tuple methods (`path.endswith(tuple)`) or explicit `for` loops in performance-critical file-scanning functions.

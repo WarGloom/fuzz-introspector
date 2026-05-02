@@ -3402,7 +3402,7 @@ def _scan_source_tree(
     else:
         source_extensions = [".cc", ".cpp", ".cxx", ".c++", ".c", ".h", ".hpp"]
 
-    to_avoid = [
+    to_avoid_tuple = (
         "fuzztest",
         "aflplusplus",
         "libfuzzer",
@@ -3417,15 +3417,17 @@ def _scan_source_tree(
         "/src/inspector/",
         "/src/.venv",
         "/src/source-code/",
-    ]
+    )
+    source_extensions_tuple = tuple(source_extensions)
 
     def is_interesting_source_file(path):
-        if not any(path.endswith(ext) for ext in source_extensions):
+        if not path.endswith(source_extensions_tuple):
             return False
         if _matches_any_pattern(path, compiled_exclude_patterns):
             return False
-        if any(avoid in path for avoid in to_avoid):
-            return False
+        for avoid in to_avoid_tuple:
+            if avoid in path:
+                return False
         if path.startswith("/src/source-code"):
             return False
         if path.startswith("/src/inspector/"):
@@ -3433,11 +3435,22 @@ def _scan_source_tree(
         return True
 
     for root, dirs, files in os.walk(scan_root):
-        dirs[:] = [
-            d for d in dirs if not _matches_any_pattern(
-                os.path.join(root, d), compiled_exclude_patterns) and not any(
-                    avoid in os.path.join(root, d) for avoid in to_avoid)
-        ]
+        new_dirs = []
+        for d in dirs:
+            dir_path = os.path.join(root, d)
+            if _matches_any_pattern(dir_path, compiled_exclude_patterns):
+                continue
+
+            avoid_dir = False
+            for avoid in to_avoid_tuple:
+                if avoid in dir_path:
+                    avoid_dir = True
+                    break
+
+            if not avoid_dir:
+                new_dirs.append(d)
+        dirs[:] = new_dirs
+
         for f in files:
             path = os.path.join(root, f)
             if not is_interesting_source_file(path):
@@ -3563,7 +3576,7 @@ def extract_tests_from_directories(
         except re.error as err:
             logger.warning("Invalid exclude pattern %s: %s", pattern, err)
 
-    to_avoid = [
+    to_avoid_tuple = (
         "fuzztest",
         "aflplusplus",
         "libfuzzer",
@@ -3577,13 +3590,14 @@ def extract_tests_from_directories(
         "/usr/",
         "/tmp/",
         "/src/inspector",
-    ]
+    )
 
     def is_candidate_source(absolute_path):
         if _matches_any_pattern(absolute_path, compiled_exclude_patterns):
             return False
-        if any(avoid in absolute_path for avoid in to_avoid):
-            return False
+        for avoid in to_avoid_tuple:
+            if avoid in absolute_path:
+                return False
         if absolute_path.startswith("/out/"):
             return False
         if absolute_path.startswith("/src/inspector/"):
