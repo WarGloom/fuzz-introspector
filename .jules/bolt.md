@@ -10,3 +10,6 @@
 ## 2025-03-05 - Avoid list re-creation for O(1) membership tests
 **Learning:** Using an inline list `[...]` for membership checking (`in`) forces the Python interpreter to recreate the list object on every single execution, giving an O(N) lookup. Using an inline set `{...}` instead tells the compiler to pre-allocate a `frozenset` constant, saving list recreation and executing in O(1) time. We measured this to be 3-4x faster for a 5-element check (1.04s vs 0.27s over 10M iterations).
 **Action:** Always prefer inline sets `{...}` over inline lists `[...]` for membership (`in`) checks.
+## 2024-05-03 - [Sinks Analyser $O(N^2)$ Membership Check]
+**Learning:** In `src/fuzz_introspector/analyses/sinks_analyser.py`, the `_retrieve_data_list` function had a severe $O(N^2)$ performance bottleneck where it checked `key not in function_name_list` inside loops over potentially tens of thousands of functions across combined fuzzer profiles.
+**Action:** When iterating over massive collections, dynamically building lists to check for duplicate entries creates $O(N^2)$ CPU bottlenecks. Initialize and use `set()` objects (e.g., `seen_functions: set[str] = set()`) for membership tracking within these loops to ensure $O(1)$ lookups and maintain $O(N)$ overall complexity.
