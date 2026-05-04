@@ -97,25 +97,25 @@ def add_func_to_reached_and_clone(
     # We do not recompute total_cyclomatic_complexity since it is a static
     # property precomputed beforehand.
 
-    # ⚡ Bolt Optimization:
-    # Previously, this used a nested loop over `newly_reached` and did an O(N)
-    # lookup inside `f_profile.functions_reached` for every profile, creating
-    # an O(V x N x R) bottleneck. We now pre-compute a dictionary and set of
-    # the newly reached functions, allowing us to use Python's C-accelerated
-    # set intersection to find overlapping functions in O(R) time.
-    nr_dict = {
-        nr.function_name: nr.cyclomatic_complexity
-        for nr in newly_reached
-    }
-    nr_keys = set(nr_dict.keys())
+    # Pre-compute set and lookup table to convert O(N x M) nested loop
+    # into O(N) iteration over all_functions with O(1) set intersections.
+    if newly_reached:
+        nr_name_to_cc = {
+            nr.function_name: nr.cyclomatic_complexity
+            for nr in newly_reached
+        }
+        nr_names_set = set(nr_name_to_cc.keys())
 
-    for f_profile in all_functions.values():
-        common = nr_keys.intersection(f_profile.functions_reached)
-        if f_profile.function_name in nr_keys:
-            common.add(f_profile.function_name)
+        for f_profile in all_functions.values():
+            intersect = nr_names_set.intersection(f_profile.functions_reached)
+            sub_cc = sum(nr_name_to_cc[name] for name in intersect)
 
-        sub_cc = sum(nr_dict[name] for name in common)
-        f_profile.new_unreached_complexity -= sub_cc
+            # Check if the function itself is in newly_reached, but wasn't in functions_reached
+            if f_profile.function_name in nr_names_set and f_profile.function_name not in intersect:
+                sub_cc += nr_name_to_cc[f_profile.function_name]
+
+            if sub_cc > 0:
+                f_profile.new_unreached_complexity -= sub_cc
 
     if all_functions[func_to_add.function_name].hitcount == 0:
         logger.info("Error. Hitcount did not get set for some reason. Exiting")
