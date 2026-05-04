@@ -2,17 +2,38 @@ from typing import List, Dict, Any, Optional
 
 import logging
 import os
+import re
 import orjson
-
-logger = logging.getLogger(__name__)
 
 from .models import (BranchBlocker, BuildStatus, DBTimestamp, DebugStatus,
                      Function, Project, ProjectTimestamp)
 
-DB_DIR = os.path.join(os.path.dirname(__file__), '../static/assets/db')
+logger = logging.getLogger(__name__)
 
-all_functions_file = os.path.join(DB_DIR, 'all-functions-db-{PROJ}.json')
-all_constructors_file = os.path.join(DB_DIR, 'all-constructors-db-{PROJ}.json')
+DB_DIR = os.path.join(os.path.dirname(__file__), '../static/assets/db')
+DB_ROOT = os.path.abspath(DB_DIR)
+PROJECT_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]*$')
+
+
+def _safe_project_name(project: str) -> str:
+    if not isinstance(project, str):
+        raise ValueError('Project name must be a string')
+
+    project_name = os.path.basename(project)
+    if (project_name != project or project_name in {'.', '..'}
+            or not PROJECT_NAME_RE.fullmatch(project_name)):
+        raise ValueError(f'Invalid project name: {project!r}')
+
+    return project_name
+
+
+def _db_path(*parts: str) -> str:
+    path = os.path.abspath(os.path.join(DB_ROOT, *parts))
+    if os.path.commonpath([DB_ROOT, path]) != DB_ROOT:
+        raise ValueError(f'Path escapes DB directory: {path}')
+
+    return path
+
 
 PROJECT_TIMESTAMPS: List[ProjectTimestamp] = []
 
@@ -61,8 +82,13 @@ def get_build_status() -> List[BuildStatus]:
 
 
 def get_project_debug_report(project: str) -> Optional[DebugStatus]:
-    debug_report_path = os.path.join(
-        DB_DIR, f"db-projects/{project}/debug_report.json")
+    try:
+        safe_project = _safe_project_name(project)
+        debug_report_path = _db_path('db-projects', safe_project,
+                                     'debug_report.json')
+    except ValueError as err:
+        logger.warning("Invalid debug report project %r: %s", project, err)
+        return None
     logger.info("Getting path: %s", debug_report_path)
     if not os.path.isfile(debug_report_path):
         logger.warning("Debug report not found: %s", debug_report_path)
@@ -82,8 +108,13 @@ def get_project_debug_report(project: str) -> Optional[DebugStatus]:
 
 
 def get_project_branch_blockers(project: str) -> List[BranchBlocker]:
-    branch_blockers_path = os.path.join(
-        DB_DIR, f"db-projects/{project}/branch_blockers.json")
+    try:
+        safe_project = _safe_project_name(project)
+        branch_blockers_path = _db_path('db-projects', safe_project,
+                                        'branch_blockers.json')
+    except ValueError as err:
+        logger.warning("Invalid branch blocker project %r: %s", project, err)
+        return []
     logger.info("Getting path: %s", branch_blockers_path)
     if not os.path.isfile(branch_blockers_path):
         logger.warning("Branch blockers not found: %s", branch_blockers_path)
@@ -108,10 +139,16 @@ def get_project_branch_blockers(project: str) -> List[BranchBlocker]:
 
 def retrieve_functions(proj: str, is_constructor: bool) -> List[Function]:
     """Retrieve functions or constructors"""
+    try:
+        safe_project = _safe_project_name(proj)
+    except ValueError as err:
+        logger.warning("Invalid function database project %r: %s", proj, err)
+        return []
+
     if is_constructor:
-        json_path = all_constructors_file.replace('{PROJ}', proj)
+        json_path = _db_path(f'all-constructors-db-{safe_project}.json')
     else:
-        json_path = all_functions_file.replace('{PROJ}', proj)
+        json_path = _db_path(f'all-functions-db-{safe_project}.json')
 
     if json_path in JSON_TO_FUNCTION_CACHE:
         return JSON_TO_FUNCTION_CACHE[json_path]
