@@ -7,8 +7,6 @@ tmp
 *.err
 *.profile
 *fuzz_report.html
-.serena
-.claude
 
 __pycache__/
 *.py[cod]
@@ -18,47 +16,3 @@ __pycache__/
 tests/java/.coverage
 tests/java/result/
 tests/tree-sitter-frontend/
-.pytest_cache/
-fuzzerLogFile-*
-
-.claude/settings.local.json
-.agents/
-.work*
-AGENTS.md
-AGENTS_QUICKREF.md
-CLAUDE.md
-CODEX.md
-plan.md
-docs/perf/debug_info_remediation_plan.md
-docs/perf/p2_2_process_pool_plan.md
-benchmarks/results/
-tools/native_llvm_cov_loader_rust/target/
-tools/native_yaml_loader_rust/target/
-tools/native_llvm_cov_loader_go/native_llvm_cov_loader_go
-tools/native_yaml_loader_go/native_yaml_loader_go
-tools/native_llvm_cov_loader_cpp/native_llvm_cov_loader_cpp
-tools/native_yaml_loader_cpp/native_yaml_loader_cpp
-tools/native_debug_correlator_rust/target/
-tools/native_analysis_plugins_rust/target/
-tools/native_reachability_rust/target/
-tools/native_debug_correlator_go/native_debug_correlator_go
-tools/native_overlay_backend_go/native_overlay_backend_go
-tools/native_overlay_backend_rust/target/
-tools/native_*_rust/target/
-tools/native_*_go/native_*_go
-.mypy_cache/
-
-# Fuzz-introspector report output (generated at runtime)
-calltree_view_*.html
-analysis_*.js
-summary.json
-branch-blockers.json
-fuzz-introspector-engine-input.json
-full_type_defs.json
-
-# CI tooling virtualenvs
-.ci-*/
-
-
-.serena/cache/
-.serena/memories/

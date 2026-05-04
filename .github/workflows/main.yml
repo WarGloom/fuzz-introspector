@@ -14,15 +14,15 @@ jobs:
         with:
           python-version: "3.10"
       - name: flake8 Lint post process
-        uses: py-actions/flake8@v2
+        uses: py-actions/flake8@84ec6726560b6d5bd68f2a5bed83d62b52bb50ba # v2
         with:
-          ignore: "E125,E126,E203,E251,W503,W504,W605"
+          ignore: "E125,W503,W504,W605"
           max-line-length: "100"
           path: "src/"
       - name: flake8 Lint python frontend
-        uses: py-actions/flake8@v2
+        uses: py-actions/flake8@84ec6726560b6d5bd68f2a5bed83d62b52bb50ba # v2
         with:
-          ignore: "E125,E126,E203,E251,W503,W504,W605"
+          ignore: "E125,W503,W504,W605"
           max-line-length: "100"
           path: "frontends/python/"
       - name: Install yapf
@@ -35,9 +35,7 @@ jobs:
           yapf -d -r ./tools/auto-fuzz
           yapf -d -r ./tools/web-fuzzing-introspection/app/webapp/
           yapf -d ./tools/web-fuzzing-introspection/app/*.py
-          yapf -d -r ./tools/web-fuzzing-introspection/app/static/assets/db \
-            -e tools/web-fuzzing-introspection/app/static/assets/db/oss-fuzz-clone \
-            -e tools/web-fuzzing-introspection/app/static/assets/db/db-projects
+          yapf -d -r ./tools/web-fuzzing-introspection/app/static/assets/db
       - name: pylint
         run: |
           cd src && pylint --recursive=y fuzz_introspector main.py || true

@@ -18,18 +18,18 @@ from fuzz_introspector.frontends import oss_fuzz  # noqa: E402
 
 def test_simple_sample1():
     project, _ = oss_fuzz.analyse_folder(
-        language="c",
-        directory="src/test/data/source-code/c/simple-sample-1/",
-        entrypoint="LLVMFuzzerTestOneInput",
-        dump_output=False,
+        language='c',
+        directory='src/test/data/source-code/c/simple-sample-1/',
+        entrypoint='LLVMFuzzerTestOneInput',
     )
 
     functions_reached = project.get_reachable_functions(
-        source_code=None, function="LLVMFuzzerTestOneInput", visited_functions=set()
-    )
+        source_code=None,
+        function='LLVMFuzzerTestOneInput',
+        visited_functions=set())
 
-    assert "target3" in functions_reached
-    assert "unreached_target3" not in functions_reached
+    assert 'target3' in functions_reached
+    assert 'unreached_target3' not in functions_reached
 
     # Project check
     assert len(project.get_source_codes_with_harnesses()) == 1

@@ -14,10 +14,8 @@
 """Helper for creating the necessary .json files used by the webapp."""
 import io
 import os
-import sys
 import argparse
 import json
-import hashlib
 import orjson
 import shutil
 import logging
@@ -35,13 +33,6 @@ from typing import List, Any, Optional, Dict, Tuple, Set
 
 import constants
 import oss_fuzz
-
-REPO_ROOT = Path(__file__).resolve().parents[6]
-SRC_ROOT = REPO_ROOT / 'src'
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
-
-from fuzz_introspector import code_coverage, utils
 
 DB_JSON_DB_TIMESTAMP = 'db-timestamps.json'
 DB_JSON_ALL_PROJECT_TIMESTAMP = 'all-project-timestamps.json'
@@ -388,284 +379,6 @@ def prepare_code_coverage_data(
     return code_coverage_data_dict
 
 
-def _normalize_local_report_specs(
-        local_report_specs: List[str]) -> Dict[str, str]:
-    normalized_specs: Dict[str, str] = {}
-    for raw_spec in local_report_specs:
-        if '=' in raw_spec:
-            project_name, report_dir = raw_spec.split('=', 1)
-        else:
-            report_dir = raw_spec
-            project_name = os.path.basename(os.path.normpath(report_dir))
-
-        project_name = project_name.strip()
-        report_dir = os.path.abspath(os.path.expanduser(report_dir.strip()))
-
-        if not project_name:
-            raise ValueError(f'Invalid local report spec: {raw_spec}')
-        if not os.path.isdir(report_dir):
-            raise ValueError(
-                f'Local report directory does not exist: {report_dir}')
-        if project_name in normalized_specs:
-            raise ValueError(f'Duplicate local project name: {project_name}')
-
-        normalized_specs[project_name] = report_dir
-    return normalized_specs
-
-
-def _build_function_key(func: Dict[str, Any]) -> str:
-    raw_name = func.get('raw-function-name', 'N/A')
-    filename = os.path.normpath(func.get('Functions filename', 'N/A'))
-    src_begin = func.get('source_line_begin', 'N/A')
-    return f"{raw_name}|{filename}|{src_begin}"
-
-
-def _build_line_snapshot_id(prefix: str, source_hint: str) -> str:
-    digest = hashlib.sha1(source_hint.encode('utf-8')).hexdigest()[:12]
-    return f"{prefix}-{digest}"
-
-
-def _line_identity_root(output_directory: str, project_name: str) -> str:
-    return os.path.join(output_directory, 'db-projects', project_name,
-                        'line-identities')
-
-
-def _ensure_parent_dir(file_path: str) -> None:
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-
-
-def _write_json(file_path: str, payload: Any) -> None:
-    _ensure_parent_dir(file_path)
-    with open(file_path, 'w') as f:
-        json.dump(payload, f)
-
-
-def _project_commit_sha() -> str:
-    for env_name in ('CI_COMMIT_SHA', 'GIT_COMMIT', 'COMMIT_SHA'):
-        value = os.getenv(env_name, '').strip()
-        if value:
-            return value
-    return ''
-
-
-def _project_pipeline_id() -> str:
-    for env_name in ('CI_PIPELINE_ID', 'PIPELINE_ID', 'BUILD_ID'):
-        value = os.getenv(env_name, '').strip()
-        if value:
-            return value
-    return ''
-
-
-def _line_identity_function_name_candidates(func: Dict[str, Any]) -> List[str]:
-    candidates: List[str] = []
-    for raw_name in (
-            func.get('Func name', ''),
-            func.get('function_signature', ''),
-            utils.demangle_cpp_func(func.get('raw-function-name', '')),
-            utils.demangle_rust_func(func.get('raw-function-name', '')),
-    ):
-        if not isinstance(raw_name, str):
-            continue
-        candidate = raw_name.strip()
-        if not candidate:
-            continue
-        if candidate not in candidates:
-            candidates.append(candidate)
-    return candidates
-
-
-def _match_coverage_lines_for_function(
-        func: Dict[str, Any], coverage_profile: code_coverage.CoverageProfile
-) -> List[Tuple[int, int]]:
-    for candidate in _line_identity_function_name_candidates(func):
-        if candidate in coverage_profile.covmap:
-            return list(coverage_profile.covmap[candidate])
-    return []
-
-
-def _extract_function_executable_line_records(
-    all_function_list: List[Dict[str, Any]],
-    coverage_root: str,
-    introspector_report_id: str,
-) -> Tuple[List[Dict[str, Any]], Dict[str, List[Tuple[int, int]]]]:
-    try:
-        coverage_profile = code_coverage.load_llvm_coverage(coverage_root)
-    except Exception as exc:
-        logger.warning('Could not load merged llvm coverage from %s: %s',
-                       coverage_root, exc)
-        return [], {}
-
-    executable_line_map: Dict[str, List[Tuple[int, int]]] = {}
-    executable_line_records: List[Dict[str, Any]] = []
-
-    for func in all_function_list:
-        function_key = _build_function_key(func)
-        filename = os.path.normpath(func.get('Functions filename', 'N/A'))
-        raw_name = func.get('raw-function-name', 'N/A')
-        matched_lines = _match_coverage_lines_for_function(
-            func, coverage_profile)
-        unique_lines = sorted({int(line_no) for line_no, _ in matched_lines})
-        executable_line_map[function_key] = [
-            (line_no, hit_count) for line_no, hit_count in matched_lines
-        ]
-        for line_no in unique_lines:
-            executable_line_records.append({
-                'function_key':
-                function_key,
-                'raw_function_name':
-                raw_name,
-                'filename':
-                filename,
-                'line_number':
-                line_no,
-                'introspector_report_id':
-                introspector_report_id,
-            })
-
-    return executable_line_records, executable_line_map
-
-
-def _extract_per_fuzzer_covered_line_records(
-    fuzzer_names: List[str],
-    coverage_root: str,
-    coverage_snapshot_id: str,
-    all_function_list: List[Dict[str, Any]],
-) -> Dict[str, List[Dict[str, Any]]]:
-    covered_line_records: Dict[str, List[Dict[str, Any]]] = {}
-    pipeline_id = _project_pipeline_id()
-    commit_sha = _project_commit_sha()
-    function_by_name = {}
-    for func in all_function_list:
-        for candidate in _line_identity_function_name_candidates(func):
-            function_by_name[candidate] = os.path.normpath(
-                func.get('Functions filename', 'N/A'))
-
-    for fuzzer_name in fuzzer_names:
-        try:
-            coverage_profile = code_coverage.load_llvm_coverage(
-                coverage_root, target_name=fuzzer_name)
-        except Exception as exc:
-            logger.warning('Could not load llvm coverage for %s from %s: %s',
-                           fuzzer_name, coverage_root, exc)
-            covered_line_records[fuzzer_name] = []
-            continue
-
-        dedup: Dict[Tuple[str, int], Dict[str, Any]] = {}
-        for func_name, line_entries in coverage_profile.covmap.items():
-            filename = function_by_name.get(func_name, '')
-            for line_no, hit_count in line_entries:
-                if int(hit_count) <= 0:
-                    continue
-                dedup_key = (filename, int(line_no))
-                previous = dedup.get(dedup_key)
-                dedup[dedup_key] = {
-                    'fuzzer_name':
-                    fuzzer_name,
-                    'filename':
-                    filename,
-                    'line_number':
-                    int(line_no),
-                    'hit_count':
-                    max(int(hit_count), previous['hit_count'])
-                    if previous else int(hit_count),
-                    'coverage_snapshot_id':
-                    coverage_snapshot_id,
-                    'pipeline_id':
-                    pipeline_id,
-                    'commit_sha':
-                    commit_sha,
-                }
-        covered_line_records[fuzzer_name] = list(dedup.values())
-
-    return covered_line_records
-
-
-def _derive_reachable_line_records(
-    all_function_list: List[Dict[str, Any]],
-    executable_line_map: Dict[str, List[Tuple[int, int]]],
-    introspector_report_id: str,
-) -> Dict[str, List[Dict[str, Any]]]:
-    reachable_line_records: Dict[str, List[Dict[str, Any]]] = {}
-    for func in all_function_list:
-        function_key = _build_function_key(func)
-        filename = os.path.normpath(func.get('Functions filename', 'N/A'))
-        for fuzzer_name in func.get('Reached by Fuzzers', []):
-            reachable_line_records.setdefault(fuzzer_name, [])
-            for line_no, _hit_count in executable_line_map.get(
-                    function_key, []):
-                reachable_line_records[fuzzer_name].append({
-                    'fuzzer_name':
-                    fuzzer_name,
-                    'function_key':
-                    function_key,
-                    'filename':
-                    filename,
-                    'line_number':
-                    int(line_no),
-                    'introspector_report_id':
-                    introspector_report_id,
-                })
-
-    for fuzzer_name, records in reachable_line_records.items():
-        dedup = {}
-        for record in records:
-            dedup[(record['function_key'], record['filename'],
-                   record['line_number'])] = record
-        reachable_line_records[fuzzer_name] = list(dedup.values())
-    return reachable_line_records
-
-
-def _save_line_identity_bundle(
-    output_directory: str,
-    project_name: str,
-    introspector_report_id: str,
-    coverage_snapshot_id: str,
-    executable_line_records: List[Dict[str, Any]],
-    covered_line_records: Dict[str, List[Dict[str, Any]]],
-    reachable_line_records: Dict[str, List[Dict[str, Any]]],
-) -> None:
-    base_dir = _line_identity_root(output_directory, project_name)
-    _write_json(
-        os.path.join(base_dir, 'functions', f'{introspector_report_id}.json'),
-        executable_line_records,
-    )
-    for fuzzer_name, records in covered_line_records.items():
-        _write_json(
-            os.path.join(base_dir, 'coverage', coverage_snapshot_id,
-                         f'{fuzzer_name}.json'),
-            records,
-        )
-    for fuzzer_name, records in reachable_line_records.items():
-        _write_json(
-            os.path.join(base_dir, 'reachable', introspector_report_id,
-                         f'{fuzzer_name}.json'),
-            records,
-        )
-
-
-def _persist_line_identity_data(
-    output_directory: str,
-    project_name: str,
-    all_function_list: List[Dict[str, Any]],
-    coverage_root: str,
-    fuzzer_names: List[str],
-    source_hint: str,
-) -> None:
-    introspector_report_id = _build_line_snapshot_id('introspector',
-                                                     source_hint)
-    coverage_snapshot_id = _build_line_snapshot_id('coverage', source_hint)
-    executable_line_records, executable_line_map = _extract_function_executable_line_records(
-        all_function_list, coverage_root, introspector_report_id)
-    covered_line_records = _extract_per_fuzzer_covered_line_records(
-        fuzzer_names, coverage_root, coverage_snapshot_id, all_function_list)
-    reachable_line_records = _derive_reachable_line_records(
-        all_function_list, executable_line_map, introspector_report_id)
-    _save_line_identity_bundle(output_directory, project_name,
-                               introspector_report_id, coverage_snapshot_id,
-                               executable_line_records, covered_line_records,
-                               reachable_line_records)
-
-
 def extract_local_project_data(project_name, oss_fuzz_path,
                                manager_return_dict):
     """Extracts data for a project using a local OSS-Fuzz output."""
@@ -748,17 +461,6 @@ def extract_local_project_data(project_name, oss_fuzz_path,
         project_name, oss_fuzz_path)
     all_constructor_list = oss_fuzz.extract_local_introspector_constructor_list(
         project_name, oss_fuzz_path)
-
-    fuzzer_names = []
-    if cov_fuzz_stats is not None:
-        fuzzer_names = [
-            fuzzer for fuzzer in cov_fuzz_stats.split('\n') if fuzzer
-        ]
-    if not fuzzer_names:
-        fuzzer_names = sorted(introspector_report.get('fuzzers', {}).keys())
-    coverage_root = os.path.join(oss_fuzz_path, 'build', 'out', project_name)
-    _persist_line_identity_data(os.getcwd(), project_name, all_function_list,
-                                coverage_root, fuzzer_names, coverage_root)
 
     try:
         project_stats = introspector_report['MergedProjectProfile']['stats']
@@ -850,202 +552,6 @@ def extract_local_project_data(project_name, oss_fuzz_path,
         'coverage-data-dict': code_coverage_data_dict,
         'all-header-files': all_header_files,
     }
-
-
-def extract_local_report_data(project_name, report_dir, manager_return_dict):
-    print(f'Analysing {project_name}')
-
-    introspector_report = oss_fuzz.extract_local_report(report_dir)
-    overview = introspector_report.get('MergedProjectProfile',
-                                       {}).get('overview', {})
-    project_language = overview.get('language', 'c++')
-    if project_language == 'jvm':
-        project_language = 'java'
-
-    branch_blockers = oss_fuzz.extract_local_report_branch_blockers(report_dir)
-    introspector_type_map = oss_fuzz.get_local_report_type_map(report_dir)
-    debug_report = oss_fuzz.extract_local_report_debug_info(report_dir)
-    test_files = oss_fuzz.extract_local_report_test_files(report_dir)
-    if test_files:
-        save_test_files_report(test_files, project_name)
-    test_files_xref = oss_fuzz.extract_local_report_test_files_xref(report_dir)
-    if test_files_xref:
-        save_test_files_xref_report(test_files_xref, project_name)
-
-    light_report = {
-        'test-files':
-        oss_fuzz.extract_local_report_light_test_files(report_dir),
-        'all-files': oss_fuzz.extract_local_report_light_all_files(report_dir),
-        'all-pairs': oss_fuzz.extract_local_report_light_pairs(report_dir),
-    }
-
-    all_files = oss_fuzz.extract_local_report_all_files(report_dir)
-    if all_files:
-        new_all_files = []
-        for file in all_files:
-            if '/src/inspector/source-code/' in file:
-                continue
-            new_all_files.append(file)
-        save_all_files_report(new_all_files, project_name)
-
-    if debug_report:
-        all_files_in_project = debug_report.get('all_files_in_project', [])
-        all_header_files_in_project = set()
-        for elem in all_files_in_project:
-            source_file = elem.get('source_file', '')
-            if source_file.endswith('.h'):
-                normalized_file = os.path.normpath(source_file)
-                if '/usr/local/' in normalized_file or '/usr/include/' in normalized_file:
-                    continue
-                all_header_files_in_project.add(normalized_file)
-
-        all_header_files = {
-            'project': project_name.split('###')[0],
-            'all-header-files': list(all_header_files_in_project)
-        }
-    else:
-        all_header_files = {
-            'project': project_name.split('###')[0],
-            'all-header-files': list()
-        }
-
-    all_function_list = oss_fuzz.extract_local_report_function_list(report_dir)
-    all_constructor_list = oss_fuzz.extract_local_report_constructor_list(
-        report_dir)
-
-    fuzzer_names = sorted(introspector_report.get('fuzzers', {}).keys())
-    _persist_line_identity_data(os.getcwd(), project_name, all_function_list,
-                                report_dir, fuzzer_names, report_dir)
-
-    project_stats = introspector_report.get('MergedProjectProfile',
-                                            {}).get('stats', {})
-    amount_of_fuzzers = project_stats.get('harness-count', 0)
-    functions_covered_estimate = project_stats.get(
-        'code-coverage-function-percentage', 0.0)
-
-    refined_proj_list = extract_and_refine_functions(all_function_list, '')
-    refined_constructor_list = extract_and_refine_functions(
-        all_constructor_list, '')
-    annotated_cfg = extract_and_refine_annotated_cfg(introspector_report)
-
-    extract_and_refine_branch_blockers(branch_blockers, project_name)
-
-    typedef_list = oss_fuzz.extract_local_report_typedef(report_dir)
-    macro_block = oss_fuzz.extract_local_report_macro_block(report_dir)
-
-    introspector_data_dict = {
-        "introspector_report_url":
-        report_dir,
-        "coverage_lines":
-        project_stats.get('code-coverage-function-percentage', 0.0),
-        "static_reachability":
-        project_stats.get('reached-complexity-percentage', 0.0),
-        "fuzzer_count":
-        amount_of_fuzzers,
-        "function_count":
-        len(all_function_list),
-        "functions_covered_estimate":
-        functions_covered_estimate,
-        'refined_proj_list':
-        refined_proj_list,
-        'refined_constructor_list':
-        refined_constructor_list,
-        'annotated_cfg':
-        annotated_cfg,
-        'project_name':
-        project_name,
-        'typedef_list':
-        typedef_list,
-        'macro_block':
-        macro_block
-    }
-
-    code_coverage_data_dict = None
-
-    project_timestamp = {
-        "project_name": project_name,
-        "date": '',
-        'language': project_language,
-        'coverage-data': code_coverage_data_dict,
-        'introspector-data': introspector_data_dict,
-        'fuzzer-count': amount_of_fuzzers,
-        'project_repository': report_dir,
-        'light-introspector': light_report,
-    }
-
-    dictionary_key = '%s###%s' % (project_name, '')
-    manager_return_dict[dictionary_key] = {
-        'project_timestamp': project_timestamp,
-        'introspector-data-dict': introspector_data_dict,
-        'coverage-data-dict': code_coverage_data_dict,
-        'all-header-files': all_header_files,
-    }
-
-
-def _update_local_db_from_analyses_dictionary(analyses_dictionary):
-    function_dict = {}
-    constructor_dict = {}
-    project_timestamps = []
-
-    db_timestamp = {
-        "date": '',
-        "project_count": -1,
-        "fuzzer_count": 0,
-        "function_count": 0,
-        "function_coverage_estimate": 0,
-        "accummulated_lines_total": 0,
-        "accummulated_lines_covered": 0,
-    }
-
-    all_header_files = []
-    for project_dict in analyses_dictionary.values():
-        project_timestamp = project_dict['project_timestamp']
-        project_timestamps.append(project_timestamp)
-        db_timestamp['fuzzer_count'] += project_timestamp['fuzzer-count']
-
-        all_header_files.append(project_dict['all-header-files'])
-
-        introspector_dictionary = project_timestamp.get(
-            'introspector-data', None)
-        if introspector_dictionary is not None:
-            proj = introspector_dictionary['project_name']
-            if proj in function_dict:
-                function_dict[proj].extend(
-                    introspector_dictionary['refined_proj_list'])
-            else:
-                function_dict[proj] = introspector_dictionary[
-                    'refined_proj_list']
-            introspector_dictionary.pop('refined_proj_list')
-
-            if proj in constructor_dict:
-                constructor_dict[proj].extend(
-                    introspector_dictionary['refined_constructor_list'])
-            else:
-                constructor_dict[proj] = introspector_dictionary[
-                    'refined_constructor_list']
-            introspector_dictionary.pop('refined_constructor_list')
-
-            db_timestamp['function_count'] += introspector_dictionary[
-                'function_count']
-            db_timestamp[
-                'function_coverage_estimate'] += introspector_dictionary[
-                    'functions_covered_estimate']
-
-        coverage_dictionary = project_dict.get('coverage-data-dict', None)
-        if coverage_dictionary is not None:
-            db_timestamp["accummulated_lines_total"] += coverage_dictionary[
-                'line_coverage']['count']
-            db_timestamp["accummulated_lines_covered"] += coverage_dictionary[
-                'line_coverage']['covered']
-            db_timestamp["project_count"] += 1
-
-    update_db_files(db_timestamp,
-                    project_timestamps,
-                    function_dict,
-                    constructor_dict,
-                    os.getcwd(),
-                    should_include_details=True,
-                    all_header_files=all_header_files)
 
 
 def extract_project_data(project_name, date_str, should_include_details,
@@ -1584,8 +1090,8 @@ def per_fuzzer_coverage_analysis(project_name: str,
                 'max': max_cov,
                 'avg': avg_cov,
                 'current': current,
-                'max_has_degraded': (max_cov - current)
-                > FUZZER_COVERAGE_IS_DEGRADED,
+                'max_has_degraded':
+                (max_cov - current) > FUZZER_COVERAGE_IS_DEGRADED,
                 'days_degraded': days_degraded,
                 'got_lost': ff in lost_fuzzers,
                 'coverage_error': coverage_error,
@@ -2168,6 +1674,21 @@ def get_dates_to_analyse(since_date, days_to_analyse, day_offset):
 
 def create_local_db(oss_fuzz_path):
     """Creates a database based of local runs."""
+    function_dict = {}
+    constructor_dict = {}
+    project_timestamps = []
+
+    # Create a DB timestamp
+    db_timestamp = {
+        "date": '',
+        "project_count": -1,
+        "fuzzer_count": 0,
+        "function_count": 0,
+        "function_coverage_estimate": 0,
+        "accummulated_lines_total": 0,
+        "accummulated_lines_covered": 0,
+    }
+
     oss_fuzz_build_path = os.path.join(oss_fuzz_path, 'build', 'out')
 
     projects_to_analyse = []
@@ -2181,17 +1702,69 @@ def create_local_db(oss_fuzz_path):
 
     analyses_dictionary = dict()
     for project in projects_to_analyse:
+        # Get the data
         extract_local_project_data(project, oss_fuzz_path, analyses_dictionary)
-    _update_local_db_from_analyses_dictionary(analyses_dictionary)
+    # Accummulate the data from all the projects.
+    all_header_files = []
+    for project_dict in analyses_dictionary.values():
+        # Append project timestamp to the list of timestamps
+        project_timestamp = project_dict['project_timestamp']
+        project_timestamps.append(project_timestamp)
+        db_timestamp['fuzzer_count'] += project_timestamp['fuzzer-count']
 
+        # Extend all header files
+        all_header_files.append(project_dict['all-header-files'])
 
-def create_local_report_db(local_report_specs: List[str]):
-    analyses_dictionary = dict()
-    normalized_specs = _normalize_local_report_specs(local_report_specs)
-    for project_name, report_dir in normalized_specs.items():
-        extract_local_report_data(project_name, report_dir,
-                                  analyses_dictionary)
-    _update_local_db_from_analyses_dictionary(analyses_dictionary)
+        # Accummulate all function list and branch blockers
+        introspector_dictionary = project_timestamp.get(
+            'introspector-data', None)
+        if introspector_dictionary is not None:
+            proj = introspector_dictionary['project_name']
+            # Functions
+            if proj in function_dict:
+                function_dict[proj].extend(
+                    introspector_dictionary['refined_proj_list'])
+            else:
+                function_dict[proj] = introspector_dictionary[
+                    'refined_proj_list']
+            # Remove the function list because we don't want it anymore.
+            introspector_dictionary.pop('refined_proj_list')
+
+            # Constructors
+            if proj in constructor_dict:
+                constructor_dict[proj].extend(
+                    introspector_dictionary['refined_constructor_list'])
+            else:
+                constructor_dict[proj] = introspector_dictionary[
+                    'refined_constructor_list']
+            # Remove the constructor list because we don't want it anymore.
+            introspector_dictionary.pop('refined_constructor_list')
+
+            # Accummulate various stats for the DB timestamp.
+            db_timestamp['function_count'] += introspector_dictionary[
+                'function_count']
+            db_timestamp[
+                'function_coverage_estimate'] += introspector_dictionary[
+                    'functions_covered_estimate']
+
+        coverage_dictionary = project_dict.get('coverage-data-dict', None)
+        if coverage_dictionary is not None:
+            # Accummulate various stats for the DB timestamp.
+            db_timestamp["accummulated_lines_total"] += coverage_dictionary[
+                'line_coverage']['count']
+            db_timestamp["accummulated_lines_covered"] += coverage_dictionary[
+                'line_coverage']['covered']
+
+            # We include in project count if coverage is in here
+            db_timestamp["project_count"] += 1
+
+    update_db_files(db_timestamp,
+                    project_timestamps,
+                    function_dict,
+                    constructor_dict,
+                    os.getcwd(),
+                    should_include_details=True,
+                    all_header_files=all_header_files)
 
 
 def create_db(max_projects, days_to_analyse, output_directory, input_directory,
@@ -2287,12 +1860,6 @@ def get_cmdline_parser():
         help=
         'Sets local OSS-Fuzz directory. Forces DB to be created from this.',
         default=None)
-    parser.add_argument("--local-report",
-                        action="append",
-                        default=[],
-                        help=("Import a local report directory. Repeatable. "
-                              "Use PROJECT=REPORT_DIR or just REPORT_DIR to "
-                              "infer the project name from the directory."))
     return parser
 
 
@@ -2306,15 +1873,9 @@ def main():
                             format=('%(asctime)s.%(msecs)03d %(levelname)s '
                                     '%(module)s - %(funcName)s: %(message)s'))
 
-    if args.local_oss_fuzz and args.local_report:
-        parser.error("Use either --local-oss-fuzz or --local-report, not both")
-
     if args.local_oss_fuzz:
         logging.info('Using local version of OSS-Fuzz.')
         create_local_db(args.local_oss_fuzz)
-    elif args.local_report:
-        logging.info('Using local report directories.')
-        create_local_report_db(args.local_report)
     else:
         create_db(args.max_projects, args.days_to_analyse, args.output_dir,
                   args.input_dir, args.base_offset, args.cleanup,
