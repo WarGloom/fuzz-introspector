@@ -50,6 +50,11 @@ def longest_common_prefix(strs: list[str]) -> str:
 
 
 def normalise_str(s1: str) -> str:
+    return _normalise_str_cached(s1)
+
+
+@functools.lru_cache(maxsize=4096)
+def _normalise_str_cached(s1: str) -> str:
     return s1.replace("\t", "").replace("\r", "").replace("\n",
                                                           "").replace(" ", "")
 
@@ -195,6 +200,11 @@ def demangle_jvm_func(package: str, funcname: str) -> str:
 
 def remove_jvm_generics(funcname: str) -> str:
     """Remove generic arguments from the full jvm method name."""
+    return _remove_jvm_generics_cached(funcname)
+
+
+@functools.lru_cache(maxsize=4096)
+def _remove_jvm_generics_cached(funcname: str) -> str:
     pattern = r"<[\s.,a-zA-Z0-9]+>|\\u003C[\s.,a-zA-Z0-9]+\\u003E"
     return re.sub(pattern, "", funcname)
 

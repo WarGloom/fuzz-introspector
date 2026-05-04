@@ -235,6 +235,32 @@ def test_resolve_coverage_link(
         os.remove("temp_html_status.json")
 
 
+def test_normalise_str_uses_cache():
+    utils._normalise_str_cached.cache_clear()
+
+    assert utils.normalise_str("a b\n") == "ab"
+    assert utils.normalise_str("a b\n") == "ab"
+
+    cache_info = utils._normalise_str_cached.cache_info()
+    assert cache_info.hits == 1
+    assert cache_info.misses == 1
+    assert cache_info.maxsize == 4096
+
+
+def test_remove_jvm_generics_uses_cache():
+    utils._remove_jvm_generics_cached.cache_clear()
+
+    assert utils.remove_jvm_generics(
+        "pkg.Class<T>.method") == "pkg.Class.method"
+    assert utils.remove_jvm_generics(
+        "pkg.Class<T>.method") == "pkg.Class.method"
+
+    cache_info = utils._remove_jvm_generics_cached.cache_info()
+    assert cache_info.hits == 1
+    assert cache_info.misses == 1
+    assert cache_info.maxsize == 4096
+
+
 def test_demangle_cpp_func_uses_cache(monkeypatch):
     calls = {"count": 0}
 
