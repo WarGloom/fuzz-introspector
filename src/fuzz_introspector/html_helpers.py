@@ -101,11 +101,11 @@ class HTMLConclusion:
 
 
 def html_table_add_row(elems: List[Any]) -> str:
-    html_str = "<tr>\n"
+    html_parts = ["<tr>\n"]
     for elem in elems:
-        html_str += f"<td>{elem}</td>\n"
-    html_str += "</tr>\n"
-    return html_str
+        html_parts.append(f"<td>{elem}</td>\n")
+    html_parts.append("</tr>\n")
+    return "".join(html_parts)
 
 
 def html_get_header(title: str = "Fuzz introspector") -> str:

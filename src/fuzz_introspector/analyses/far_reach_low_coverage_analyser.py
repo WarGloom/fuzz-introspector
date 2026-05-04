@@ -302,12 +302,17 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
     ) -> List[function_profile.FunctionProfile]:
         """Internal helper function to get a sorted functions of interest."""
         filtered_functions = []
+        coverage_cache = {}
 
         for function in functions:
             # Skipping non-related jvm methods and methods from enum classes
             # is_accessible is True by default, i.e. for non jvm projects
             if (not function.is_accessible or function.is_jvm_library
                     or function.is_enum):
+                continue
+
+            # Skip low complexity by configured value
+            if function.cyclomatic_complexity < self.min_complexity:
                 continue
 
             coverage = proj_profile.get_func_hit_percentage(
@@ -317,16 +322,13 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
             if coverage > 20.0:
                 continue
 
-            # Skip low complexity by configured value
-            if function.cyclomatic_complexity < self.min_complexity:
-                continue
-
+            coverage_cache[function.function_name] = coverage
             filtered_functions.append(function)
 
         # Sort the filtered functions
         filtered_functions.sort(key=lambda x: (
             -x.cyclomatic_complexity,
-            proj_profile.get_func_hit_percentage(x.function_name),
+            coverage_cache[x.function_name],
         ))
 
         return filtered_functions
