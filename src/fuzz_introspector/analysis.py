@@ -3535,6 +3535,7 @@ def extract_tests_from_directories(
 
     inspirations = ["sample", "test", "example"]
     inspirations_tuple = tuple(inspirations)
+    inspirations_tuple = tuple(inspirations)
 
     normalized_directories = set()
     for directory in directories:
@@ -3669,6 +3670,7 @@ def extract_tests_from_directories(
                 all_test_files.add(normalized_path)
     else:
         # Traverse each seed directory once and apply both matching heuristics.
+        inspirations_tuple = tuple(inspirations)
         for directory in seed_directories:
             for root, dirs, files in os.walk(directory):
                 dirs[:] = [
@@ -3734,6 +3736,7 @@ def _extract_test_information_jvm():
     source_code_extensions = (".java", ".scala", ".sc", ".kt", ".kts",
                               ".groovy")
     inspirations = ["sample", "example", "documentation", "demo"]
+    inspirations_tuple = tuple(inspirations)
     inspirations_tuple = tuple(inspirations)
 
     # Java project source code is meant to exist in the $SRC directory

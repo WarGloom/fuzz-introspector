@@ -607,23 +607,26 @@ def create_overview_table(
         tables: List[str],
         introspection_proj: analysis.IntrospectionProject) -> str:
     """Table with an overview of all the fuzzers"""
-    html_string = html_helpers.html_create_table_head(
-        tables[-1], html_constants.FUZZER_OVERVIEW_TABLE_COLUMNS)
+    html_parts = [
+        html_helpers.html_create_table_head(
+            tables[-1], html_constants.FUZZER_OVERVIEW_TABLE_COLUMNS)
+    ]
     for profile in introspection_proj.profiles:  # Create a row for each fuzzer.
         fuzzer_filename = profile.fuzzer_source_file
-        html_string += html_helpers.html_table_add_row([
-            profile.identifier,
-            fuzzer_filename,
-            len(profile.functions_reached_by_fuzzer),
-            len(profile.functions_unreached_by_fuzzer),
-            profile.max_func_call_depth,
-            len(profile.file_targets),
-            profile.total_basic_blocks,
-            profile.total_cyclomatic_complexity,
-            fuzzer_filename.replace(" ", "").split("/")[-1],
-        ])
-    html_string += "\n</tbody></table>"
-    return html_string
+        html_parts.append(
+            html_helpers.html_table_add_row([
+                profile.identifier,
+                fuzzer_filename,
+                len(profile.functions_reached_by_fuzzer),
+                len(profile.functions_unreached_by_fuzzer),
+                profile.max_func_call_depth,
+                len(profile.file_targets),
+                profile.total_basic_blocks,
+                profile.total_cyclomatic_complexity,
+                fuzzer_filename.replace(" ", "").split("/")[-1],
+            ]))
+    html_parts.append("\n</tbody></table>")
+    return "".join(html_parts)
 
 
 def _get_native_function_table_order(
@@ -1362,23 +1365,26 @@ def create_fuzzer_profile_section_blocker_table(
 
 def create_fuzzer_profile_section_files_hit(profile, profile_idx,
                                             table_of_contents, tables):
-    html_string = ""
+    html_parts = []
     # Table showing which files this fuzzer hits.
-    html_string += html_helpers.html_add_header_with_link(
-        "Files reached",
-        html_helpers.HTML_HEADING.H3,
-        table_of_contents,
-        link=f"files_hit_{profile_idx}",
-    )
+    html_parts.append(
+        html_helpers.html_add_header_with_link(
+            "Files reached",
+            html_helpers.HTML_HEADING.H3,
+            table_of_contents,
+            link=f"files_hit_{profile_idx}",
+        ))
     tables.append(f"myTable{len(tables)}")
-    html_string += html_helpers.html_create_table_head(tables[-1],
-                                                       [("filename", ""),
-                                                        ("functions hit", "")])
+    html_parts.append(
+        html_helpers.html_create_table_head(tables[-1],
+                                            [("filename", ""),
+                                             ("functions hit", "")]))
     for file_target, functions_hit_in_file in profile.file_targets.items():
-        html_string += html_helpers.html_table_add_row(
-            [file_target, len(functions_hit_in_file)])
-    html_string += "</table>\n"
-    return html_string
+        html_parts.append(
+            html_helpers.html_table_add_row(
+                [file_target, len(functions_hit_in_file)]))
+    html_parts.append("</table>\n")
+    return "".join(html_parts)
 
 
 def create_html_footer(tables):
@@ -1388,15 +1394,8 @@ def create_html_footer(tables):
     html_footer = "<script>\n"
 
     # Create array of all table ids
-    html_footer += "var tableIds = ["
-    counter = 0
-    for tablename in tables:
-        html_footer += f"'{tablename}'"
-        if counter != len(tables) - 1:
-            html_footer += ", "
-        else:
-            html_footer += "];\n"
-        counter += 1
+    table_ids_str = ", ".join([f"'{tablename}'" for tablename in tables])
+    html_footer += f"var tableIds = [{table_ids_str}];\n"
 
     # Closing tags
     html_footer += "</script>\n"
@@ -1856,40 +1855,39 @@ def _create_section_optional_analyses_impl(
 
 def get_body_script_tags(all_functions_json, fuzzer_table_data) -> str:
     """Add relevant <script> tag at the end of the body."""
+    html_script_tags_parts = []
     if os.environ.get("FI_INLINE_JS", ""):
-        html_script_tags = ""
         styling_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    "styling")
 
         for jsfile in styling.MAIN_JS_FILES:
             with open(os.path.join(styling_dir, jsfile), "r") as f:
                 js_content = f.read()
-            html_script_tags += "<script>\n"
-            html_script_tags += js_content
-            html_script_tags += "</script>\n"
+            html_script_tags_parts.append("<script>\n")
+            html_script_tags_parts.append(js_content)
+            html_script_tags_parts.append("</script>\n")
 
-        html_script_tags += "<script>\n"
-        html_script_tags += "var all_functions_table_data = %s" % (
-            json.dumps(all_functions_json))
-        html_script_tags += "</script>\n"
+        html_script_tags_parts.append("<script>\n")
+        html_script_tags_parts.append("var all_functions_table_data = %s" %
+                                      (json.dumps(all_functions_json)))
+        html_script_tags_parts.append("</script>\n")
 
-        html_script_tags += "<script>\n"
-        html_script_tags += "var fuzzer_table_data = %s" % (
-            json.dumps(fuzzer_table_data))
-        html_script_tags += "</script>\n"
+        html_script_tags_parts.append("<script>\n")
+        html_script_tags_parts.append("var fuzzer_table_data = %s" %
+                                      (json.dumps(fuzzer_table_data)))
+        html_script_tags_parts.append("</script>\n")
 
     else:
-        html_script_tags = ""
         js_files = list(styling.MAIN_JS_FILES)
         js_files.append(constants.ALL_FUNCTION_JS)
         js_files.append(constants.OPTIMAL_TARGETS_ALL_FUNCTIONS)
         js_files.append(constants.FUZZER_TABLE_JS)
         js_files.extend(styling.JAVASCRIPT_REMOTE_SCRIPTS)
         for js_file in js_files:
-            html_script_tags += (
+            html_script_tags_parts.append(
                 f'<script type="text/javascript" src="{js_file}"></script>')
 
-    return html_script_tags
+    return "".join(html_script_tags_parts)
 
 
 def _line_identity_name_candidates(report_row: Dict[str, Any]) -> List[str]:

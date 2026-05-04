@@ -338,7 +338,7 @@ def resolve_coverage_link(cov_url: str, source_file: str, lineno: int,
                           function_name: str, target_lang: str) -> str:
     """Resolves link to HTML coverage report for different languages"""
     result = "#"
-    if target_lang in ["c-cpp", "rust"]:
+    if target_lang in {"c-cpp", "rust"}:
         result = source_file + ".html#L" + str(lineno)
     elif target_lang == "python":
         # Temporarily for debugging purposes. TODO: David remove this later
