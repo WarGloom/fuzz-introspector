@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main, memory-improvements ]
 
+permissions:
+  contents: read
+
 jobs:
   build-native:
     name: Build ${{ matrix.tool.name }}
