@@ -105,11 +105,13 @@ def add_func_to_reached_and_clone(
     for f_profile in all_functions.values():
         # Identify all functions in newly_reached that are either reached
         # by f_profile or is f_profile itself.
-        intersected_names = newly_reached_names.intersection(f_profile.functions_reached)
+        intersected_names = newly_reached_names.intersection(
+            f_profile.functions_reached)
         if f_profile.function_name in newly_reached_names:
             intersected_names.add(f_profile.function_name)
 
-        sub_cc = sum(newly_reached_complexity_map[name] for name in intersected_names)
+        sub_cc = sum(
+            newly_reached_complexity_map[name] for name in intersected_names)
         f_profile.new_unreached_complexity -= sub_cc
 
     if all_functions[func_to_add.function_name].hitcount == 0:
