@@ -10,13 +10,11 @@
 ## 2025-03-05 - Avoid list re-creation for O(1) membership tests
 **Learning:** Using an inline list `[...]` for membership checking (`in`) forces the Python interpreter to recreate the list object on every single execution, giving an O(N) lookup. Using an inline set `{...}` instead tells the compiler to pre-allocate a `frozenset` constant, saving list recreation and executing in O(1) time. We measured this to be 3-4x faster for a 5-element check (1.04s vs 0.27s over 10M iterations).
 **Action:** Always prefer inline sets `{...}` over inline lists `[...]` for membership (`in`) checks.
-<<<<<<< HEAD
-## 2024-05-18 - HTML String Concatenation Bottleneck
-**Learning:** Python's string concatenation using `+=` inside loops is notoriously slow due to O(N^2) memory reallocation. This was a significant bottleneck in Fuzz Introspector's HTML report generation (e.g. `html_report.py`, `html_helpers.py`) where large strings containing tables, inline JS, and JSON dumps were being appended repeatedly.
-**Action:** Always replace repetitive string concatenation loops (`html_str += ...`) with list accumulation and `"".join(list)`. It provides a significant, measurable performance boost for large string processing.
-=======
 
 ## 2025-03-05 - Avoid inline generator expressions in hot loops
 **Learning:** Using a generator expression inside a hot loop (like `any(avoid in path for avoid in to_avoid)` within `os.walk` or similar tight iteration) is significantly slower than an explicit `for` loop with an early `break` or `return`. Python incurs measurable overhead to construct and evaluate the generator object per iteration. We observed a roughly 2.5x speedup by unrolling these into simple `for` loops. Similarly, passing an implicit generator string-matching expression to `any()` is vastly outperformed by directly passing a tuple of strings to `str.endswith()` (which executes in C).
 **Action:** Always replace generator expressions inside `any()` with explicit `for` loops or native C-backed methods (like `endswith(tuple)`) in performance-critical code sections, especially within file system traversal or deep parsing loops.
->>>>>>> 8afbf16 (⚡ Bolt: optimize hot loop string matching in `analysis.py`)
+
+## 2024-05-18 - HTML String Concatenation Bottleneck
+**Learning:** Python's string concatenation using `+=` inside loops is notoriously slow due to O(N^2) memory reallocation. This was a significant bottleneck in Fuzz Introspector's HTML report generation (e.g. `html_report.py`, `html_helpers.py`) where large strings containing tables, inline JS, and JSON dumps were being appended repeatedly.
+**Action:** Always replace repetitive string concatenation loops (`html_str += ...`) with list accumulation and `"".join(list)`. It provides a significant, measurable performance boost for large string processing.
