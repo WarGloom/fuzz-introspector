@@ -433,28 +433,28 @@ class JavaMethod:
         """Gets complexity measure based on counting branch nodes in a
         function."""
 
-        count = 0
-        stack = [stmt]
-        while stack:
-            curr = stack.pop()
-            if curr.type in BRANCH_NODES:
+        def _traverse_node_complexity(node: Node):
+            count = 0
+            if node.type in BRANCH_NODES:
                 count += 1
-            stack.extend(curr.children)
+            for item in node.children:
+                count += _traverse_node_complexity(item)
+            return count
 
-        self.complexity += count
+        self.complexity += _traverse_node_complexity(stmt)
 
     def _process_icount(self, stmt: Node):
         """Get a pseudo measurement of instruction count."""
 
-        count = 0
-        stack = [stmt]
-        while stack:
-            curr = stack.pop()
-            if curr.type in INSTR_NODES:
+        def _traverse_node_instr_count(node: Node) -> int:
+            count = 0
+            if node.type in INSTR_NODES:
                 count += 1
-            stack.extend(curr.children)
+            for item in node.children:
+                count += _traverse_node_instr_count(item)
+            return count
 
-        self.icount += count
+        self.icount += _traverse_node_instr_count(stmt)
 
     def _process_invoke_object(
         self, stmt: Node, classes: dict[str, "JavaClassInterface"]

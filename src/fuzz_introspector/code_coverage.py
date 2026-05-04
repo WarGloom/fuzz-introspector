@@ -486,7 +486,7 @@ def extract_hitcount(coverage_line: str) -> int:
         except Exception:
             return -1
 
-    if unit not in {"k", "M", "G"}:
+    if unit not in ["k", "M", "G"]:
         logger.error(
             f"Unexpected coverage count unit: {unit} as in {coverage_line}")
         return -1

@@ -96,26 +96,14 @@ def add_func_to_reached_and_clone(
     # transitively reach them, as well from their own new_unreached_complexity.
     # We do not recompute total_cyclomatic_complexity since it is a static
     # property precomputed beforehand.
-
-    # Pre-compute set and lookup table to convert O(N x M) nested loop
-    # into O(N) iteration over all_functions with O(1) set intersections.
-    if newly_reached:
-        nr_name_to_cc = {
-            nr.function_name: nr.cyclomatic_complexity
-            for nr in newly_reached
-        }
-        nr_names_set = set(nr_name_to_cc.keys())
-
-        for f_profile in all_functions.values():
-            intersect = nr_names_set.intersection(f_profile.functions_reached)
-            sub_cc = sum(nr_name_to_cc[name] for name in intersect)
-
-            # Check if the function itself is in newly_reached, but wasn't in functions_reached
-            if f_profile.function_name in nr_names_set and f_profile.function_name not in intersect:
-                sub_cc += nr_name_to_cc[f_profile.function_name]
-
-            if sub_cc > 0:
-                f_profile.new_unreached_complexity -= sub_cc
+    for f_profile in all_functions.values():
+        sub_cc = 0
+        for nr in newly_reached:
+            nr_name = nr.function_name
+            if (nr_name in f_profile.functions_reached
+                    or nr_name == f_profile.function_name):
+                sub_cc += nr.cyclomatic_complexity
+        f_profile.new_unreached_complexity -= sub_cc
 
     if all_functions[func_to_add.function_name].hitcount == 0:
         logger.info("Error. Hitcount did not get set for some reason. Exiting")

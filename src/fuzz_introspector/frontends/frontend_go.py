@@ -633,28 +633,28 @@ class FunctionMethod:
         """Gets complexity measure based on counting branch nodes in a
         function."""
 
-        count = 0
-        stack = [self.root]
-        while stack:
-            curr = stack.pop()
-            if curr.type in BRANCH_NODES:
+        def _traverse_node_complexity(node: Node) -> int:
+            count = 0
+            if node.type in BRANCH_NODES:
                 count += 1
-            stack.extend(curr.children)
+            for item in node.children:
+                count += _traverse_node_complexity(item)
+            return count
 
-        self.complexity = count
+        self.complexity = _traverse_node_complexity(self.root)
 
     def _process_icount(self):
         """Returns a pseudo measurement of instruction count."""
 
-        count = 0
-        stack = [self.root]
-        while stack:
-            curr = stack.pop()
-            if curr.type in INSTR_NODES:
+        def _traverse_node_instr_count(node: Node) -> int:
+            count = 0
+            if node.type in INSTR_NODES:
                 count += 1
-            stack.extend(curr.children)
+            for item in node.children:
+                count += _traverse_node_instr_count(item)
+            return count
 
-        self.icount = count
+        self.icount = _traverse_node_instr_count(self.root)
 
     def _process_call_expr_child(
             self, call_child: Node,
