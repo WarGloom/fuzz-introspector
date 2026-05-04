@@ -3390,19 +3390,18 @@ def _scan_source_tree(
     interesting_source_files: set[str] = set()
 
     if language == "jvm":
-        source_extensions = [
-            ".java", ".scala", ".sc", ".groovy", ".kt", ".kts"
-        ]
+        source_extensions = (".java", ".scala", ".sc", ".groovy", ".kt",
+                             ".kts")
     elif language == "python":
-        source_extensions = [".py"]
+        source_extensions = (".py", )
     elif language == "rust":
-        source_extensions = [".rs"]
+        source_extensions = (".rs", )
     elif language == "go":
-        source_extensions = [".go", ".cgo"]
+        source_extensions = (".go", ".cgo")
     else:
-        source_extensions = [".cc", ".cpp", ".cxx", ".c++", ".c", ".h", ".hpp"]
+        source_extensions = (".cc", ".cpp", ".cxx", ".c++", ".c", ".h", ".hpp")
 
-    to_avoid = [
+    to_avoid = (
         "fuzztest",
         "aflplusplus",
         "libfuzzer",
@@ -3417,14 +3416,20 @@ def _scan_source_tree(
         "/src/inspector/",
         "/src/.venv",
         "/src/source-code/",
-    ]
+    )
+
+    def _contains_avoided_path(path: str) -> bool:
+        for avoid in to_avoid:
+            if avoid in path:
+                return True
+        return False
 
     def is_interesting_source_file(path):
-        if not any(path.endswith(ext) for ext in source_extensions):
+        if not path.endswith(source_extensions):
             return False
         if _matches_any_pattern(path, compiled_exclude_patterns):
             return False
-        if any(avoid in path for avoid in to_avoid):
+        if _contains_avoided_path(path):
             return False
         if path.startswith("/src/source-code"):
             return False
@@ -3435,8 +3440,8 @@ def _scan_source_tree(
     for root, dirs, files in os.walk(scan_root):
         dirs[:] = [
             d for d in dirs if not _matches_any_pattern(
-                os.path.join(root, d), compiled_exclude_patterns) and not any(
-                    avoid in os.path.join(root, d) for avoid in to_avoid)
+                os.path.join(root, d), compiled_exclude_patterns)
+            and not _contains_avoided_path(os.path.join(root, d))
         ]
         for f in files:
             path = os.path.join(root, f)
@@ -3523,7 +3528,7 @@ def extract_tests_from_directories(
     absolute path appended."""
     file_count = 0
 
-    inspirations = ["sample", "test", "example"]
+    inspirations = ("sample", "test", "example")
 
     normalized_directories = set()
     for directory in directories:
@@ -3542,18 +3547,18 @@ def extract_tests_from_directories(
 
     if language == "jvm":
         # Get all jvm source files
-        test_extensions = [".java", ".scala", ".sc", ".groovy", ".kt", ".kts"]
+        test_extensions = (".java", ".scala", ".sc", ".groovy", ".kt", ".kts")
     elif language == "python":
         # Get all python source files
-        test_extensions = [".py"]
+        test_extensions = (".py", )
     elif language == "rust":
         # Get all rust source files
-        test_extensions = [".rs"]
+        test_extensions = (".rs", )
     elif language == "go":
-        test_extensions = [".go", ".cgo"]
+        test_extensions = (".go", ".cgo")
     else:
         # Get all c/cpp source files
-        test_extensions = [".cc", ".cpp", ".cxx", ".c++", ".c"]
+        test_extensions = (".cc", ".cpp", ".cxx", ".c++", ".c")
 
     all_test_files = set()
     compiled_exclude_patterns = []
@@ -3563,7 +3568,7 @@ def extract_tests_from_directories(
         except re.error as err:
             logger.warning("Invalid exclude pattern %s: %s", pattern, err)
 
-    to_avoid = [
+    to_avoid = (
         "fuzztest",
         "aflplusplus",
         "libfuzzer",
@@ -3577,12 +3582,24 @@ def extract_tests_from_directories(
         "/usr/",
         "/tmp/",
         "/src/inspector",
-    ]
+    )
+
+    def _contains_avoided_path(path: str) -> bool:
+        for avoid in to_avoid:
+            if avoid in path:
+                return True
+        return False
+
+    def _contains_inspiration(path: str) -> bool:
+        for inspiration in inspirations:
+            if inspiration in path:
+                return True
+        return False
 
     def is_candidate_source(absolute_path):
         if _matches_any_pattern(absolute_path, compiled_exclude_patterns):
             return False
-        if any(avoid in absolute_path for avoid in to_avoid):
+        if _contains_avoided_path(absolute_path):
             return False
         if absolute_path.startswith("/out/"):
             return False
@@ -3646,8 +3663,8 @@ def extract_tests_from_directories(
                 continue
 
             root = os.path.dirname(normalized_path)
-            if any(ins in root for ins in
-                   inspirations) and is_non_fuzz_harness(normalized_path):
+            if _contains_inspiration(root) and is_non_fuzz_harness(
+                    normalized_path):
                 all_test_files.add(normalized_path)
     else:
         # Traverse each seed directory once and apply both matching heuristics.
@@ -3666,7 +3683,7 @@ def extract_tests_from_directories(
                         file_count,
                     )
 
-                is_inspiration_root = any(ins in root for ins in inspirations)
+                is_inspiration_root = _contains_inspiration(root)
                 for f in files:
                     if not f.endswith(file_extensions):
                         continue
@@ -3711,7 +3728,13 @@ def _extract_test_information_jvm():
     all_test_files = set()
     source_code_extensions = (".java", ".scala", ".sc", ".kt", ".kts",
                               ".groovy")
-    inspirations = ["sample", "example", "documentation", "demo"]
+    inspirations = ("sample", "example", "documentation", "demo")
+
+    def _contains_inspiration(path: str) -> bool:
+        for inspiration in inspirations:
+            if inspiration in path:
+                return True
+        return False
 
     # Java project source code is meant to exist in the $SRC directory
     base_dir = os.path.abspath(os.environ.get("SRC", "/src"))
@@ -3727,7 +3750,7 @@ def _extract_test_information_jvm():
             source_paths.add(root)
         if root.endswith("src/test/java"):
             test_paths.add(root)
-        if any(inspiration in root for inspiration in inspirations):
+        if _contains_inspiration(root):
             sample_paths.add(root)
 
     # Walk through all the packages under test paths and include the test files
@@ -3742,8 +3765,8 @@ def _extract_test_information_jvm():
     for source_path in source_paths:
         for root, _, files in os.walk(source_path):
             for file in files:
-                if file.endswith(source_code_extensions) and any(
-                        inspiration in file for inspiration in inspirations):
+                if file.endswith(source_code_extensions
+                                 ) and _contains_inspiration(file):
                     path = os.path.relpath(os.path.join(root, file),
                                            source_path)
                     all_test_files.add(path)
