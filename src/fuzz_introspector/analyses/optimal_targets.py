@@ -96,13 +96,20 @@ def add_func_to_reached_and_clone(
     # transitively reach them, as well from their own new_unreached_complexity.
     # We do not recompute total_cyclomatic_complexity since it is a static
     # property precomputed beforehand.
+    newly_reached_complexity_map = {
+        nr.function_name: nr.cyclomatic_complexity
+        for nr in newly_reached
+    }
+    newly_reached_names = set(newly_reached_complexity_map.keys())
+
     for f_profile in all_functions.values():
-        sub_cc = 0
-        for nr in newly_reached:
-            nr_name = nr.function_name
-            if (nr_name in f_profile.functions_reached
-                    or nr_name == f_profile.function_name):
-                sub_cc += nr.cyclomatic_complexity
+        # Identify all functions in newly_reached that are either reached
+        # by f_profile or is f_profile itself.
+        intersected_names = newly_reached_names.intersection(f_profile.functions_reached)
+        if f_profile.function_name in newly_reached_names:
+            intersected_names.add(f_profile.function_name)
+
+        sub_cc = sum(newly_reached_complexity_map[name] for name in intersected_names)
         f_profile.new_unreached_complexity -= sub_cc
 
     if all_functions[func_to_add.function_name].hitcount == 0:
