@@ -3389,21 +3389,20 @@ def _scan_source_tree(
 ) -> set[str]:
     interesting_source_files: set[str] = set()
 
-    source_extensions: tuple[str, ...]
-
     if language == "jvm":
-        source_extensions = (".java", ".scala", ".sc", ".groovy", ".kt",
-                             ".kts")
+        source_extensions = [
+            ".java", ".scala", ".sc", ".groovy", ".kt", ".kts"
+        ]
     elif language == "python":
-        source_extensions = (".py", )
+        source_extensions = [".py"]
     elif language == "rust":
-        source_extensions = (".rs", )
+        source_extensions = [".rs"]
     elif language == "go":
-        source_extensions = (".go", ".cgo")
+        source_extensions = [".go", ".cgo"]
     else:
-        source_extensions = (".cc", ".cpp", ".cxx", ".c++", ".c", ".h", ".hpp")
+        source_extensions = [".cc", ".cpp", ".cxx", ".c++", ".c", ".h", ".hpp"]
 
-    to_avoid = (
+    to_avoid = [
         "fuzztest",
         "aflplusplus",
         "libfuzzer",
@@ -3418,20 +3417,15 @@ def _scan_source_tree(
         "/src/inspector/",
         "/src/.venv",
         "/src/source-code/",
-    )
+    ]
 
     def is_interesting_source_file(path):
-        # PERFORMANCE: path.endswith natively supports a tuple of extensions which runs
-        # faster in C than a Python list comprehension or generator expression.
-        if not path.endswith(source_extensions):
+        if not any(path.endswith(ext) for ext in source_extensions):
             return False
         if _matches_any_pattern(path, compiled_exclude_patterns):
             return False
-        # PERFORMANCE: Explicit for loops are significantly faster than generator
-        # comprehensions with any() inside hot paths
-        for avoid in to_avoid:
-            if avoid in path:
-                return False
+        if any(avoid in path for avoid in to_avoid):
+            return False
         if path.startswith("/src/source-code"):
             return False
         if path.startswith("/src/inspector/"):
@@ -3569,7 +3563,7 @@ def extract_tests_from_directories(
         except re.error as err:
             logger.warning("Invalid exclude pattern %s: %s", pattern, err)
 
-    to_avoid = (
+    to_avoid = [
         "fuzztest",
         "aflplusplus",
         "libfuzzer",
@@ -3583,19 +3577,18 @@ def extract_tests_from_directories(
         "/usr/",
         "/tmp/",
         "/src/inspector",
-    )
+    ]
 
     def is_candidate_source(absolute_path):
         if _matches_any_pattern(absolute_path, compiled_exclude_patterns):
             return False
-        # PERFORMANCE: Explicit for loops are significantly faster than generator
-        # comprehensions with any() inside hot paths
-        for avoid in to_avoid:
-            if avoid in absolute_path:
-                return False
-        # PERFORMANCE: path.startswith natively supports a tuple of extensions which runs
-        # faster in C than multiple startswith() checks or any() comprehensions.
-        if absolute_path.startswith(("/out/", "/src/inspector/", "/usr/")):
+        if any(avoid in absolute_path for avoid in to_avoid):
+            return False
+        if absolute_path.startswith("/out/"):
+            return False
+        if absolute_path.startswith("/src/inspector/"):
+            return False
+        if absolute_path.startswith("/usr/"):
             return False
         return True
 

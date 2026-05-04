@@ -10,7 +10,3 @@
 ## 2025-03-05 - Avoid list re-creation for O(1) membership tests
 **Learning:** Using an inline list `[...]` for membership checking (`in`) forces the Python interpreter to recreate the list object on every single execution, giving an O(N) lookup. Using an inline set `{...}` instead tells the compiler to pre-allocate a `frozenset` constant, saving list recreation and executing in O(1) time. We measured this to be 3-4x faster for a 5-element check (1.04s vs 0.27s over 10M iterations).
 **Action:** Always prefer inline sets `{...}` over inline lists `[...]` for membership (`in`) checks.
-
-## 2024-05-18 - Optimize string prefixes/suffixes inside hot loops
-**Learning:** Python's `str.startswith()` and `str.endswith()` functions natively accept a `tuple` of strings, executing the membership check at C-level speed. Using list/generator comprehensions (e.g., `any(path.endswith(ext) for ext in list)`) incurs significant Python evaluation overhead. Additionally, for general substring membership checks in hot paths, replacing an `any()` comprehension with an explicit `for` loop and early `return` avoids generator creation overhead.
-**Action:** When refactoring multiple prefix/suffix checks or checking against lists, always convert the collection to a tuple and pass it directly to `startswith()`/`endswith()`. Replace `any()` checks with explicit loops in performance critical paths.
