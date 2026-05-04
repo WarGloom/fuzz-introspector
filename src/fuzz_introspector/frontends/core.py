@@ -15,12 +15,8 @@
 
 import logging
 
-from fuzz_introspector.frontends import (
-    frontend_c_cpp,
-    frontend_go,
-    frontend_jvm,
-    frontend_rust,
-)
+from fuzz_introspector.frontends import (frontend_c, frontend_cpp, frontend_go,
+                                         frontend_jvm, frontend_rust)
 from fuzz_introspector.frontends.datatypes import SourceCodeFile
 
 logger = logging.getLogger(name=__name__)
@@ -35,20 +31,20 @@ def analyse_source_file(code: bytes, language: str) -> SourceCodeFile:
 
     Returns a frontend Source code module if successful and None otherwise."""
 
-    if language == "c":
-        return frontend_c_cpp.analyse_source_code(code, "c")
+    if language == 'c':
+        return frontend_c.analyse_source_code(code)
 
-    if language == "cpp":
-        return frontend_c_cpp.analyse_source_code(code, "cpp")
+    if language == 'cpp':
+        return frontend_cpp.analyse_source_code(code)
 
-    if language == "go":
+    if language == 'go':
         return frontend_go.analyse_source_code(code)
 
-    if language == "jvm":
+    if language == 'jvm':
         return frontend_jvm.analyse_source_code(code)
 
-    if language == "rust":
+    if language == 'rust':
         return frontend_rust.analyse_source_code(code)
 
-    logger.info("Language %s not supported", language)
+    logger.info('Language %s not supported', language)
     return None
