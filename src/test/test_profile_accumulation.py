@@ -448,6 +448,7 @@ class _FilterProfileStub:
 
 
 class _MergedFunctionStub:
+
     def __init__(
         self,
         name: str,
@@ -478,6 +479,7 @@ class _MergedFunctionStub:
 
 
 class _MergedProfileStub:
+
     def __init__(self, identifier: str, functions: list[_MergedFunctionStub]):
         self._identifier = identifier
         self.target_lang = "c-cpp"
@@ -603,11 +605,10 @@ def test_merged_project_profile_chooses_stable_duplicate_function_source():
                                                   "c-cpp")
 
     chosen = merged.all_functions["LLVMFuzzerCustomMutator"]
-    assert (chosen.function_source_file,
-            chosen.function_linenumber) == (
-                "/src/test/cgptests/src/test_BERCertificateParse_Fuzzer.cpp",
-                8,
-            )
+    assert (chosen.function_source_file, chosen.function_linenumber) == (
+        "/src/test/cgptests/src/test_BERCertificateParse_Fuzzer.cpp",
+        8,
+    )
 
 
 def test_merged_project_profile_duplicate_choice_is_order_independent():
@@ -639,11 +640,10 @@ def test_merged_project_profile_duplicate_choice_is_order_independent():
 
     chosen_a = merged_a.all_functions["LLVMFuzzerCustomCrossOver"]
     chosen_b = merged_b.all_functions["LLVMFuzzerCustomCrossOver"]
-    assert (chosen_a.function_source_file,
-            chosen_a.function_linenumber) == (
-                chosen_b.function_source_file,
-                chosen_b.function_linenumber,
-            )
+    assert (chosen_a.function_source_file, chosen_a.function_linenumber) == (
+        chosen_b.function_source_file,
+        chosen_b.function_linenumber,
+    )
 
 
 def test_batch_returns_false_on_invalid_json(monkeypatch):
