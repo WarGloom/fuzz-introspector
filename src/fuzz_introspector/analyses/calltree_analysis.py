@@ -129,7 +129,9 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
 
         # Optimize HTML string concatenation: use list accumulation
         # and "".join() instead of O(N^2) += operator
-        calltree_html_section_list = ["<div class='call-tree-section-wrapper'>"]
+        calltree_html_section_list = [
+            "<div class='call-tree-section-wrapper'>"
+        ]
         nodes = cfg_load.extract_all_callsites(
             profile.fuzzer_callsite_calltree)
 
@@ -178,9 +180,9 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
             # Add div for line itself.
             calltree_html_section_list.append(
                 f'<div class="{color_to_be}-background coverage-line">')
-            calltree_html_section_list.append(self._get_span_row(
-                ct_idx_str, indentation, node, demangled_name, func_href,
-                callsite_link))
+            calltree_html_section_list.append(
+                self._get_span_row(ct_idx_str, indentation, node,
+                                   demangled_name, func_href, callsite_link))
 
             # If we are not at end
             if i < len(nodes) - 1:
@@ -204,16 +206,19 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                 if node.depth == 1:
                     calltree_html_section_list.append("</div></div>")
                 elif node.depth > 1:
-                    calltree_html_section_list.append(
-                        "</div>" * int(node.depth - 1) * 2 + "</div></div>")
+                    calltree_html_section_list.append("</div>" *
+                                                      int(node.depth - 1) * 2 +
+                                                      "</div></div>")
 
         # Close the opening two divs
         calltree_html_section_list.append("</div>")  # opening node
-        calltree_html_section_list.append("</div>")  # call-tree-section-wrapper
+        calltree_html_section_list.append(
+            "</div>")  # call-tree-section-wrapper
 
         # Side overview wrapper holds the vertical bitmap image. The actual
         # visualisation happens in javascript rather than here.
-        calltree_html_section_list.append('<div id="side-overview-wrapper"></div>')
+        calltree_html_section_list.append(
+            '<div id="side-overview-wrapper"></div>')
 
         calltree_html_section_string = "".join(calltree_html_section_list)
 
