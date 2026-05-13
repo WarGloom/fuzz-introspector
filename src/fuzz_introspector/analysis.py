@@ -3389,6 +3389,7 @@ def _scan_source_tree(
 ) -> set[str]:
     interesting_source_files: set[str] = set()
 
+    source_extensions: tuple[str, ...] = ()
     if language == "jvm":
         source_extensions = (".java", ".scala", ".sc", ".groovy", ".kt",
                              ".kts")
@@ -3545,6 +3546,7 @@ def extract_tests_from_directories(
         if not is_sub_directory:
             seed_directories.append(directory)
 
+    test_extensions: tuple[str, ...] = ()
     if language == "jvm":
         # Get all jvm source files
         test_extensions = (".java", ".scala", ".sc", ".groovy", ".kt", ".kts")
