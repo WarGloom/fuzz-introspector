@@ -2,7 +2,7 @@ diff --git a/infra/base-images/base-builder/Dockerfile b/infra/base-images/base-
 index 16b787e67..e6516f622 100644
 --- a/infra/base-images/base-builder/Dockerfile
 +++ b/infra/base-images/base-builder/Dockerfile
-@@ -229,4 +229,27 @@ COPY indexer /opt/indexer
+@@ -229,4 +229,35 @@ COPY indexer /opt/indexer
  COPY --from=gcr.io/oss-fuzz-base/indexer /indexer/build/indexer /opt/indexer/indexer
  RUN chmod a+x /opt/indexer/indexer /opt/indexer/index_build.py
 
@@ -10,8 +10,16 @@ index 16b787e67..e6516f622 100644
 +COPY fuzz-introspector /fuzz-introspector
 +
 +# Install Rust toolchain
-+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-+    sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable
++RUN RUSTUP_VERSION=1.28.2 && \
++    RUSTUP_TARGET=x86_64-unknown-linux-gnu && \
++    RUSTUP_SHA256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c && \
++    curl --proto '=https' --tlsv1.2 -sSf \
++        "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${RUSTUP_TARGET}/rustup-init" \
++        -o /tmp/rustup-init && \
++    echo "${RUSTUP_SHA256}  /tmp/rustup-init" | sha256sum -c - && \
++    chmod +x /tmp/rustup-init && \
++    /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain stable && \
++    rm -f /tmp/rustup-init
 +ENV PATH="/root/.cargo/bin:${PATH}"
 +
 +# Build native Rust components

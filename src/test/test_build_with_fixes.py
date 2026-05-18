@@ -167,6 +167,8 @@ def test_build_with_fixes_copies_and_wires_rust_native_backends(
     assert "native_reachability_rust" in dockerfile
     assert "native_filter_functions_rust" in dockerfile
     assert "native_calltree_bitmap_rust" in dockerfile
+    assert "https://sh.rustup.rs" not in dockerfile
+    assert "sha256sum -c -" in dockerfile
     assert (
         "FI_IF_DEBUG_CORRELATOR_RUST_BIN=/opt/fuzz-introspector/bin/native_debug_correlator_rust"
         in dockerfile)
