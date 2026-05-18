@@ -179,8 +179,8 @@ def html_get_navbar(title: str) -> str:
 def create_pfc_button(introspection_proj, coverage_url: str) -> str:
     """Creates the box holding fuzzer coverage links, including links
     to coverage reports per fuzzer."""
-    html_string = ""
-    html_string += """
+    html_parts = []
+    html_parts.append("""
                     <div class="yellow-button-wrapper"
                         style="position: relative; margin: 5px 0 30px 0">
                         <div class="yellow-button"
@@ -188,6 +188,7 @@ def create_pfc_button(introspection_proj, coverage_url: str) -> str:
                             Per-fuzzer coverage
                         </div>
                     <div class="per-fuzzer-coverage-dropdown" id="per-fuzzer-coverage-dropdown">"""
+                      )
     for profile in introspection_proj.profiles:
         target_name = profile.identifier
         target_coverage_url = utils.get_target_coverage_url(
@@ -206,14 +207,14 @@ def create_pfc_button(introspection_proj, coverage_url: str) -> str:
         elif profile.target_lang == "go":
             target_coverage_url += "/index.html"
 
-        html_string += f"""
+        html_parts.append(f"""
             <a href="{target_coverage_url}">
                 <div class="pfc-list-item">
                     {target_name}
                 </div>
-            </a>"""
-    html_string += "</div></div>"
-    return html_string
+            </a>""")
+    html_parts.append("</div></div>")
+    return "".join(html_parts)
 
 
 def html_get_table_of_contents(table_of_contents: HtmlTableOfContents,
@@ -235,8 +236,8 @@ def html_get_table_of_contents(table_of_contents: HtmlTableOfContents,
     else:
         cov_index = "report.html"
 
-    html_toc_string = ""
-    html_toc_string += f"""<div class="left-sidebar">\
+    html_parts = []
+    html_parts.append(f"""<div class="left-sidebar">\
                             <div class="left-sidebar-content-box"
                                 style="display:flex;flex-direction:column;
                                  padding: 0 20px; margin-top: 30px">
@@ -248,26 +249,27 @@ def html_get_table_of_contents(table_of_contents: HtmlTableOfContents,
                                         </div>
                                     </a>
                                 </div>
-                        """
+                        """)
     if introspection_proj.proj_profile.target_lang != "python":
-        html_toc_string += f"{per_fuzzer_coverage_button}"
+        html_parts.append(f"{per_fuzzer_coverage_button}")
 
-    html_toc_string += """</div>
+    html_parts.append("""</div>
                             <div class="left-sidebar-content-box">\
                                 <h2 style="margin-top:0px">Table of contents</h2>"""
+                      )
 
     for toc_entry in table_of_contents.entries:
         indentation = (toc_entry.heading_type.value - 1) * 16
-        html_toc_string += "<div style='margin-left: %spx'>" % indentation
-        html_toc_string += '    <a href="#%s">%s</a>\n' % (
+        html_parts.append("<div style='margin-left: %spx'>" % indentation)
+        html_parts.append('    <a href="#%s">%s</a>\n' % (
             toc_entry.href_link,
             toc_entry.entry_title,
-        )
-        html_toc_string += "</div>\n"
-    html_toc_string += "    </div>\
-                        </div>"
+        ))
+        html_parts.append("</div>\n")
+    html_parts.append("    </div>\
+                        </div>")
 
-    return html_toc_string
+    return "".join(html_parts)
 
 
 def html_add_header_with_link(
@@ -435,31 +437,32 @@ def create_conclusions_box(conclusions: List[HTMLConclusion]) -> str:
 
 
 def create_calltree_color_distribution_table(color_list: List[str]) -> str:
-    html_string = ""
+    html_parts = []
     color_dictionary: Dict[str, int] = {}
     for color in color_list:
         color_dictionary[color] = color_dictionary.get(color, 0) + 1
 
-    html_string += "<p>The distribution of callsites in terms of coloring is"
-    html_string += ("<table><tr>"
-                    '<th style="text-align: left;">Color</th>'
-                    '<th style="text-align: left;">Runtime hitcount</th>'
-                    '<th style="text-align: left;">Callsite count</th>'
-                    '<th style="text-align: left;">Percentage</th>'
-                    "</tr>")
+    html_parts.append(
+        "<p>The distribution of callsites in terms of coloring is")
+    html_parts.append("<table><tr>"
+                      '<th style="text-align: left;">Color</th>'
+                      '<th style="text-align: left;">Runtime hitcount</th>'
+                      '<th style="text-align: left;">Callsite count</th>'
+                      '<th style="text-align: left;">Percentage</th>'
+                      "</tr>")
     for _min, _max, color, rgb_code in constants.COLOR_CONSTANTS:
-        html_string += (f'<tr><td style="color:{color}; '
-                        f"text-shadow: -1px 0 black, 0 1px black, "
-                        f'1px 0 black, 0 -1px black;"><b>{color}</b></td>')
+        html_parts.append(f'<tr><td style="color:{color}; '
+                          f"text-shadow: -1px 0 black, 0 1px black, "
+                          f'1px 0 black, 0 -1px black;"><b>{color}</b></td>')
         if _max == 1:
             interval = "0"
         elif _max > 1000:
             interval = f"{_min}+"
         else:
             interval = f"[{_min}:{_max - 1}]"
-        html_string += f"<td>{interval}</td>"
+        html_parts.append(f"<td>{interval}</td>")
         cover_count = color_dictionary.get(color, 0)
-        html_string += f"<td>{cover_count}</td>"
+        html_parts.append(f"<td>{cover_count}</td>")
         if len(color_list) > 0:
             f1 = float(cover_count)
             f2 = float(len(color_list))
@@ -467,14 +470,15 @@ def create_calltree_color_distribution_table(color_list: List[str]) -> str:
         else:
             percentage_c = 0.0
         percentage_s = str(percentage_c)[0:4]
-        html_string += f"<td>{percentage_s}%</td>"
-        html_string += "</tr>"
+        html_parts.append(f"<td>{percentage_s}%</td>")
+        html_parts.append("</tr>")
 
     # Add a row with total amount of callsites
-    html_string += f"<tr><td>All colors</td><td>{len(color_list)}</td><td>100</td></tr>"
-    html_string += "</table>"
-    html_string += "</p>"
-    return html_string
+    html_parts.append(
+        f"<tr><td>All colors</td><td>{len(color_list)}</td><td>100</td></tr>")
+    html_parts.append("</table>")
+    html_parts.append("</p>")
+    return "".join(html_parts)
 
 
 def _resolve_bitmap_binary(backend: str) -> str | None:
