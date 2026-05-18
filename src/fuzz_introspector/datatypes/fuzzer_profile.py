@@ -937,10 +937,9 @@ class FuzzerProfile:
         # ------------------------------------------------------------------
         # Step 4 – condensed DAG: scc_successors[i] = set of successor SCC ids.
         # ------------------------------------------------------------------
-        scc_successors: Dict[int, Set[int]] = {
-            i: set()
-            for i in range(len(sccs))
-        }
+        scc_successors: Dict[int,
+                             Set[int]] = {i: set()
+                                          for i in range(len(sccs))}
         for node in all_nodes:
             my_scc = scc_id[node]
             for callee in adj[node]:
@@ -1112,8 +1111,8 @@ class FuzzerProfile:
         )
         covered_files = self._covered_files_cache.get(cache_key)
         if (covered_files is None
-                or self._covered_files_cache_metadata.get(cache_key)
-                != cache_metadata):
+                or self._covered_files_cache_metadata.get(cache_key) !=
+                cache_metadata):
             covered_files = self._build_covered_files_index(basefolder)
             self._covered_files_cache[cache_key] = covered_files
             self._covered_files_cache_metadata[cache_key] = cache_metadata

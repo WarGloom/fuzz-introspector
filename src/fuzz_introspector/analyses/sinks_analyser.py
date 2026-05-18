@@ -141,11 +141,8 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         self,
         proj_profile: project_profile.MergedProjectProfile,
         profiles: list[fuzzer_profile.FuzzerProfile],
-    ) -> tuple[
-            list[cfg_load.CalltreeCallsite],
-            list[function_profile.FunctionProfile],
-            list[str],
-    ]:
+    ) -> tuple[list[cfg_load.CalltreeCallsite],
+               list[function_profile.FunctionProfile], list[str], ]:
         """
         Retrieve and return full list of call sites, functions
         and fuzzer names from all fuzzers profile for this project
@@ -569,10 +566,8 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
 
     def _handle_callpath_dict(
         self,
-        callpath_dict: dict[
-            function_profile.FunctionProfile,
-            list[list[function_profile.FunctionProfile]],
-        ],
+        callpath_dict: dict[function_profile.FunctionProfile,
+                            list[list[function_profile.FunctionProfile]], ],
         proj_profile: project_profile.MergedProjectProfile,
         target_func: function_profile.FunctionProfile,
         target_lang: str,

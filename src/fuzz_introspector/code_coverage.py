@@ -590,9 +590,8 @@ def _normalise_covmap(
     covmap: Dict[str, List[Tuple[int, int]]],
 ) -> Dict[str, List[Tuple[int, int]]]:
     return {
-        key:
-        sorted((int(line_no), int(hit_count))
-               for line_no, hit_count in entries)
+        key: sorted(
+            (int(line_no), int(hit_count)) for line_no, hit_count in entries)
         for key, entries in covmap.items()
     }
 
