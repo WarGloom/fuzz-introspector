@@ -47,8 +47,16 @@ if command -v cargo >/dev/null 2>&1; then
 	echo "Rust toolchain already present: $(cargo --version)"
 else
 	echo "Installing Rust toolchain via rustup (non-interactive, no PATH modification)"
-	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
-		sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable
+	rustup_init="$(mktemp)"
+	curl --proto '=https' --tlsv1.2 -sSf \
+		"https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init" \
+		-o "${rustup_init}"
+	printf '%s  %s\n' \
+		"20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c" \
+		"${rustup_init}" | sha256sum -c -
+	chmod +x "${rustup_init}"
+	"${rustup_init}" -y --no-modify-path --profile minimal --default-toolchain stable
+	rm -f "${rustup_init}"
 fi
 
 # Ensure cargo is on PATH for the remainder of this script.
