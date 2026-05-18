@@ -15,8 +15,13 @@
 
 import os
 import sys
-import atheris
 import pytest
+
+try:
+    import atheris
+except (AttributeError, ImportError) as exc:
+    pytest.skip(f"atheris is unavailable in this Python environment: {exc}",
+                allow_module_level=True)
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../../")
 
@@ -24,13 +29,7 @@ from fuzz_introspector import cfg_load  # noqa: E402
 from fuzz_introspector import exceptions  # noqa: E402
 
 
-@pytest.mark.parametrize(
-    "data",
-    [
-        b"random_data",
-        b"more random data"
-    ]
-)
+@pytest.mark.parametrize("data", [b"random_data", b"more random data"])
 @atheris.instrument_func
 def test_TestOneInput(data):
     """Fuzz cfg_load.data_file_read_calltree"""
@@ -62,11 +61,7 @@ def main():
     if not is_this_a_reproducer_run(sys.argv):
         atheris.instrument_all()
 
-    atheris.Setup(
-        sys.argv,
-        test_TestOneInput,
-        enable_python_coverage=True
-    )
+    atheris.Setup(sys.argv, test_TestOneInput, enable_python_coverage=True)
     atheris.Fuzz()
 
 

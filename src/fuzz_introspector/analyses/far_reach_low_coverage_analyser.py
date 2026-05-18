@@ -13,16 +13,22 @@
 # limitations under the License.
 """Analysis plugin for introspection of the functions which are far
 reached and with low coverage."""
+
+# pylint: disable=line-too-long
 import os
 import json
 import logging
+import collections
 
-from typing import (Any, List, Dict)
+from typing import Any, List, Dict, Optional
 
-from fuzz_introspector import (analysis, html_helpers)
+from fuzz_introspector import analysis, html_helpers
 
-from fuzz_introspector.datatypes import (project_profile, fuzzer_profile,
-                                         function_profile)
+from fuzz_introspector.datatypes import (
+    project_profile,
+    fuzzer_profile,
+    function_profile,
+)
 
 logger = logging.getLogger(name=__name__)
 
@@ -31,11 +37,11 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
     """Locate for the functions which are far reached and with
     low coverage."""
 
-    name: str = 'FarReachLowCoverageAnalyser'
+    name: str = "FarReachLowCoverageAnalyser"
 
     def __init__(self) -> None:
         self.json_results: Dict[str, Any] = {}
-        self.json_string_result = ''
+        self.json_string_result = ""
 
         # Default value for standalone analysis
         self.exclude_static_functions = False
@@ -78,10 +84,14 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
         """
         self.json_string_result = json_string
 
-    def set_flags(self, exclude_static_functions: bool,
-                  only_referenced_functions: bool, only_header_functions: bool,
-                  only_interesting_functions: bool,
-                  only_easy_fuzz_params: bool):
+    def set_flags(
+        self,
+        exclude_static_functions: bool,
+        only_referenced_functions: bool,
+        only_header_functions: bool,
+        only_interesting_functions: bool,
+        only_easy_fuzz_params: bool,
+    ):
         """Configure the flags from the CLI."""
         self.exclude_static_functions = exclude_static_functions
         self.only_referenced_functions = only_referenced_functions
@@ -97,35 +107,44 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
         """Configure the min complexity of functions to return from CLI."""
         self.min_complexity = min_complexity
 
-    def analysis_func(self,
-                      table_of_contents: html_helpers.HtmlTableOfContents,
-                      tables: List[str],
-                      proj_profile: project_profile.MergedProjectProfile,
-                      profiles: List[fuzzer_profile.FuzzerProfile],
-                      basefolder: str, coverage_url: str,
-                      conclusions: List[html_helpers.HTMLConclusion],
-                      out_dir: str) -> str:
+    def analysis_func(
+        self,
+        table_of_contents: html_helpers.HtmlTableOfContents,
+        tables: List[str],
+        proj_profile: project_profile.MergedProjectProfile,
+        profiles: List[fuzzer_profile.FuzzerProfile],
+        basefolder: str,
+        coverage_url: str,
+        conclusions: List[html_helpers.HTMLConclusion],
+        out_dir: str,
+    ) -> str:
         self.standalone_analysis(proj_profile, profiles, out_dir)
-        return ''
+        return ""
 
-    def standalone_analysis(self,
-                            proj_profile: project_profile.MergedProjectProfile,
-                            profiles: List[fuzzer_profile.FuzzerProfile],
-                            out_dir: str) -> None:
+    def standalone_analysis(
+        self,
+        proj_profile: project_profile.MergedProjectProfile,
+        profiles: List[fuzzer_profile.FuzzerProfile],
+        out_dir: str,
+    ) -> None:
         super().standalone_analysis(proj_profile, profiles, out_dir)
 
-        logger.info(' - Running analysis %s', self.get_name())
+        logger.info(" - Running analysis %s", self.get_name())
         logger.info(
-            ' - Settings: exclude_static_functions: %s, '
-            'only_referenced_functions: %s, '
-            'only_header_functions: %s, '
-            'only_interesting_functions: %s, '
-            'only_easy_fuzz_params: %s, '
-            'min_complexity: %d, max_functions: %d',
-            self.exclude_static_functions, self.only_referenced_functions,
-            self.only_header_functions, self.only_interesting_functions,
-            self.only_easy_fuzz_params, self.min_complexity,
-            self.max_functions)
+            " - Settings: exclude_static_functions: %s, "
+            "only_referenced_functions: %s, "
+            "only_header_functions: %s, "
+            "only_interesting_functions: %s, "
+            "only_easy_fuzz_params: %s, "
+            "min_complexity: %d, max_functions: %d",
+            self.exclude_static_functions,
+            self.only_referenced_functions,
+            self.only_header_functions,
+            self.only_interesting_functions,
+            self.only_easy_fuzz_params,
+            self.min_complexity,
+            self.max_functions,
+        )
 
         result_list: List[Dict[str, Any]] = []
 
@@ -140,8 +159,11 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
             xref_dict = {}
 
         # Get interesting functions sorted by complexity and runtime coverage
-        filtered_functions = self._get_functions_of_interest(
-            all_functions, proj_profile)
+        filtered_functions = self._get_native_functions_of_interest(
+            proj_profile, profiles, all_functions)
+        if filtered_functions is None:
+            filtered_functions = self._get_functions_of_interest(
+                all_functions, proj_profile)
 
         # Process the final result list of functions according to the
         # configured flags
@@ -149,6 +171,12 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
             # Check for max_functions count
             if len(result_list) >= self.max_functions:
                 break
+
+            # Keep this check in the final pass so native candidates preserve
+            # CLI semantics even though the native pre-filter does not receive
+            # the dynamic min_complexity value.
+            if function.cyclomatic_complexity < self.min_complexity:
+                continue
 
             # Check for only_referenced_functions flag
             if (self.only_referenced_functions
@@ -181,16 +209,76 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
 
         # Sort the result list
         result_list = sorted(result_list,
-                             key=lambda d: d['total_cyclomatic_complexity'],
+                             key=lambda d: d["total_cyclomatic_complexity"],
                              reverse=True)
 
-        self.json_results['functions'] = result_list
+        self.json_results["functions"] = result_list
         if self.dump_files:
-            result_json_path = os.path.join(out_dir, 'result.json')
-            logger.info('Found %d function candidiates.', len(result_list))
-            logger.info('Dumping result to %s', result_json_path)
-            with open(result_json_path, 'w') as f:
+            result_json_path = os.path.join(out_dir, "result.json")
+            logger.info("Found %d function candidiates.", len(result_list))
+            logger.info("Dumping result to %s", result_json_path)
+            with open(result_json_path, "w") as f:
                 json.dump(self.json_results, f)
+
+    def _get_native_functions_of_interest(
+        self,
+        proj_profile: project_profile.MergedProjectProfile,
+        profiles: List[fuzzer_profile.FuzzerProfile],
+        all_functions: List[function_profile.FunctionProfile],
+    ) -> Optional[List[function_profile.FunctionProfile]]:
+        """Return native-sorted candidate functions, or None for fallback."""
+        if not analysis.NativePluginProxy.is_enabled():
+            return None
+
+        # This mode requires per-project callsite cross-reference parity that
+        # the native plugin currently does not model.
+        if self.only_referenced_functions:
+            logger.info(
+                "[native] FarReachLowCoverageAnalyser: "
+                "falling back to Python path for only_referenced_functions")
+            return None
+
+        try:
+            native_result = analysis.get_native_plugin_proxy().run_analysis(
+                proj_profile, profiles, ["far_reach_low_coverage_analysis"])
+            native_rows = native_result["far_reach_low_coverage_analysis"][
+                "tables"]["far_reach_candidates"]
+        except (KeyError, IndexError, TypeError, AttributeError):
+            return None
+
+        if not native_rows:
+            return None
+
+        function_map: Dict[str, List[function_profile.FunctionProfile]] = (
+            collections.defaultdict(list))
+        for fd in all_functions:
+            function_map[fd.function_name].append(fd)
+
+        native_functions: List[function_profile.FunctionProfile] = []
+        for row in native_rows:
+            if not isinstance(row, dict):
+                return None
+
+            function_name = row.get("function_name")
+            if not isinstance(function_name, str):
+                return None
+
+            candidates = function_map.get(function_name)
+            if not candidates:
+                continue
+
+            # pop(0) is safe: function_map is freshly built in this scope
+            # and handles duplicate function names by consuming sequentially.
+            native_functions.append(candidates.pop(0))
+
+        if not native_functions:
+            return None
+
+        logger.info(
+            "[native] FarReachLowCoverageAnalyser: used Rust result (%d candidates)",
+            len(native_functions),
+        )
+        return native_functions
 
     def _get_cross_reference_dict(
             self, functions: List[function_profile.FunctionProfile]
@@ -214,12 +302,17 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
     ) -> List[function_profile.FunctionProfile]:
         """Internal helper function to get a sorted functions of interest."""
         filtered_functions = []
+        coverage_cache = {}
 
         for function in functions:
             # Skipping non-related jvm methods and methods from enum classes
             # is_accessible is True by default, i.e. for non jvm projects
             if (not function.is_accessible or function.is_jvm_library
                     or function.is_enum):
+                continue
+
+            # Skip low complexity by configured value
+            if function.cyclomatic_complexity < self.min_complexity:
                 continue
 
             coverage = proj_profile.get_func_hit_percentage(
@@ -229,16 +322,14 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
             if coverage > 20.0:
                 continue
 
-            # Skip low complexity by configured value
-            if function.cyclomatic_complexity < self.min_complexity:
-                continue
-
+            coverage_cache[function.function_name] = coverage
             filtered_functions.append(function)
 
         # Sort the filtered functions
         filtered_functions.sort(key=lambda x: (
             -x.cyclomatic_complexity,
-            proj_profile.get_func_hit_percentage(x.function_name)))
+            coverage_cache[x.function_name],
+        ))
 
         return filtered_functions
 
@@ -246,23 +337,23 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
             self, function: function_profile.FunctionProfile) -> bool:
         """Internal helper to determine if it is interesting for fuzzing."""
         interesting_fuzz_keywords = [
-            'deserialize',
-            'parse',
-            'parse_xml',
-            'read_file',
-            'read_json',
-            'read_xml',
-            'request',
-            'parse_header',
-            'parse_request',
-            'compress',
-            'file_read',
-            'read_message',
-            'load_image',
+            "deserialize",
+            "parse",
+            "parse_xml",
+            "read_file",
+            "read_json",
+            "read_xml",
+            "request",
+            "parse_header",
+            "parse_request",
+            "compress",
+            "file_read",
+            "read_message",
+            "load_image",
         ]
 
         if any(fuzz_keyword in function.function_name.lower() or
-               fuzz_keyword.replace('_', '') in function.function_name.lower()
+               fuzz_keyword.replace("_", "") in function.function_name.lower()
                for fuzz_keyword in interesting_fuzz_keywords):
             return True
 
@@ -273,11 +364,11 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
         """Internal helper to determine if the function only contains
         parameters that are easy to fuzz."""
         if len(function.arg_types) == 2:
-            return ('char *' in function.arg_types[0]
-                    and 'int' in function.arg_types[1])
+            return "char *" in function.arg_types[
+                0] and "int" in function.arg_types[1]
 
         if len(function.arg_types) == 1:
-            return ('char *' in function.arg_types[0]
-                    or 'string' in function.arg_types[0])
+            return ("char *" in function.arg_types[0]
+                    or "string" in function.arg_types[0])
 
         return False

@@ -16,8 +16,13 @@
 import os
 import sys
 import shutil
-import atheris
 import pytest
+
+try:
+    import atheris
+except (AttributeError, ImportError) as exc:
+    pytest.skip(f"atheris is unavailable in this Python environment: {exc}",
+                allow_module_level=True)
 
 import tempfile
 
@@ -34,13 +39,7 @@ with atheris.instrument_imports():
 lang_list = ["c-cpp", "python", "jvm"]
 
 
-@pytest.mark.parametrize(
-    "data",
-    [
-        b"random_data",
-        b"more random data"
-    ]
-)
+@pytest.mark.parametrize("data", [b"random_data", b"more random data"])
 @atheris.instrument_func
 def test_TestOneInput(data: bytes):
     fdp = atheris.FuzzedDataProvider(data)
@@ -66,17 +65,15 @@ def test_TestOneInput(data: bytes):
     analyses_to_run = []
 
     try:
-        commands.run_analysis_on_dir(
-            target_folder=report_dir,
-            coverage_url="random_coverage_url",
-            analyses_to_run=analyses_to_run,
-            correlation_file=correlation_file,
-            enable_all_analyses=False,
-            report_name="report name",
-            language=lang_list[lang_choice],
-            output_json=[],
-            parallelise=False
-        )
+        commands.run_analysis_on_dir(target_folder=report_dir,
+                                     coverage_url="random_coverage_url",
+                                     analyses_to_run=analyses_to_run,
+                                     correlation_file=correlation_file,
+                                     enable_all_analyses=False,
+                                     report_name="report name",
+                                     language=lang_list[lang_choice],
+                                     output_json=[],
+                                     parallelise=False)
     except exceptions.FuzzIntrospectorError:
         pass
     except KeyError:

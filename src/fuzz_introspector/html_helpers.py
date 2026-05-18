@@ -13,6 +13,10 @@
 # limitations under the License.
 """Module for creating HTML reports"""
 
+# pylint: disable=line-too-long,invalid-name,missing-function-docstring,unused-variable
+# pylint: disable=consider-using-join,consider-using-f-string,subprocess-run-check
+# pylint: disable=logging-fstring-interpolation
+
 from typing import (
     Any,
     Dict,
@@ -21,16 +25,31 @@ from typing import (
     Tuple,
 )
 
+import json
 import os
+import shutil
+import subprocess
+import sys
+
 import bs4
 import logging
 from datetime import datetime
 from enum import Enum
 
+from fuzz_introspector import backend_loaders
 from fuzz_introspector import utils, constants
 from fuzz_introspector.datatypes import fuzzer_profile
 
 logger = logging.getLogger(name=__name__)
+
+# Environment variables for native calltree bitmap backend
+FI_CALLTREE_BITMAP_BACKEND_ENV = "FI_CALLTREE_BITMAP_BACKEND"
+FI_CALLTREE_BITMAP_RUST_BIN_ENV = "FI_CALLTREE_BITMAP_RUST_BIN"
+FI_CALLTREE_BITMAP_GO_BIN_ENV = "FI_CALLTREE_BITMAP_GO_BIN"
+_BITMAP_BINARY_NAMES = {
+    backend_loaders.BACKEND_RUST: "native_calltree_bitmap_rust",
+    backend_loaders.BACKEND_GO: "native_calltree_bitmap_go",
+}
 
 
 class HTML_HEADING(Enum):
@@ -82,17 +101,17 @@ class HTMLConclusion:
 
 
 def html_table_add_row(elems: List[Any]) -> str:
-    html_str = "<tr>\n"
+    html_parts = ["<tr>\n"]
     for elem in elems:
-        html_str += f"<td>{elem}</td>\n"
-    html_str += "</tr>\n"
-    return html_str
+        html_parts.append(f"<td>{elem}</td>\n")
+    html_parts.append("</tr>\n")
+    return "".join(html_parts)
 
 
 def html_get_header(title: str = "Fuzz introspector") -> str:
     gtag_tracking = ""
     try:
-        gtag = os.environ['G_ANALYTICS_TAG']
+        gtag = os.environ["G_ANALYTICS_TAG"]
         gtag_tracking += f"""<!-- Google tag (gtag.js) -->
                 <script async src="https://www.googletagmanager.com/gtag/js?id={gtag}"></script>
                 <script>
@@ -143,7 +162,7 @@ def html_get_navbar(title: str) -> str:
     <div class="top-navbar">
         <div class="top-navbar-title-wrapper">
             <div class="top-navbar-title" style="margin-bottom: 10px; font-size:25px">
-                { title }
+                {title}
             </div>
             <div style="margin:0; font-size: 10px">
               For issues and ideas:
@@ -160,8 +179,8 @@ def html_get_navbar(title: str) -> str:
 def create_pfc_button(introspection_proj, coverage_url: str) -> str:
     """Creates the box holding fuzzer coverage links, including links
     to coverage reports per fuzzer."""
-    html_string = ""
-    html_string += """
+    html_parts = []
+    html_parts.append("""
                     <div class="yellow-button-wrapper"
                         style="position: relative; margin: 5px 0 30px 0">
                         <div class="yellow-button"
@@ -169,6 +188,7 @@ def create_pfc_button(introspection_proj, coverage_url: str) -> str:
                             Per-fuzzer coverage
                         </div>
                     <div class="per-fuzzer-coverage-dropdown" id="per-fuzzer-coverage-dropdown">"""
+                      )
     for profile in introspection_proj.profiles:
         target_name = profile.identifier
         target_coverage_url = utils.get_target_coverage_url(
@@ -187,14 +207,14 @@ def create_pfc_button(introspection_proj, coverage_url: str) -> str:
         elif profile.target_lang == "go":
             target_coverage_url += "/index.html"
 
-        html_string += f"""
+        html_parts.append(f"""
             <a href="{target_coverage_url}">
                 <div class="pfc-list-item">
                     {target_name}
                 </div>
-            </a>"""
-    html_string += "</div></div>"
-    return html_string
+            </a>""")
+    html_parts.append("</div></div>")
+    return "".join(html_parts)
 
 
 def html_get_table_of_contents(table_of_contents: HtmlTableOfContents,
@@ -214,10 +234,10 @@ def html_get_table_of_contents(table_of_contents: HtmlTableOfContents,
     elif introspection_proj.proj_profile.target_lang == "go":
         cov_index = "index.html"
     else:
-        cov_index = 'report.html'
+        cov_index = "report.html"
 
-    html_toc_string = ""
-    html_toc_string += f"""<div class="left-sidebar">\
+    html_parts = []
+    html_parts.append(f"""<div class="left-sidebar">\
                             <div class="left-sidebar-content-box"
                                 style="display:flex;flex-direction:column;
                                  padding: 0 20px; margin-top: 30px">
@@ -229,52 +249,66 @@ def html_get_table_of_contents(table_of_contents: HtmlTableOfContents,
                                         </div>
                                     </a>
                                 </div>
-                        """
+                        """)
     if introspection_proj.proj_profile.target_lang != "python":
-        html_toc_string += f"{per_fuzzer_coverage_button}"
+        html_parts.append(f"{per_fuzzer_coverage_button}")
 
-    html_toc_string += """</div>
+    html_parts.append("""</div>
                             <div class="left-sidebar-content-box">\
                                 <h2 style="margin-top:0px">Table of contents</h2>"""
+                      )
 
     for toc_entry in table_of_contents.entries:
         indentation = (toc_entry.heading_type.value - 1) * 16
-        html_toc_string += "<div style='margin-left: %spx'>" % indentation
-        html_toc_string += "    <a href=\"#%s\">%s</a>\n" % (
-            toc_entry.href_link, toc_entry.entry_title)
-        html_toc_string += "</div>\n"
-    html_toc_string += '    </div>\
-                        </div>'
+        html_parts.append("<div style='margin-left: %spx'>" % indentation)
+        html_parts.append('    <a href="#%s">%s</a>\n' % (
+            toc_entry.href_link,
+            toc_entry.entry_title,
+        ))
+        html_parts.append("</div>\n")
+    html_parts.append("    </div>\
+                        </div>")
 
-    return html_toc_string
+    return "".join(html_parts)
 
 
-def html_add_header_with_link(header_title: str,
-                              title_type: HTML_HEADING,
-                              table_of_contents: HtmlTableOfContents,
-                              link: Optional[str] = None,
-                              experimental: Optional[bool] = False) -> str:
+def html_add_header_with_link(
+    header_title: str,
+    title_type: HTML_HEADING,
+    table_of_contents: HtmlTableOfContents,
+    link: Optional[str] = None,
+    experimental: Optional[bool] = False,
+    extra_classes: Optional[str] = None,
+) -> str:
     if link is None:
         link = header_title.replace(" ", "-")
 
     if not experimental:
         table_of_contents.add_entry(header_title, link, title_type)
 
-    html_attributes = ""
+    classes = []
     if title_type == HTML_HEADING.H1 or experimental:
-        html_attributes += " class=\"report-title\""
+        classes.append("report-title")
+    if extra_classes:
+        classes.append(extra_classes)
 
-    html_string = f"<a id=\"{link}\">"
+    html_attributes = ""
+    if classes:
+        html_attributes = ' class="%s"' % (" ".join(classes))
+
+    html_string = f'<a id="{link}">'
     html_string += (
-        f"<h{title_type.value} {html_attributes}>{header_title}</h{title_type.value}>\n"
+        f"<h{title_type.value}{html_attributes}>{header_title}</h{title_type.value}>\n"
     )
     return html_string
 
 
-def html_create_table_head(table_head: str,
-                           items: List[Tuple[str, str]],
-                           sort_by_column: int = 0,
-                           sort_order: str = "asc") -> str:
+def html_create_table_head(
+    table_head: str,
+    items: List[Tuple[str, str]],
+    sort_by_column: int = 0,
+    sort_order: str = "asc",
+) -> str:
     html_str = (
         f"<table id='{table_head}' class='cell-border compact stripe' "
         f"data-sort-by-column='{sort_by_column}' data-sort-order='{sort_order}'>"
@@ -312,7 +346,7 @@ def create_collapsible_element(non_collapsed: str, collapsed: str,
     too large to display by default for all items, but we still want the user
     to be able to see the full substance of the item on demand.
     """
-    return f"""{ non_collapsed } : <div
+    return f"""{non_collapsed} : <div
     class='wrap-collabsible'>
         <input id='{collapsible_id}'
                class='toggle'
@@ -376,7 +410,7 @@ def create_conclusions_box(conclusions: List[HTMLConclusion]) -> str:
     bottom).
     """
     html_string = ""
-    html_string += "<div class=\"high-level-conclusions-wrapper\">"
+    html_string += '<div class="high-level-conclusions-wrapper">'
 
     # Sort conclusions to show highest level (positive conclusion) first
     conclusions = list(reversed(sorted(conclusions)))
@@ -388,10 +422,10 @@ def create_conclusions_box(conclusions: List[HTMLConclusion]) -> str:
         else:
             conclusion_color = "green"
         html_string += f"""<div class="line-wrapper">
-    <div class="high-level-conclusion { conclusion_color }-conclusion collapsed">
-    { conclusion.title }
+    <div class="high-level-conclusion {conclusion_color}-conclusion collapsed">
+    {conclusion.title}
         <div class="high-level-extended" style="background:transparent; overflow:hidden">
-            { conclusion.description }
+            {conclusion.description}
         </div>
     </div>
 </div>"""
@@ -403,31 +437,32 @@ def create_conclusions_box(conclusions: List[HTMLConclusion]) -> str:
 
 
 def create_calltree_color_distribution_table(color_list: List[str]) -> str:
-    html_string = ""
+    html_parts = []
     color_dictionary: Dict[str, int] = {}
     for color in color_list:
         color_dictionary[color] = color_dictionary.get(color, 0) + 1
 
-    html_string += ("<p>The distribution of callsites in terms of coloring is")
-    html_string += ("<table><tr>"
-                    "<th style=\"text-align: left;\">Color</th>"
-                    "<th style=\"text-align: left;\">Runtime hitcount</th>"
-                    "<th style=\"text-align: left;\">Callsite count</th>"
-                    "<th style=\"text-align: left;\">Percentage</th>"
-                    "</tr>")
+    html_parts.append(
+        "<p>The distribution of callsites in terms of coloring is")
+    html_parts.append("<table><tr>"
+                      '<th style="text-align: left;">Color</th>'
+                      '<th style="text-align: left;">Runtime hitcount</th>'
+                      '<th style="text-align: left;">Callsite count</th>'
+                      '<th style="text-align: left;">Percentage</th>'
+                      "</tr>")
     for _min, _max, color, rgb_code in constants.COLOR_CONSTANTS:
-        html_string += (f"<tr><td style=\"color:{color}; "
-                        f"text-shadow: -1px 0 black, 0 1px black, "
-                        f"1px 0 black, 0 -1px black;\"><b>{color}</b></td>")
+        html_parts.append(f'<tr><td style="color:{color}; '
+                          f"text-shadow: -1px 0 black, 0 1px black, "
+                          f'1px 0 black, 0 -1px black;"><b>{color}</b></td>')
         if _max == 1:
             interval = "0"
         elif _max > 1000:
             interval = f"{_min}+"
         else:
-            interval = f"[{_min}:{_max-1}]"
-        html_string += f"<td>{interval}</td>"
+            interval = f"[{_min}:{_max - 1}]"
+        html_parts.append(f"<td>{interval}</td>")
         cover_count = color_dictionary.get(color, 0)
-        html_string += f"<td>{cover_count}</td>"
+        html_parts.append(f"<td>{cover_count}</td>")
         if len(color_list) > 0:
             f1 = float(cover_count)
             f2 = float(len(color_list))
@@ -435,25 +470,191 @@ def create_calltree_color_distribution_table(color_list: List[str]) -> str:
         else:
             percentage_c = 0.0
         percentage_s = str(percentage_c)[0:4]
-        html_string += f"<td>{percentage_s}%</td>"
-        html_string += "</tr>"
+        html_parts.append(f"<td>{percentage_s}%</td>")
+        html_parts.append("</tr>")
 
     # Add a row with total amount of callsites
-    html_string += f"<tr><td>All colors</td><td>{len(color_list)}</td><td>100</td></tr>"
-    html_string += "</table>"
-    html_string += "</p>"
-    return html_string
+    html_parts.append(
+        f"<tr><td>All colors</td><td>{len(color_list)}</td><td>100</td></tr>")
+    html_parts.append("</table>")
+    html_parts.append("</p>")
+    return "".join(html_parts)
 
 
-def create_horisontal_calltree_image(image_name: str,
-                                     profile: fuzzer_profile.FuzzerProfile,
-                                     dump_files: bool, out_dir) -> List[str]:
+def _resolve_bitmap_binary(backend: str) -> str | None:
+    """Locate the native calltree bitmap binary for the selected backend.
+
+    Discovery order:
+      1. Backend-specific env var or ``FI_CALLTREE_BITMAP_BIN``
+      2. Repo-relative tool binary
+      3. ``shutil.which()`` on PATH
+    """
+    command = backend_loaders.resolve_backend_command("FI_CALLTREE_BITMAP",
+                                                      backend)
+    if command:
+        explicit = command[0]
+        if os.path.isfile(explicit):
+            return explicit
+        logger.warning(
+            "Resolved bitmap command %s does not exist; trying fallbacks",
+            explicit)
+
+    binary_name = _BITMAP_BINARY_NAMES.get(backend, "")
+    if not binary_name:
+        return None
+
+    try:
+        repo_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        candidate = os.path.join(repo_root, "tools", binary_name, "target",
+                                 "release", binary_name)
+        if backend == backend_loaders.BACKEND_GO:
+            candidate = os.path.join(repo_root, "tools", binary_name,
+                                     binary_name)
+        if os.path.isfile(candidate):
+            return candidate
+    except Exception:
+        pass
+
+    found = shutil.which(binary_name)
+    if found:
+        return found
+
+    return None
+
+
+def render_calltree_bitmaps_native(
+    jobs: list[tuple[str, list[str], str]], ) -> dict[str, list[str]] | None:
+    """Render calltree bitmaps using the selected native backend.
+
+    Parameters
+    ----------
+    jobs : list of (image_name, color_list, out_dir) tuples
+        Each tuple describes one bitmap to render.
+
+    Returns
+    -------
+    dict mapping image_name -> color_list on success, or None on failure
+    (caller should fall back to matplotlib).
+    """
+    backend = backend_loaders.resolve_component_backend(
+        FI_CALLTREE_BITMAP_BACKEND_ENV)
+    if backend not in (backend_loaders.BACKEND_RUST,
+                       backend_loaders.BACKEND_GO):
+        return None
+
+    binary_name = _BITMAP_BINARY_NAMES[backend]
+    bin_path = _resolve_bitmap_binary(backend)
+    if bin_path is None:
+        logger.debug(
+            "Native bitmap binary not found; falling back to matplotlib")
+        return None
+
+    # Build the JSON payload
+    bitmap_jobs = []
+    for image_name, color_list, out_dir in jobs:
+        colors = color_list if color_list else ["red"]
+        bitmap_jobs.append({
+            "job_id": image_name,
+            "output_path": os.path.join(out_dir, image_name),
+            "color_list": colors,
+        })
+
+    payload = {
+        "schema_version": 1,
+        "width": 1500,
+        "height": 250,
+        "jobs": bitmap_jobs,
+    }
+
+    try:
+        result = subprocess.run(
+            [bin_path],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except FileNotFoundError:
+        logger.warning("%s binary not found at %s", binary_name, bin_path)
+        return None
+    except subprocess.TimeoutExpired:
+        logger.warning("%s timed out after 120s", binary_name)
+        return None
+    except OSError as exc:
+        logger.warning("Failed to run %s: %s", binary_name, exc)
+        return None
+
+    if result.returncode != 0:
+        logger.warning(
+            "%s exited with code %d; stderr: %s",
+            binary_name,
+            result.returncode,
+            result.stderr[:500] if result.stderr else "(empty)",
+        )
+        return None
+
+    try:
+        output = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        logger.warning("%s produced invalid JSON: %s", binary_name, exc)
+        return None
+
+    if output.get("status") not in ("success", "partial"):
+        logger.warning(
+            "%s reported status=%s: %s",
+            binary_name,
+            output.get("status"),
+            output.get("error", ""),
+        )
+        return None
+
+    # Build result mapping: image_name -> color_list
+    result_map: dict[str, list[str]] = {}
+    for job_result in output.get("results", []):
+        if job_result.get("status") == "ok":
+            # Find the matching input job to get the color_list
+            for image_name, color_list, _out_dir in jobs:
+                if image_name == job_result["job_id"]:
+                    result_map[image_name] = color_list if color_list else [
+                        "red"
+                    ]
+                    break
+
+    if not result_map:
+        logger.warning("%s produced no successful results", binary_name)
+        return None
+
+    logger.info(
+        "Native bitmap backend rendered %d/%d bitmaps successfully",
+        len(result_map),
+        len(jobs),
+    )
+    return result_map
+
+
+def create_horisontal_calltree_image(
+    image_name: str,
+    profile: fuzzer_profile.FuzzerProfile,
+    dump_files: bool,
+    out_dir,
+    prerendered_colors: Optional[List[str]] = None,
+) -> List[str]:
     """
     Creates a horisontal image of the calltree. The height is fixed and
     each element on the x-axis shows a node in the calltree in the form
     of a rectangle. The rectangle is red if not visited and green if visited.
     """
+    # If the bitmap was already rendered by the native batch backend,
+    # just return the pre-computed color list.
+    if prerendered_colors is not None:
+        return prerendered_colors
+
     try:
+        import matplotlib
+
+        if "MPLBACKEND" not in os.environ:
+            matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from matplotlib.patches import Rectangle
     except ModuleNotFoundError:
@@ -463,7 +664,36 @@ def create_horisontal_calltree_image(image_name: str,
         logger.info("Could not import matplotlib. No bitmaps are created")
         return []
 
-    logger.info(f"Creating image {image_name}")
+    # matplotlib's rendering pipeline (tight_layout, savefig) uses deepcopy
+    # internally and can exhaust Python's default recursion limit (1000) on
+    # large figures, especially with Python 3.14+.  Temporarily raise the
+    # limit while we do the render work, then restore it unconditionally.
+    _prev_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(max(_prev_limit, 50000))
+    try:
+        return _create_horisontal_calltree_image_impl(plt, Rectangle,
+                                                      image_name, profile,
+                                                      dump_files, out_dir)
+    except RecursionError:
+        logger.warning(
+            "matplotlib RecursionError while rendering %s even with "
+            "recursion limit=%d; bitmap will not be created",
+            image_name,
+            sys.getrecursionlimit(),
+        )
+        return [cs.cov_color for cs in profile.get_callsites()] or ["red"]
+    finally:
+        sys.setrecursionlimit(_prev_limit)
+
+
+def _create_horisontal_calltree_image_impl(
+    plt: Any,
+    Rectangle: Any,
+    image_name: str,
+    profile: fuzzer_profile.FuzzerProfile,
+    dump_files: bool,
+    out_dir: Any,
+) -> List[str]:
 
     # Get the callsites of the profile as a list of colors.
     color_list: List[str] = [cs.cov_color for cs in profile.get_callsites()]
@@ -472,51 +702,80 @@ def create_horisontal_calltree_image(image_name: str,
     # Show one read rectangle if the list is empty. An alternative is
     # to not include the image at all.
     if len(color_list) == 0:
-        color_list = ['red']
+        color_list = ["red"]
 
-    # Create a plot
-    fig, ax = plt.subplots()
-    ax.clear()
-    fig.set_size_inches(15, 2.5)
-    ax.plot()
+    fig = None
+    try:
+        # Create a plot
+        fig, ax = plt.subplots()
+        ax.clear()
+        fig.set_size_inches(15, 2.5)
+        ax.plot()
 
-    # Create our rectangles
-    curr_x = 0.0
-    curr_size = 1.0
-    curr_color = color_list[0]
-    for i in range(1, len(color_list)):
-        if curr_color == color_list[i]:
-            curr_size += 1.0
-        else:
-            ax.add_patch(
-                Rectangle((curr_x, 0.0), curr_size, 1.0, color=curr_color))
+        # Create our rectangles
+        curr_x = 0.0
+        curr_size = 1.0
+        curr_color = color_list[0]
+        for i in range(1, len(color_list)):
+            if curr_color == color_list[i]:
+                curr_size += 1.0
+            else:
+                ax.add_patch(
+                    Rectangle((curr_x, 0.0), curr_size, 1.0, color=curr_color))
 
-            # Start next color area
-            curr_x += curr_size
-            curr_color = color_list[i]
-            curr_size = 1.0
-    # Plot the last case
-    ax.add_patch(Rectangle((curr_x, 0.0), curr_size, 1.0, color=curr_color))
-    logger.info("- iterated over color list")
+                # Start next color area
+                curr_x += curr_size
+                curr_color = color_list[i]
+                curr_size = 1.0
+        # Plot the last case
+        ax.add_patch(Rectangle((curr_x, 0.0), curr_size, 1.0,
+                               color=curr_color))
+        logger.info("- iterated over color list")
 
-    # Save the image
-    if dump_files:
-        logger.info("- saving image")
-        ax.set_yticklabels([])
-        ax.set_yticks([])
-        xlabel = ax.set_xlabel("Callsite index")
-
-        plt.title(image_name.replace(".png", "").replace("_colormap", ""))
-        fig.tight_layout()
-        fig.savefig(os.path.join(out_dir, image_name),
-                    bbox_extra_artists=[xlabel])
-        logger.info("- image saved")
-    return color_list
+        # Save the image
+        if dump_files:
+            logger.info("- saving image")
+            ax.set_yticks([])
+            xlabel = ax.set_xlabel("Callsite index")
+            plt.title(image_name.replace(".png", "").replace("_colormap", ""))
+            out_path = os.path.join(out_dir, image_name)
+            try:
+                # tight_layout and bbox_extra_artists both trigger deepcopy
+                # internally, which can hit Python's recursion limit on large
+                # figures with matplotlib on Python 3.14+. Try the full save
+                # first; if it recursion-crashes, fall back to a simpler save.
+                fig.tight_layout()
+                fig.savefig(out_path, bbox_extra_artists=[xlabel])
+            except RecursionError:
+                logger.debug(
+                    "matplotlib RecursionError during save; retrying without "
+                    "tight_layout/bbox_extra_artists")
+                try:
+                    fig.savefig(out_path)
+                except RecursionError:
+                    logger.warning(
+                        "matplotlib RecursionError on plain savefig for %s; "
+                        "bitmap will not be created",
+                        image_name,
+                    )
+                    return color_list
+            logger.info("- image saved")
+        return color_list
+    except RecursionError:
+        logger.warning(
+            "matplotlib RecursionError while building figure for %s; "
+            "bitmap will not be created",
+            image_name,
+        )
+        return color_list
+    finally:
+        if fig is not None:
+            plt.close(fig)
 
 
 def html_get_report_creation_tag() -> str:
     html_overview = "<b>Report generation date:</b>"
-    html_overview += datetime.today().strftime('%Y-%m-%d')
+    html_overview += datetime.today().strftime("%Y-%m-%d")
     html_overview += "<br>"
     return html_overview
 
