@@ -27,7 +27,7 @@ dependencies = [
 "matplotlib==3.10.0",
 "PyYAML==6.0.2",
 "soupsieve==2.2.1",
-"yapf==0.40.1",
+"yapf==0.32.0",
 "flake8",
 "pep8",
 "mypy",
