@@ -439,15 +439,16 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         filename = f"sink_function_callpath_{index}.html"
 
         depth_count = 0
-        section = "<h1>Sink Function Callpath</h1>"
-        section += '<div id="calltree-wrapper">'
-        section += '<div class="call-tree-section-wrapper">'
+        section_list = [
+            "<h1>Sink Function Callpath</h1>", '<div id="calltree-wrapper">',
+            '<div class="call-tree-section-wrapper">'
+        ]
         for fd in callpath:
             indentation = f"{int(depth_count) * 16 + 100}px"
             link, line = self._retrieve_function_link(fd, proj_profile)
 
-            section += '<div class="red-background coverage-line">'
-            section += f"""<span class="coverage-line-inner"
+            section_list.append('<div class="red-background coverage-line">')
+            section_list.append(f"""<span class="coverage-line-inner"
                 data-calltree-idx="{depth_count:05}"
                 data-paddingleft="{indentation}" style="padding-left: {indentation}">
                 <span class="node-depth-wrapper">{depth_count}</span>
@@ -462,20 +463,22 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
                             {depth_count:05}
                         </span>
                     </span>
-                </span>"""
-            section += ('<div class="calltree-line-wrapper open '
-                        f"level-{depth_count} "
-                        f'data-paddingleft="{indentation}">')
+                </span>""")
+            section_list.append('<div class="calltree-line-wrapper open '
+                                f"level-{depth_count} "
+                                f'data-paddingleft="{indentation}">')
 
             depth_count += 1
 
         # Ending all opened <div>
         if depth_count == 1:
-            section += "</div></div>"
+            section_list.append("</div></div>")
         else:
-            section += "</div>" * int(depth_count - 1) * 2 + "</div></div>"
+            section_list.append("</div>" * int(depth_count - 1) * 2 +
+                                "</div></div>")
 
-        section += "</div></div></div>"
+        section_list.append("</div></div></div>")
+        section = "".join(section_list)
 
         html = html_helpers.html_get_header(title="Fuzz introspector")
         html += '<div class="content-wrapper calltree-page">'

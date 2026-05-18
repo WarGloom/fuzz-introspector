@@ -13,6 +13,7 @@
 ## 2024-05-18 - HTML String Concatenation Bottleneck
 **Learning:** Python's string concatenation using `+=` inside loops is notoriously slow due to O(N^2) memory reallocation. This was a significant bottleneck in Fuzz Introspector's HTML report generation (e.g. `html_report.py`, `html_helpers.py`) where large strings containing tables, inline JS, and JSON dumps were being appended repeatedly.
 **Action:** Always replace repetitive string concatenation loops (`html_str += ...`) with list accumulation and `"".join(list)`. It provides a significant, measurable performance boost for large string processing.
-## 2025-10-24 - HTML Generation String Concatenation Refactor
-**Learning:** Implemented the previously logged string concatenation performance optimization across core html generation loops (`html_report.py`) but failed initial code review due to missing code comments and left-over scratchpad files.
-**Action:** When acting as Bolt, ensure that all optimizations include clear code comments explaining the change ("Performance Optimization: ...") and remember to clean up any temporary python scripts or log files from the working tree before creating the pull request.
+
+## 2024-05-18 - HTML String Concatenation Bottleneck
+**Learning:** Python's string concatenation using `+=` inside loops is notoriously slow due to O(N^2) memory reallocation. This was a significant bottleneck in Fuzz Introspector's HTML report generation (e.g. `calltree_analysis.py`, `sinks_analyser.py`) where large strings containing tables, inline JS, and JSON dumps were being appended repeatedly.
+**Action:** Always replace repetitive string concatenation loops (`html_str += ...`) with list accumulation and `"".join(list)`. It provides a significant, measurable performance boost for large string processing.

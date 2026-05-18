@@ -127,7 +127,9 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         calltree_html_string = "<h1>Fuzzer calltree</h1>"
         calltree_html_string += '<div id="calltree-wrapper">'
 
-        calltree_html_section_string = "<div class='call-tree-section-wrapper'>"
+        calltree_html_section_list = [
+            "<div class='call-tree-section-wrapper'>"
+        ]
         nodes = cfg_load.extract_all_callsites(
             profile.fuzzer_callsite_calltree)
 
@@ -162,7 +164,7 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
             if i > 0:
                 previous_node = nodes[i - 1]
                 if previous_node.depth == node.depth:
-                    calltree_html_section_string += "</div>"
+                    calltree_html_section_list.append("</div>")
                 elif previous_node.depth > node.depth:
                     # We need to close one coverage-line and one
                     # calltree-line-wrapper for each depth, as well as the
@@ -171,14 +173,14 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                     divs_to_close = node_difference * 2 + 1
                     closing_divs = "</div>" * divs_to_close
 
-                    calltree_html_section_string += closing_divs
+                    calltree_html_section_list.append(closing_divs)
 
             # Add div for line itself.
-            calltree_html_section_string += (
+            calltree_html_section_list.append(
                 f'<div class="{color_to_be}-background coverage-line">')
-            calltree_html_section_string += self._get_span_row(
-                ct_idx_str, indentation, node, demangled_name, func_href,
-                callsite_link)
+            calltree_html_section_list.append(
+                self._get_span_row(ct_idx_str, indentation, node,
+                                   demangled_name, func_href, callsite_link))
 
             # If we are not at end
             if i < len(nodes) - 1:
@@ -187,9 +189,9 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                 # If depth is increasing then we should open a new div for
                 # folding the calltree.
                 if next_node.depth > node.depth:
-                    calltree_html_section_string += f"""<div
+                    calltree_html_section_list.append(f"""<div
         class="calltree-line-wrapper open level-{int(node.depth)}"
-         data-paddingleft="{indentation}" >"""
+         data-paddingleft="{indentation}" >""")
 
             # If we are at end, then we should close the remainding divs:
             # - the depth
@@ -200,18 +202,23 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                 # calltree-line-wrapper for each depth. Minus one line-wrapper
                 # for the level we did not take.
                 if node.depth == 1:
-                    calltree_html_section_string += "</div></div>"
+                    calltree_html_section_list.append("</div></div>")
                 elif node.depth > 1:
-                    calltree_html_section_string += (
-                        "</div>" * int(node.depth - 1) * 2 + "</div></div>")
+                    calltree_html_section_list.append("</div>" *
+                                                      int(node.depth - 1) * 2 +
+                                                      "</div></div>")
 
         # Close the opening two divs
-        calltree_html_section_string += "</div>"  # opening node
-        calltree_html_section_string += "</div>"  # call-tree-section-wrapper
+        calltree_html_section_list.append("</div>")  # opening node
+        calltree_html_section_list.append(
+            "</div>")  # call-tree-section-wrapper
 
         # Side overview wrapper holds the vertical bitmap image. The actual
         # visualisation happens in javascript rather than here.
-        calltree_html_section_string += '<div id="side-overview-wrapper"></div>'
+        calltree_html_section_list.append(
+            '<div id="side-overview-wrapper"></div>')
+
+        calltree_html_section_string = "".join(calltree_html_section_list)
 
         logger.info(
             "calltree_html_section_string: <divs>: %d -- </divs>: %d",
