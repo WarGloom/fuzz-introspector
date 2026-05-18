@@ -127,8 +127,6 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         calltree_html_string = "<h1>Fuzzer calltree</h1>"
         calltree_html_string += '<div id="calltree-wrapper">'
 
-        # Optimize HTML string concatenation: use list accumulation
-        # and "".join() instead of O(N^2) += operator
         calltree_html_section_list = [
             "<div class='call-tree-section-wrapper'>"
         ]
