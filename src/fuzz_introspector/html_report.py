@@ -1485,31 +1485,35 @@ def create_section_fuzzers_overview(
         introspection_proj: analysis.IntrospectionProject) -> str:
     """Section with table with overview of all fuzzers."""
     logger.info(" - Creating table with overview of all fuzzers")
-    html_report_core = '<div class="report-box">'
-    html_report_core += html_helpers.html_add_header_with_link(
-        "Fuzzers overview", html_helpers.HTML_HEADING.H1, table_of_contents)
-    html_report_core += '<div class="collapsible">'
+    # Performance Optimization: Using a list to collect string parts and joining them at the end
+    # is significantly faster than repetitive string concatenation (+=) in Python,
+    # reducing memory reallocation overhead and improving HTML generation time.
+    html_report_parts = ['<div class="report-box">']
+    html_report_parts.append(html_helpers.html_add_header_with_link(
+        "Fuzzers overview", html_helpers.HTML_HEADING.H1, table_of_contents))
+    html_report_parts.append('<div class="collapsible">')
     tables.append(f"myTable{len(tables)}")
-    html_report_core += create_overview_table(tables, introspection_proj)
+    html_report_parts.append(create_overview_table(tables, introspection_proj))
 
     # report-box
-    html_report_core += "</div>"  # .collapsible
-    html_report_core += "</div>"  # .report-box
-    return html_report_core
+    html_report_parts.append("</div>")  # .collapsible
+    html_report_parts.append("</div>")  # .report-box
+    return "".join(html_report_parts)
 
 
 def create_section_project_overview(table_of_contents, proj_profile,
                                     conclusions, report_name):
-    html_overview = '<div class="report-box">'
-    html_overview += html_helpers.html_get_report_creation_tag()
-    html_overview += html_helpers.html_add_header_with_link(
+    # Performance Optimization: Replaced O(N^2) string concatenation with O(N) list joins.
+    html_overview_parts = ['<div class="report-box">']
+    html_overview_parts.append(html_helpers.html_get_report_creation_tag())
+    html_overview_parts.append(html_helpers.html_add_header_with_link(
         f"Project overview: {report_name}",
         html_helpers.HTML_HEADING.H1,
         table_of_contents,
         link="Project-overview",
         extra_classes="no-pseudo",
-    )
-    html_overview += '<div class="collapsible">'
+    ))
+    html_overview_parts.append('<div class="collapsible">')
 
     #############################################
     # Section with high level suggestions
@@ -1522,18 +1526,18 @@ def create_section_project_overview(table_of_contents, proj_profile,
     # Reachability overview
     #############################################
     logger.info(" - Creating reachability overview table")
-    html_report_core = html_helpers.html_add_header_with_link(
+    html_report_core_parts = [html_helpers.html_add_header_with_link(
         "Reachability and coverage overview",
         html_helpers.HTML_HEADING.H2,
         table_of_contents,
-    )
+    )]
     top_summary = create_boxed_top_summary_info(proj_profile, conclusions)
-    html_report_core += top_summary
+    html_report_core_parts.append(top_summary)
 
     # Close the section
-    html_report_core += "</div>"  # .collapsible
-    html_report_core += "</div>"  # report-box
-    return html_overview, html_report_top, html_report_core
+    html_report_core_parts.append("</div>")  # .collapsible
+    html_report_core_parts.append("</div>")  # report-box
+    return "".join(html_overview_parts), html_report_top, "".join(html_report_core_parts)
 
 
 def create_section_fuzzer_detailed_section(
@@ -1547,6 +1551,7 @@ def create_section_fuzzer_detailed_section(
 ):
     """Section with details about each fuzzer, including calltree."""
     logger.info(" - Creating section with details about each fuzzer")
+    # Performance Optimization: Replaced O(N^2) string concatenation with O(N) list joins.
     html_report_parts: List[str] = [
         '<div class="report-box">',
         html_helpers.html_add_header_with_link("Fuzzer details",
@@ -1607,12 +1612,13 @@ def create_section_all_functions(table_of_contents, tables, proj_profile,
     """Table with details about all functions in the target project."""
     logger.info(
         " - Creating table with information about all functions in target")
-    html_report_core = '<div class="report-box">'
-    html_report_core += html_helpers.html_add_header_with_link(
+    # Performance Optimization: Replaced O(N^2) string concatenation with O(N) list joins.
+    html_report_parts = ['<div class="report-box">']
+    html_report_parts.append(html_helpers.html_add_header_with_link(
         "Project functions overview", html_helpers.HTML_HEADING.H1,
-        table_of_contents)
-    html_report_core += '<div class="collapsible">'
-    html_report_core += html_constants.INFO_ALL_FUNCTION_OVERVIEW_TEXT
+        table_of_contents))
+    html_report_parts.append('<div class="collapsible">')
+    html_report_parts.append(html_constants.INFO_ALL_FUNCTION_OVERVIEW_TEXT)
 
     table_id = "fuzzers_overview_table"
     tables.append(table_id)
@@ -1625,9 +1631,10 @@ def create_section_all_functions(table_of_contents, tables, proj_profile,
          marker_out_dir,
          table_id,
      ))
-    html_report_core += all_function_table
-    html_report_core += "</div>"  # .collapsible
-    html_report_core += "</div>"  # report box
+    html_report_parts.append(all_function_table)
+    html_report_parts.append("</div>")  # .collapsible
+    html_report_parts.append("</div>")  # report box
+    html_report_core = "".join(html_report_parts)
 
     return (
         all_function_table,
@@ -2151,13 +2158,15 @@ def create_html_report(
              conclusions,
              report_name,
          ))
+        # Performance Optimization: Replaced O(N^2) string concatenation with O(N) list joins.
+        html_report_core_parts = [html_report_core]
         _log_stage_telemetry("project_overview", stage_started,
                              stage_warn_seconds)
 
         # Create section with overview of all fuzzers
         stage_started = time.monotonic()
-        html_report_core += create_section_fuzzers_overview(
-            table_of_contents, tables, introspection_proj)
+        html_report_core_parts.append(create_section_fuzzers_overview(
+            table_of_contents, tables, introspection_proj))
         _log_stage_telemetry("fuzzers_overview", stage_started,
                              stage_warn_seconds)
 
@@ -2176,14 +2185,14 @@ def create_html_report(
             introspection_proj.proj_profile.basefolder,
             out_dir,
         )
-        html_report_core += html_all_function_section
+        html_report_core_parts.append(html_all_function_section)
         _log_stage_telemetry("all_functions_section", stage_started,
                              stage_warn_seconds)
 
         # Section with details of each fuzzer.
         stage_started = time.monotonic()
         fuzzer_table_data: Dict[str, Any] = {}
-        html_report_core += create_section_fuzzer_detailed_section(
+        html_report_core_parts.append(create_section_fuzzer_detailed_section(
             table_of_contents,
             introspection_proj,
             tables,
@@ -2191,13 +2200,13 @@ def create_html_report(
             fuzzer_table_data,
             dump_files,
             out_dir,
-        )
+        ))
         _log_stage_telemetry("fuzzer_detailed_section", stage_started,
                              stage_warn_seconds)
 
         # Generate sections for all optional analyses
         stage_started = time.monotonic()
-        html_report_core += create_section_optional_analyses(
+        html_report_core_parts.append(create_section_optional_analyses(
             table_of_contents,
             analyses_to_run,
             output_json,
@@ -2208,9 +2217,11 @@ def create_html_report(
             conclusions,
             dump_files,
             out_dir,
-        )
+        ))
         _log_stage_telemetry("optional_analyses", stage_started,
                              stage_warn_seconds)
+
+        html_report_core = "".join(html_report_core_parts)
 
         # Create HTML showing the conclusions at the top of the report.
         html_report_top += html_helpers.create_conclusions_box(conclusions)
