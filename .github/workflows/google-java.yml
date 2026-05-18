@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - 'frontends/java/**'
-      - '.github/workflows/google-java.yml'
       - 'tools/auto-fuzz/benchmark/jvm/**'
 jobs:
   formatting:
