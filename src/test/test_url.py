@@ -15,6 +15,7 @@
 
 import re
 import os
+import shutil
 import sys
 import configparser
 
@@ -25,29 +26,29 @@ from fuzz_introspector import commands  # noqa: E402
 
 def is_valid_gcloud_link(link):
     # Skip same page linkage
-    if link.startswith('#') or link.startswith('?'):
+    if link.startswith("#") or link.startswith("?"):
         return True
 
     # Skip out of scope linkage
-    if link.startswith('http'):
-        if not link.startswith('https://storage.googleapis.com/'):
+    if link.startswith("http"):
+        if not link.startswith("https://storage.googleapis.com/"):
             return True
 
-#    if link.startswith('https://storage.googleapis.com/'):
-    file_name = link.split('/')[-1].split('#')[0].split('?')[0]
-    if len(file_name.split('.')) == 1:
+    #    if link.startswith('https://storage.googleapis.com/'):
+    file_name = link.split("/")[-1].split("#")[0].split("?")[0]
+    if len(file_name.split(".")) == 1:
         return False
     else:
         return True
 
 
 def extract_link_from_html(html):
-    links = re.findall('href="([^\"]*)"', html)
+    links = re.findall('href="([^"]*)"', html)
     return links
 
 
 def test_regression_427():
-    """ Regression testing for Issue #427 """
+    """Regression testing for Issue #427"""
 
     assert not is_valid_gcloud_link(
         "https://storage.googleapis.com/oss-fuzz-coverage/bluez/reports/20220807/linux"
@@ -75,52 +76,58 @@ def test_run_analysis_on_dir():
     # Loop through each project config
     for test_case in config:
         # Retrieve test case config
-        if not os.path.isdir("./tmpdir"):
-            os.mkdir("./tmpdir")
-        os.chdir("./tmpdir")
+        original_cwd = os.getcwd()
+        try:
+            if not os.path.isdir("./tmpdir"):
+                os.mkdir("./tmpdir")
+            os.chdir("./tmpdir")
 
-        base_dir = "../%s/%s" % (report_dir, config.get(test_case, 'base_dir'))
-        language = config.get(test_case, 'language')
+            base_dir = "../%s/%s" % (report_dir, config.get(test_case, "base_dir"))
+            language = config.get(test_case, "language")
 
-        if not os.path.isdir(base_dir):
-            continue
+            if not os.path.isdir(base_dir):
+                os.chdir(original_cwd)
+                continue
 
-        # Execute command to generate report
-        commands.run_analysis_on_dir(
-            base_dir,
-            "/covreport/linux",
-            [
-                "OptimalTargets",
-                "RuntimeCoverageAnalysis",
-                "FuzzEngineInputAnalysis",
-                "FilePathAnalyser"
-            ],
-            "",
-            False,
-            "Dummy Name",
-            language
-        )
+            # Execute command to generate report
+            commands.run_analysis_on_dir(
+                base_dir,
+                "/covreport/linux",
+                [
+                    "OptimalTargets",
+                    "RuntimeCoverageAnalysis",
+                    "FuzzEngineInputAnalysis",
+                    "FilePathAnalyser",
+                ],
+                "",
+                False,
+                "Dummy Name",
+                language,
+            )
 
-        # Temporary handling on fuzz_report.html only
-        html_file = open("fuzz_report.html", "r")
-        html = html_file.read()
-        html_file.close()
+            # Temporary handling on fuzz_report.html only
+            html_file = open("fuzz_report.html", "r")
+            html = html_file.read()
+            html_file.close()
 
-        for link in extract_link_from_html(html):
-            assert is_valid_gcloud_link(link)
+            for link in extract_link_from_html(html):
+                assert is_valid_gcloud_link(link)
 
-        # Loop and test on HTML result
-#        for file in os.scandir('.'):
-#            if(file.name.endswith('.html')):
-#                html_file = open(file.path, "r")
-#                html = html_file.read()
-#                html_file.close()
+            # Loop and test on HTML result
+            #        for file in os.scandir('.'):
+            #            if(file.name.endswith('.html')):
+            #                html_file = open(file.path, "r")
+            #                html = html_file.read()
+            #                html_file.close()
 
-#                for link in extract_link_from_html(html):
-#                    assert is_valid_link(link)
+            #                for link in extract_link_from_html(html):
+            #                    assert is_valid_link(link)
 
-        # Clean up tmp directory
-        for file in os.scandir("."):
-            os.remove(file)
-        os.chdir("..")
-        os.rmdir("./tmpdir")
+            # Clean up tmp directory
+            for file in os.scandir("."):
+                os.remove(file)
+        finally:
+            os.chdir(original_cwd)
+            tmpdir_path = os.path.join(original_cwd, "tmpdir")
+            if os.path.isdir(tmpdir_path):
+                shutil.rmtree(tmpdir_path, ignore_errors=True)

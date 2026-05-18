@@ -77,7 +77,7 @@ def analyse_folder(
     project: Project = Project([])
 
     # Process for different language
-    if language in [constants.LANGUAGES.C, constants.LANGUAGES.CPP]:
+    if language in {constants.LANGUAGES.C, constants.LANGUAGES.CPP}:
         logger.info('Going C/C++ route')
         logger.info('Loading tree-sitter trees')
 

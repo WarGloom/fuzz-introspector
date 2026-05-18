@@ -26,6 +26,25 @@ from fuzz_introspector.frontends import datatypes
 
 logger = logging.getLogger(name=__name__)
 
+# Optimization: Static sets for faster O(1) membership testing during AST traversal
+BRANCH_NODES = {
+    'if_expression',
+    'match_expression',
+    'while_expression',
+    'loop_expression',
+    'for_expression',
+    'try_expression',
+    'try_block',
+    'async_block',
+    'await_expression',
+    'unsafe_block',
+    'gen_block',
+    'break_expression',
+    'continue_expression',
+    '&&',
+    '||',
+}
+
 
 class RustSourceCodeFile(datatypes.SourceCodeFile):
     """Class for holding file-specific information."""
@@ -377,53 +396,30 @@ class RustFunction():
         """Gets complexity measure based on counting branch nodes in a
         function."""
 
-        branch_nodes = [
-            'if_expression',
-            'match_expression',
-            'while_expression',
-            'loop_expression',
-            'for_expression',
-            'try_expression',
-            'try_block',
-            'async_block',
-            'await_expression',
-            'unsafe_block',
-            'gen_block',
-            'break_expression',
-            'continue_expression',
-            '&&',
-            '||',
-        ]
-
-        def _traverse_node_complexity(node: Node):
-            count = 0
-            if node.type in branch_nodes:
+        count = 0
+        node = self.fuzzing_token_tree if self.fuzzing_token_tree else self.root
+        stack = [node]
+        while stack:
+            curr = stack.pop()
+            if curr.type in BRANCH_NODES:
                 count += 1
-            for item in node.children:
-                count += _traverse_node_complexity(item)
-            return count
+            stack.extend(curr.children)
 
-        if self.fuzzing_token_tree:
-            self.complexity += _traverse_node_complexity(
-                self.fuzzing_token_tree)
-        else:
-            self.complexity += _traverse_node_complexity(self.root)
+        self.complexity += count
 
     def _process_icount(self):
         """Get a pseudo measurement of instruction count."""
 
-        def _traverse_node_instr_count(node: Node) -> int:
-            count = 0
-            if 'expression' in node.type:
+        count = 0
+        node = self.fuzzing_token_tree if self.fuzzing_token_tree else self.root
+        stack = [node]
+        while stack:
+            curr = stack.pop()
+            if 'expression' in curr.type:
                 count += 1
-            for item in node.children:
-                count += _traverse_node_instr_count(item)
-            return count
+            stack.extend(curr.children)
 
-        if self.fuzzing_token_tree:
-            self.icount += _traverse_node_instr_count(self.fuzzing_token_tree)
-        else:
-            self.icount += _traverse_node_instr_count(self.root)
+        self.icount += count
 
     def extract_callsites(self, functions: dict[str, 'RustFunction']):
         """Extract callsites."""
@@ -439,7 +435,7 @@ class RustFunction():
             # Handle function call
             if func:
                 # Simple function call
-                if func.type in ['identifier', 'scoped_identifier']:
+                if func.type in {'identifier', 'scoped_identifier'}:
                     if func.text:
                         target_name = func.text.decode(encoding='utf-8',
                                                        errors='ignore')
@@ -493,7 +489,7 @@ class RustFunction():
             object_type = None
             if obj.type == 'call_expression':
                 object_type = _retrieve_return_type(obj)
-            elif obj.type in ['identifier', 'scoped_identifier']:
+            elif obj.type in {'identifier', 'scoped_identifier'}:
                 object_text = obj.text.decode(
                     encoding='utf-8', errors='ignore') if obj.text else ''
                 node = get_function_node(object_text, functions)
@@ -523,7 +519,7 @@ class RustFunction():
 
             func = call_expr.child_by_field_name('function')
             if func:
-                if func.type in ['identifier', 'scoped_identifier']:
+                if func.type in {'identifier', 'scoped_identifier'}:
                     func_name = func.text.decode(
                         encoding='utf-8', errors='ignore') if func.text else ''
                     node = get_function_node(func_name, functions)
@@ -626,6 +622,10 @@ class RustProject(datatypes.Project[RustSourceCodeFile]):
 
     def __init__(self, source_code_files: list[RustSourceCodeFile]):
         super().__init__(source_code_files)
+        self._function_uses_cache_key: tuple[int, int] | None = None
+        self._function_depth_cache_key: tuple[int, int] | None = None
+        self._function_uses_cache: dict[str, int] = {}
+        self._function_depth_cache: dict[str, int] = {}
 
     def generate_report(self,
                         entry_function: str = '',
@@ -671,6 +671,11 @@ class RustProject(datatypes.Project[RustSourceCodeFile]):
         for func in self.all_functions:
             func.extract_callsites(self.all_functions_dict)
 
+        function_uses_map = self._build_function_uses_map(self.all_functions)
+        function_depth_map = self._build_function_depth_map(
+            self.all_functions_dict)
+
+        for func in self.all_functions:
             func_dict: dict[str, Any] = {}
             func_dict['functionName'] = func.name
             func_dict['functionSourceFile'] = func.parent_source.source_file
@@ -690,10 +695,8 @@ class RustProject(datatypes.Project[RustSourceCodeFile]):
             func_dict['returnType'] = func.return_type
             func_dict['BranchProfiles'] = []
             func_dict['Callsites'] = func.detailed_callsites
-            func_dict['functionUses'] = self.calculate_function_uses(
-                func.name, self.all_functions)
-            func_dict['functionDepth'] = self.calculate_function_depth(
-                func, self.all_functions_dict)
+            func_dict['functionUses'] = function_uses_map.get(func.name, 0)
+            func_dict['functionDepth'] = function_depth_map.get(func.name, 0)
             func_dict['constantsTouched'] = []
             func_dict['BBCount'] = 0
             func_dict['signature'] = func.sig
@@ -710,6 +713,64 @@ class RustProject(datatypes.Project[RustSourceCodeFile]):
             report['All functions']['Elements'] = func_list
 
         self.report = report
+
+    def _build_function_uses_map(
+            self, functions: list[RustFunction]) -> dict[str, int]:
+        """Build reverse call graph based use counts."""
+        function_uses: dict[str, set[str]] = {
+            function.name: set()
+            for function in functions
+        }
+        function_names = set(function_uses.keys())
+
+        for function in functions:
+            for callsite_name, _ in function.base_callsites:
+                for suffix_index in range(len(callsite_name)):
+                    match_name = callsite_name[suffix_index:]
+                    if match_name in function_names:
+                        function_uses[match_name].add(function.name)
+
+        return {
+            function_name: len(caller_names)
+            for function_name, caller_names in function_uses.items()
+        }
+
+    def _build_function_depth_map(
+            self, all_functions: dict[str, RustFunction]) -> dict[str, int]:
+        """Build depth cache for all functions in project report."""
+        depth_cache: dict[str, int] = {}
+        recursion_stack: set[str] = set()
+        resolve_cache: dict[str, Optional[RustFunction]] = {}
+
+        def _resolve_target(name: str) -> Optional[RustFunction]:
+            if name not in resolve_cache:
+                resolve_cache[name] = get_function_node(
+                    name, all_functions, True)
+            return resolve_cache[name]
+
+        def _compute_depth(function: RustFunction) -> int:
+            if function.name in depth_cache:
+                return depth_cache[function.name]
+
+            if function.name in recursion_stack:
+                return 1
+
+            recursion_stack.add(function.name)
+            depth = 0
+            for target_name, _ in function.base_callsites:
+                target = _resolve_target(target_name)
+                if not target:
+                    continue
+                depth = max(depth, _compute_depth(target) + 1)
+
+            recursion_stack.remove(function.name)
+            depth_cache[function.name] = depth
+            return depth
+
+        for function in all_functions.values():
+            _compute_depth(function)
+
+        return depth_cache
 
     def dump_module_logic(self,
                           report_name: str = '',
@@ -740,48 +801,37 @@ class RustProject(datatypes.Project[RustSourceCodeFile]):
     def calculate_function_uses(self, target_name: str,
                                 all_functions: list[RustFunction]) -> int:
         """Calculate how many functions called the target function."""
-        func_use_count = 0
-        for function in all_functions:
-            found = False
-            for callsite in function.base_callsites:
-                if callsite[0] == target_name:
-                    found = True
-                    break
-                if callsite[0].endswith(target_name):
-                    found = True
-                    break
-            if found:
-                func_use_count += 1
-
-        return func_use_count
+        self._ensure_function_uses_cache(all_functions)
+        return self._function_uses_cache.get(target_name, 0)
 
     def calculate_function_depth(
             self, target_function: RustFunction,
             all_functions: dict[str, RustFunction]) -> int:
         """Calculate function depth of the target function."""
+        self._ensure_function_depth_cache(all_functions)
+        return self._function_depth_cache.get(target_function.name, 0)
 
-        def _recursive_function_depth(function: RustFunction) -> int:
-            callsites = function.base_callsites
-            if len(callsites) == 0:
-                return 0
+    def _ensure_function_uses_cache(self,
+                                    all_functions: list[RustFunction]) -> None:
+        """Ensure uses cache exists for helper lookups."""
+        cache_key = (id(all_functions), len(all_functions))
+        if self._function_uses_cache_key == cache_key:
+            return
 
-            depth = 0
-            visited.append(function.name)
-            for callsite in callsites:
-                target = get_function_node(callsite[0], all_functions, True)
-                if target and target.name in visited:
-                    depth = max(depth, 1)
-                elif target:
-                    depth = max(depth, _recursive_function_depth(target) + 1)
-                else:
-                    visited.append(callsite[0])
+        self._function_uses_cache = self._build_function_uses_map(
+            all_functions)
+        self._function_uses_cache_key = cache_key
 
-            return depth
+    def _ensure_function_depth_cache(
+            self, all_functions: dict[str, RustFunction]) -> None:
+        """Ensure depth cache exists for helper lookups."""
+        cache_key = (id(all_functions), len(all_functions))
+        if self._function_depth_cache_key == cache_key:
+            return
 
-        visited: list[str] = []
-        func_depth = _recursive_function_depth(target_function)
-
-        return func_depth
+        self._function_depth_cache = self._build_function_depth_map(
+            all_functions)
+        self._function_depth_cache_key = cache_key
 
     def extract_calltree(self,
                          source_file: str = '',

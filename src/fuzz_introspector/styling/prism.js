@@ -658,6 +658,9 @@ var Prism = (function (_self) {
 			var rest = grammar.rest;
 			if (rest) {
 				for (var token in rest) {
+					if (!Object.prototype.hasOwnProperty.call(rest, token) || token === '__proto__' || token === 'prototype' || token === 'constructor') {
+						continue;
+					}
 					grammar[token] = rest[token];
 				}
 

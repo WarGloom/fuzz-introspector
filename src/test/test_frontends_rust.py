@@ -13,7 +13,40 @@
 # limitations under the License.
 """Unit testing script for the Rust frontend"""
 
-from fuzz_introspector.frontends import oss_fuzz  # noqa: E402
+from types import SimpleNamespace
+
+from fuzz_introspector.frontends import frontend_rust, oss_fuzz  # noqa: E402
+
+
+def test_rust_metric_helpers_cache_maps():
+    project = frontend_rust.RustProject([])
+    target = SimpleNamespace(name='target', base_callsites=[])
+    caller = SimpleNamespace(name='caller', base_callsites=[('target', 8)])
+    all_functions_list = [target, caller]
+    all_functions_dict = {'target': target, 'caller': caller}
+
+    uses_calls = 0
+    depth_calls = 0
+
+    def _build_uses(_):
+        nonlocal uses_calls
+        uses_calls += 1
+        return {'target': 1, 'caller': 0}
+
+    def _build_depth(_):
+        nonlocal depth_calls
+        depth_calls += 1
+        return {'target': 0, 'caller': 1}
+
+    project._build_function_uses_map = _build_uses  # type: ignore[method-assign]
+    project._build_function_depth_map = _build_depth  # type: ignore[method-assign]
+
+    assert project.calculate_function_uses('target', all_functions_list) == 1
+    assert project.calculate_function_uses('target', all_functions_list) == 1
+    assert project.calculate_function_depth(target, all_functions_dict) == 0
+    assert project.calculate_function_depth(target, all_functions_dict) == 0
+    assert uses_calls == 1
+    assert depth_calls == 1
 
 
 def test_tree_sitter_rust_sample1():

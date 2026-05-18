@@ -13,7 +13,39 @@
 # limitations under the License.
 """Unit testing script for the JVM frontend"""
 
-from fuzz_introspector.frontends import oss_fuzz  # noqa: E402
+from types import SimpleNamespace
+
+from fuzz_introspector.frontends import frontend_jvm, oss_fuzz  # noqa: E402
+
+
+def test_jvm_metric_helpers_cache_maps():
+    project = frontend_jvm.JvmProject([])
+    method_a = SimpleNamespace(name='methodA', base_callsites=[])
+    method_b = SimpleNamespace(name='methodB', base_callsites=[('methodA', 3)])
+    all_methods = [method_a, method_b]
+
+    uses_calls = 0
+    depth_calls = 0
+
+    def _build_uses(_):
+        nonlocal uses_calls
+        uses_calls += 1
+        return {'methodA': 1, 'methodB': 0}
+
+    def _build_depth(_):
+        nonlocal depth_calls
+        depth_calls += 1
+        return {'methodA': 0, 'methodB': 1}
+
+    project._build_method_uses_map = _build_uses  # type: ignore[method-assign]
+    project._build_method_depth_map = _build_depth  # type: ignore[method-assign]
+
+    assert project.calculate_method_uses('methodA', all_methods) == 1
+    assert project.calculate_method_uses('methodA', all_methods) == 1
+    assert project.calculate_method_depth(method_a, all_methods) == 0
+    assert project.calculate_method_depth(method_a, all_methods) == 0
+    assert uses_calls == 1
+    assert depth_calls == 1
 
 
 def test_tree_sitter_jvm_sample1():

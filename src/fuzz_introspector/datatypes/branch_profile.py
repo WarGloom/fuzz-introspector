@@ -13,6 +13,8 @@
 # limitations under the License.
 """Branch profiler"""
 
+# pylint: disable=line-too-long,consider-using-enumerate
+
 import logging
 from typing import (
     Any,
@@ -50,11 +52,11 @@ class BranchProfile:
 
     def assign_from_yaml_elem(self, elem: Dict[Any, Any]) -> None:
         # This skips the path, as it may cause incosistancy vs coverage file names path
-        self.branch_pos = elem['Branch String'].split('/')[-1]
-        for br_side_elem in elem['Branch Sides']:
+        self.branch_pos = elem["Branch String"].split("/")[-1]
+        for br_side_elem in elem["Branch Sides"]:
             bs = BranchSide()
-            bs.pos = br_side_elem['BranchSide']
-            bs.funcs = utils.load_func_names(br_side_elem['BranchSideFuncs'])
+            bs.pos = br_side_elem["BranchSide"]
+            bs.funcs = utils.load_func_names(br_side_elem["BranchSideFuncs"])
             self.sides.append(bs)
 
     def assign_from_coverage(self, counts: List[str]) -> None:
@@ -80,7 +82,11 @@ class BranchProfile:
 
         print(self.branch_pos)
         for side in self.sides:
-            print(side.pos, side.unique_reachable_complexity,
-                  side.unique_not_covered_complexity,
-                  side.reachable_complexity, side.not_covered_complexity,
-                  len(side.funcs))
+            print(
+                side.pos,
+                side.unique_reachable_complexity,
+                side.unique_not_covered_complexity,
+                side.reachable_complexity,
+                side.not_covered_complexity,
+                len(side.funcs),
+            )

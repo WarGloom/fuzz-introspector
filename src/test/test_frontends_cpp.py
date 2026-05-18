@@ -14,7 +14,39 @@
 """Unit testing script for the CPP frontend"""
 
 import os
-from fuzz_introspector.frontends import oss_fuzz  # noqa: E402
+from types import SimpleNamespace
+
+from fuzz_introspector.frontends import frontend_c_cpp, oss_fuzz  # noqa: E402
+
+
+def test_cpp_function_metric_helpers_cache_maps():
+    project = frontend_c_cpp.CppProject([])
+    target = SimpleNamespace(name='target', base_callsites=[])
+    caller = SimpleNamespace(name='caller', base_callsites=[('target', 1)])
+    project.all_functions = [target, caller]
+
+    uses_calls = 0
+    depth_calls = 0
+
+    def _build_uses(_):
+        nonlocal uses_calls
+        uses_calls += 1
+        return {'target': 1, 'caller': 0}
+
+    def _build_depth(_):
+        nonlocal depth_calls
+        depth_calls += 1
+        return {'target': 0, 'caller': 1}
+
+    project._build_function_uses_map = _build_uses  # type: ignore[method-assign]
+    project._build_function_depth_map = _build_depth  # type: ignore[method-assign]
+
+    assert project._calculate_function_uses('target') == 1
+    assert project._calculate_function_uses('target') == 1
+    assert project._calculate_function_depth(target) == 0
+    assert project._calculate_function_depth(target) == 0
+    assert uses_calls == 1
+    assert depth_calls == 1
 
 
 def test_tree_sitter_cpp_sample1():
