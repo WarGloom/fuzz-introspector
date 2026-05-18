@@ -455,6 +455,7 @@ def analyse(args) -> int:
         only_interesting_functions = args.only_interesting_functions
         only_easy_fuzz_params = args.only_easy_fuzz_params
         max_functions = args.max_functions
+        min_complexity = args.min_complexity
 
         target_analyser.set_flags(
             exclude_static_functions,
@@ -464,6 +465,7 @@ def analyse(args) -> int:
             only_easy_fuzz_params,
         )
         target_analyser.set_max_functions(max_functions)
+        target_analyser.set_min_complexity(min_complexity)
     elif target_analyser.get_name() == "FrontendAnalyser":
         target_analyser.set_base_information(args.target_dir, language)
 

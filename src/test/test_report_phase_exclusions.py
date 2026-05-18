@@ -364,6 +364,82 @@ def test_analyse_loads_and_forwards_report_exclusions(monkeypatch, tmp_path):
     assert captured["standalone_called"]
 
 
+def test_analyse_wires_far_reach_min_complexity(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeFarReachAnalysis:
+
+        @classmethod
+        def get_name(cls) -> str:
+            return "FarReachLowCoverageAnalyser"
+
+        def set_flags(self, *flags) -> None:
+            captured["flags"] = flags
+
+        def set_max_functions(self, max_functions: int) -> None:
+            captured["max_functions"] = max_functions
+
+        def set_min_complexity(self, min_complexity: int) -> None:
+            captured["min_complexity"] = min_complexity
+
+        def standalone_analysis(self, *_args, **_kwargs) -> None:
+            captured["standalone_called"] = True
+
+    class FakeIntrospectionProject:
+
+        def __init__(self, language, target_folder, coverage_url):
+            captured["init"] = (language, target_folder, coverage_url)
+
+        def load_data_files(
+            self,
+            parallelise,
+            correlation_file,
+            out_dir,
+            harness_lists=None,
+            exclude_patterns=None,
+            exclude_function_patterns=None,
+        ):
+            self.proj_profile = {}
+            self.profiles = []
+
+    args = type(
+        "Args",
+        (),
+        {
+            "language": "c-cpp",
+            "target_dir": "/workspace/project",
+            "out_dir": str(tmp_path),
+            "analyser": "FarReachLowCoverageAnalyser",
+            "source_file": "",
+            "source_line": 0,
+            "exclude_static_functions": True,
+            "only_referenced_functions": False,
+            "only_header_functions": True,
+            "only_interesting_functions": False,
+            "only_easy_fuzz_params": True,
+            "max_functions": 25,
+            "min_complexity": 7,
+        },
+    )()
+
+    monkeypatch.setattr(
+        commands.analysis,
+        "get_all_standalone_analyses",
+        lambda: [FakeFarReachAnalysis],
+    )
+    monkeypatch.setattr(
+        commands.analysis, "IntrospectionProject", FakeIntrospectionProject
+    )
+    monkeypatch.setattr(commands.oss_fuzz, "analyse_folder", lambda **kwargs: None)
+
+    assert commands.analyse(args) == 0
+
+    assert captured["flags"] == (True, False, True, False, True)
+    assert captured["max_functions"] == 25
+    assert captured["min_complexity"] == 7
+    assert captured["standalone_called"]
+
+
 def test_load_report_exclusion_patterns_from_config_reads_file_and_function_lists(
     tmp_path,
 ):
