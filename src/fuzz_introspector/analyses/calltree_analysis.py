@@ -489,7 +489,7 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         # Performance Optimization: Use list accumulation instead of += string concatenation
         html_table_list: List[str] = []
         html_table_list.append("<p class='no-top-margin'>The followings are "
-                             "the branches where fuzzer fails to bypass.</p>")
+                               "the branches where fuzzer fails to bypass.</p>")
         tables.append(f"myTable{len(tables)}")
 
         branch_table_rows = [
