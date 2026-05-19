@@ -637,28 +637,30 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
 
         handled: list[str] = []
 
-        html = "<table><thead>"
-        html += '<th bgcolor="#282A36">Blocker function</th>'
-        html += '<th bgcolor="#282A36">Arguments type</th>'
-        html += '<th bgcolor="#282A36">Return type</th>'
-        html += '<th bgcolor="#282A36">Constants touched</th>'
-        html += "</thead><tbody>"
+        # Performance Optimization: Use list accumulation instead of += string concatenation
+        html_list: list[str] = []
+        html_list.append("<table><thead>")
+        html_list.append('<th bgcolor="#282A36">Blocker function</th>')
+        html_list.append('<th bgcolor="#282A36">Arguments type</th>')
+        html_list.append('<th bgcolor="#282A36">Return type</th>')
+        html_list.append('<th bgcolor="#282A36">Constants touched</th>')
+        html_list.append("</thead><tbody>")
         for blocker in blocker_list:
             if blocker.function_name in handled:
                 # Skip repeat blockers
                 continue
             handled.append(blocker.function_name)
             link, line = self._retrieve_function_link(blocker, proj_profile)
-            html += f'<tr><td style="max-width: 150px">{blocker.function_name}<br/>'
-            html += f'in <a href="{link}">'
-            html += f"{blocker.function_source_file}:{line}</a>"
-            html += "</td>"
-            html += f'<td style="max-width: 150px">{str(blocker.arg_types)}</td>'
-            html += f'<td style="max-width: 150px">{str(blocker.return_type)}</td>'
-            html += (f'<td style="max-width: 150px">'
-                     f"{str(blocker.constants_touched)}</td></tr>")
-        html += "</tbody></table>"
-        return html
+            html_list.append(f'<tr><td style="max-width: 150px">{blocker.function_name}<br/>')
+            html_list.append(f'in <a href="{link}">')
+            html_list.append(f"{blocker.function_source_file}:{line}</a>")
+            html_list.append("</td>")
+            html_list.append(f'<td style="max-width: 150px">{str(blocker.arg_types)}</td>')
+            html_list.append(f'<td style="max-width: 150px">{str(blocker.return_type)}</td>')
+            html_list.append(f'<td style="max-width: 150px">'
+                             f"{str(blocker.constants_touched)}</td></tr>")
+        html_list.append("</tbody></table>")
+        return "".join(html_list)
 
     def _retrieve_content_rows(
         self,
@@ -837,15 +839,17 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         logger.info(fuzzer_name_list)
 
         # Generate html section header for sink analyser
-        html_string = '<div class="report-box">'
+        # Performance Optimization: Use list accumulation instead of += string concatenation
+        html_list: list[str] = []
+        html_list.append('<div class="report-box">')
 
-        html_string += html_helpers.html_add_header_with_link(
+        html_list.append(html_helpers.html_add_header_with_link(
             "Sink analyser for CWEs", html_helpers.HTML_HEADING.H1,
-            table_of_contents)
-        html_string += '<div class="collapsible">'
+            table_of_contents))
+        html_list.append('<div class="collapsible">')
 
         # Generate tables for each CWEs
-        cwe_html_string = ""
+        cwe_html_list: list[str] = []
         for cwe in CWES:
             logger.info(" - Running analysis %s for %s", self.get_name(), cwe)
 
@@ -874,15 +878,15 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
             if not self.display_html or not html_rows:
                 continue
 
-            cwe_html_string += html_helpers.html_add_header_with_link(
+            cwe_html_list.append(html_helpers.html_add_header_with_link(
                 f"Sink functions/methods found for {cwe}",
                 html_helpers.HTML_HEADING.H2,
                 table_of_contents,
-            )
+            ))
 
             # Third party function calls table
             tables.append(f"myTable{len(tables)}")
-            cwe_html_string += html_helpers.html_create_table_head(
+            cwe_html_list.append(html_helpers.html_create_table_head(
                 tables[-1],
                 [
                     ("Target sink", ""),
@@ -906,15 +910,15 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
                         "dynamically.",
                     ),
                 ],
-            )
+            ))
 
-            cwe_html_string += html_rows
-            cwe_html_string += "</table>"
+            cwe_html_list.append(html_rows)
+            cwe_html_list.append("</table>")
 
         # Add cwe tables into the html report
-        if cwe_html_string:
+        if cwe_html_list:
             # At least one sink functions/methods found
-            html_string += (
+            html_list.append(
                 "<p>"
                 "This section contains multiple tables, each table "
                 "contains a list of sink functions/methods found in "
@@ -933,15 +937,15 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
                 "existing fuzzer from reaching the target sink functions/"
                 "methods dynamically."
                 "</p>")
-            html_string += cwe_html_string
+            html_list.extend(cwe_html_list)
         else:
             # No sink functions/methods found
-            html_string += (
+            html_list.append(
                 "<p>No sink functions/methods found in the target project.</p>"
             )
 
-        html_string += "</div>"  # .collapsible
-        html_string += "</div>"  # report-box
+        html_list.append("</div>")  # .collapsible
+        html_list.append("</div>")  # report-box
 
         json_report.add_analysis_json_str_as_dict_to_report(
             self.get_name(), self.get_json_string_result(), out_dir)
@@ -949,6 +953,6 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         logger.info(" - Finish running analysis %s", self.get_name())
 
         if self.display_html:
-            return html_string
+            return "".join(html_list)
 
         return ""
