@@ -651,12 +651,17 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
                 continue
             handled.append(blocker.function_name)
             link, line = self._retrieve_function_link(blocker, proj_profile)
-            html_list.append(f'<tr><td style="max-width: 150px">{blocker.function_name}<br/>')
+            html_list.append(
+                f'<tr><td style="max-width: 150px">{blocker.function_name}<br/>'
+            )
             html_list.append(f'in <a href="{link}">')
             html_list.append(f"{blocker.function_source_file}:{line}</a>")
             html_list.append("</td>")
-            html_list.append(f'<td style="max-width: 150px">{str(blocker.arg_types)}</td>')
-            html_list.append(f'<td style="max-width: 150px">{str(blocker.return_type)}</td>')
+            html_list.append(
+                f'<td style="max-width: 150px">{str(blocker.arg_types)}</td>')
+            html_list.append(
+                f'<td style="max-width: 150px">{str(blocker.return_type)}</td>'
+            )
             html_list.append(f'<td style="max-width: 150px">'
                              f"{str(blocker.constants_touched)}</td></tr>")
         html_list.append("</tbody></table>")
@@ -843,9 +848,10 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         html_list: list[str] = []
         html_list.append('<div class="report-box">')
 
-        html_list.append(html_helpers.html_add_header_with_link(
-            "Sink analyser for CWEs", html_helpers.HTML_HEADING.H1,
-            table_of_contents))
+        html_list.append(
+            html_helpers.html_add_header_with_link(
+                "Sink analyser for CWEs", html_helpers.HTML_HEADING.H1,
+                table_of_contents))
         html_list.append('<div class="collapsible">')
 
         # Generate tables for each CWEs
@@ -878,39 +884,41 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
             if not self.display_html or not html_rows:
                 continue
 
-            cwe_html_list.append(html_helpers.html_add_header_with_link(
-                f"Sink functions/methods found for {cwe}",
-                html_helpers.HTML_HEADING.H2,
-                table_of_contents,
-            ))
+            cwe_html_list.append(
+                html_helpers.html_add_header_with_link(
+                    f"Sink functions/methods found for {cwe}",
+                    html_helpers.HTML_HEADING.H2,
+                    table_of_contents,
+                ))
 
             # Third party function calls table
             tables.append(f"myTable{len(tables)}")
-            cwe_html_list.append(html_helpers.html_create_table_head(
-                tables[-1],
-                [
-                    ("Target sink", ""),
-                    (
-                        "Reached by fuzzer",
-                        "Is this code reachable by any fuzzer functions? "
-                        "Based on static analysis.",
-                    ),
-                    (
-                        "Function call path",
-                        "All call paths of the project calling to each sink "
-                        "function. This column is only shown if no fuzzer "
-                        "statically reached the target sink function.",
-                    ),
-                    (
-                        "Possible branch blockers",
-                        "Determine which branch blockers avoid fuzzers to cover the"
-                        "sink function during runtime and its information. This "
-                        "column is only shown if there is fuzzer statically reached "
-                        "the target sink function but failed to reach it "
-                        "dynamically.",
-                    ),
-                ],
-            ))
+            cwe_html_list.append(
+                html_helpers.html_create_table_head(
+                    tables[-1],
+                    [
+                        ("Target sink", ""),
+                        (
+                            "Reached by fuzzer",
+                            "Is this code reachable by any fuzzer functions? "
+                            "Based on static analysis.",
+                        ),
+                        (
+                            "Function call path",
+                            "All call paths of the project calling to each sink "
+                            "function. This column is only shown if no fuzzer "
+                            "statically reached the target sink function.",
+                        ),
+                        (
+                            "Possible branch blockers",
+                            "Determine which branch blockers avoid fuzzers to cover the"
+                            "sink function during runtime and its information. This "
+                            "column is only shown if there is fuzzer statically reached "
+                            "the target sink function but failed to reach it "
+                            "dynamically.",
+                        ),
+                    ],
+                ))
 
             cwe_html_list.append(html_rows)
             cwe_html_list.append("</table>")

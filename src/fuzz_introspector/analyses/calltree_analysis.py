@@ -412,28 +412,29 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
             "<p class='no-top-margin'>The following nodes "
             "represent call sites where fuzz blockers occur.</p>")
         tables.append(f"myTable{len(tables)}")
-        html_table_list.append(html_helpers.html_create_table_head(
-            tables[-1],
-            [
-                ("Amount of callsites blocked",
-                 "Total amount of callsites blocked"),
-                ("Calltree index",
-                 "Index in call tree where the fuzz blocker is."),
-                (
-                    "Parent function",
-                    "Function in which the call site that blocks resides.",
-                ),
-                ("Callsite", ""),
-                (
-                    "Largest blocked function",
-                    "This is the function with highest cyclomatiic complexity amongst"
-                    "all of the functions that are blocked. As such, it's a way of "
-                    "highlighting a potentially important function being blocked",
-                ),
-            ],
-            sort_by_column=0,
-            sort_order="desc",
-        ))
+        html_table_list.append(
+            html_helpers.html_create_table_head(
+                tables[-1],
+                [
+                    ("Amount of callsites blocked",
+                     "Total amount of callsites blocked"),
+                    ("Calltree index",
+                     "Index in call tree where the fuzz blocker is."),
+                    (
+                        "Parent function",
+                        "Function in which the call site that blocks resides.",
+                    ),
+                    ("Callsite", ""),
+                    (
+                        "Largest blocked function",
+                        "This is the function with highest cyclomatiic complexity amongst"
+                        "all of the functions that are blocked. As such, it's a way of "
+                        "highlighting a potentially important function being blocked",
+                    ),
+                ],
+                sort_by_column=0,
+                sort_order="desc",
+            ))
         for node in fuzz_blockers:
             link_prefix = "0" * (5 - len(str(node.cov_ct_idx)))
             node_id = f"{link_prefix}{node.cov_ct_idx}"
@@ -452,13 +453,14 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
             if parent_display == "EP":
                 parent_display = f"{node.dst_function_name} (entrypoint)"
 
-            html_table_list.append(html_helpers.html_table_add_row([
-                str(node.cov_forward_reds),
-                str(node.cov_ct_idx),
-                parent_display,
-                cs_link,
-                node.cov_largest_blocked_func,
-            ]))
+            html_table_list.append(
+                html_helpers.html_table_add_row([
+                    str(node.cov_forward_reds),
+                    str(node.cov_ct_idx),
+                    parent_display,
+                    cs_link,
+                    node.cov_largest_blocked_func,
+                ]))
         html_table_list.append("</table>")
 
         return "".join(html_table_list)
@@ -488,8 +490,9 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
 
         # Performance Optimization: Use list accumulation instead of += string concatenation
         html_table_list: List[str] = []
-        html_table_list.append("<p class='no-top-margin'>The followings are "
-                               "the branches where fuzzer fails to bypass.</p>")
+        html_table_list.append(
+            "<p class='no-top-margin'>The followings are "
+            "the branches where fuzzer fails to bypass.</p>")
         tables.append(f"myTable{len(tables)}")
 
         branch_table_rows = [
@@ -520,8 +523,11 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
             ("Blocked Branch",
              "The line of code corresponding to the blocked branch"),
         ]
-        html_table_list.append(html_helpers.html_create_table_head(
-            tables[-1], branch_table_rows, sort_by_column=0, sort_order="desc"))
+        html_table_list.append(
+            html_helpers.html_create_table_head(tables[-1],
+                                                branch_table_rows,
+                                                sort_by_column=0,
+                                                sort_order="desc"))
         for entry in branch_blockers:
             if entry in blockers_node_map:
                 calltree_idx = blockers_node_map[entry].cov_ct_idx
@@ -555,18 +561,19 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                 entry_function_name = utils.demangle_cpp_func(
                     entry.function_name)
 
-            html_table_list.append(html_helpers.html_table_add_row([
-                str(entry.blocked_unique_not_covered_complexity),
-                str(entry.blocked_unique_reachable_complexity),
-                collapsible_string,
-                str(entry.blocked_not_covered_complexity),
-                str(entry.blocked_reachable_complexity),
-                entry_function_name,
-                cs_link,
-                f"""<a href="{entry.coverage_report_link}">
+            html_table_list.append(
+                html_helpers.html_table_add_row([
+                    str(entry.blocked_unique_not_covered_complexity),
+                    str(entry.blocked_unique_reachable_complexity),
+                    collapsible_string,
+                    str(entry.blocked_not_covered_complexity),
+                    str(entry.blocked_reachable_complexity),
+                    entry_function_name,
+                    cs_link,
+                    f"""<a href="{entry.coverage_report_link}">
                     {entry.source_file}:{entry.branch_line_number}
                 </a>""",
-            ]))
+                ]))
         html_table_list.append("</table>")
 
         return "".join(html_table_list)
