@@ -17,7 +17,6 @@
 
 import os
 import yaml
-import pathlib
 import logging
 
 from typing import Any, Optional
@@ -42,16 +41,29 @@ def capture_source_files_in_tree(directory_tree: str,
                                  language: str) -> list[str]:
     """Captures source code files in a given directory."""
     language_files = []
-    language_extensions = constants.LANGUAGE_EXTENSIONS.get(
-        language.lower(), [])
+    language_extensions = tuple(
+        constants.LANGUAGE_EXTENSIONS.get(language.lower(), []))
 
-    for dirpath, _, filenames in os.walk(directory_tree):
-        # Skip some non project directories
-        if any(exclude in dirpath for exclude in EXCLUDE_DIRECTORIES):
+    for dirpath, dirnames, filenames in os.walk(directory_tree):
+        # Performance Optimization: Prune directories to skip I/O traversal.
+        dirnames[:] = [
+            d for d in dirnames
+            if not any(exclude in d for exclude in EXCLUDE_DIRECTORIES)
+        ]
+
+        # Performance Optimization: Avoid the generator `any()` and string slicing,
+        # Check against dirpath as well just in case root directory has excluded paths.
+        skip_dir = False
+        for exclude in EXCLUDE_DIRECTORIES:
+            if exclude in dirpath:
+                skip_dir = True
+                break
+        if skip_dir:
             continue
 
+        # Performance Optimization: pathlib.Path is slow in a hot loop.
         for filename in filenames:
-            if pathlib.Path(filename).suffix in language_extensions:
+            if filename.endswith(language_extensions):
                 language_files.append(os.path.join(dirpath, filename))
     return language_files
 
