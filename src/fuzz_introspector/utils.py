@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import shutil
+import collections
 import sys
 from typing import Any, Optional
 
@@ -695,13 +696,23 @@ def detect_language(directory) -> str:
         "/src/fuzztest",
     )
 
-    extension_to_languages: dict[str, list[str]] = {}
+    # Performance Optimization: Use collections.defaultdict to avoid empty
+    # list allocation on every key lookup
+    extension_to_languages: collections.defaultdict[
+        str, list[str]] = collections.defaultdict(list)
     for language, extensions in constants.LANGUAGE_EXTENSIONS.items():
         for extension in extensions:
-            extension_to_languages.setdefault(extension, []).append(language)
+            extension_to_languages[extension].append(language)
 
     language_counts: dict[str, int] = {}
-    for dirpath, _, filenames in os.walk(directory):
+    for dirpath, dirnames, filenames in os.walk(directory):
+        # Performance Optimization: Prune dirnames in-place to prevent os.walk
+        # from descending into excluded directories
+        dirnames[:] = [
+            d for d in dirnames
+            if not os.path.join(dirpath, d).startswith(paths_to_avoid)
+        ]
+
         if dirpath.startswith(paths_to_avoid):
             continue
         for filename in filenames:
