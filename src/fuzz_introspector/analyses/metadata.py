@@ -63,27 +63,30 @@ class MetadataAnalysis(analysis.AnalysisInterface):
     ) -> str:
         logger.info("- Running analysis %s", self.get_name())
 
-        html_string = ""
-        html_string += '<div class="report-box">'
-        html_string += html_helpers.html_add_header_with_link(
-            "Metadata section", html_helpers.HTML_HEADING.H1,
-            table_of_contents)
-        html_string += '<div class="collapsible">'
-        html_string += """<p>This sections shows the raw data that is used
+        # Performance Optimization: Use list appending to avoid O(N^2) string concatenation
+        html_string = []
+        html_string.append('<div class="report-box">')
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Metadata section", html_helpers.HTML_HEADING.H1,
+                table_of_contents))
+        html_string.append('<div class="collapsible">')
+        html_string.append("""<p>This sections shows the raw data that is used
         to produce this report. This is mainly used for further processing
         and developer debugging.</p>
-        """
-        html_string += "<p>"
+        """)
+        html_string.append("<p>")
         tables.append(f"myTable{len(tables)}")
-        html_string += html_helpers.html_create_table_head(
-            tables[-1],
-            [
-                ("Fuzzer", ""),
-                ("Calltree file", ""),
-                ("Program data file", ""),
-                ("Coverage file", ""),
-            ],
-        )
+        html_string.append(
+            html_helpers.html_create_table_head(
+                tables[-1],
+                [
+                    ("Fuzzer", ""),
+                    ("Calltree file", ""),
+                    ("Program data file", ""),
+                    ("Coverage file", ""),
+                ],
+            ))
         for profile in profiles:
             if profile.coverage is None:
                 continue
@@ -110,18 +113,19 @@ class MetadataAnalysis(analysis.AnalysisInterface):
                 },
                 out_dir,
             )
-            html_string += html_helpers.html_table_add_row([
-                profile.identifier,
-                f'<a href="{base_datafile}">{base_datafile}</a>',
-                f'<a href="{base_yamlfile}">{base_yamlfile}</a>',
-                f"{coverage_file_link_str}",
-            ])
+            html_string.append(
+                html_helpers.html_table_add_row([
+                    profile.identifier,
+                    f'<a href="{base_datafile}">{base_datafile}</a>',
+                    f'<a href="{base_yamlfile}">{base_yamlfile}</a>',
+                    f"{coverage_file_link_str}",
+                ]))
 
-        html_string += "</p>"
+        html_string.append("</p>")
 
-        html_string += "</div>"  # .collapsible
-        html_string += "</div>"  # report-box
+        html_string.append("</div>")  # .collapsible
+        html_string.append("</div>")  # report-box
 
         logger.info("- Completed analysis %s", self.get_name())
 
-        return html_string
+        return "".join(html_string)
