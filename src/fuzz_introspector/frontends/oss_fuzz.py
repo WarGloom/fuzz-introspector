@@ -17,7 +17,6 @@
 
 import os
 import yaml
-import pathlib
 import logging
 
 from typing import Any, Optional
@@ -45,13 +44,18 @@ def capture_source_files_in_tree(directory_tree: str,
     language_extensions = constants.LANGUAGE_EXTENSIONS.get(
         language.lower(), [])
 
+    # Precompute tuple outside the loop to avoid casting overhead
+    language_ext_tuple = tuple(language_extensions)
+
     for dirpath, _, filenames in os.walk(directory_tree):
         # Skip some non project directories
         if any(exclude in dirpath for exclude in EXCLUDE_DIRECTORIES):
             continue
 
         for filename in filenames:
-            if pathlib.Path(filename).suffix in language_extensions:
+            # Performance Optimization: replaced pathlib.Path instantiation in hot loop
+            # with string endswith and tuple for O(C) matching
+            if filename.endswith(language_ext_tuple):
                 language_files.append(os.path.join(dirpath, filename))
     return language_files
 
