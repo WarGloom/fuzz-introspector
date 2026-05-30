@@ -17,3 +17,7 @@
 ## 2024-05-18 - HTML String Concatenation Bottleneck
 **Learning:** Python's string concatenation using `+=` inside loops is notoriously slow due to O(N^2) memory reallocation. This was a significant bottleneck in Fuzz Introspector's HTML report generation (e.g. `calltree_analysis.py`, `sinks_analyser.py`) where large strings containing tables, inline JS, and JSON dumps were being appended repeatedly.
 **Action:** Always replace repetitive string concatenation loops (`html_str += ...`) with list accumulation and `"".join(list)`. It provides a significant, measurable performance boost for large string processing.
+
+## 2025-03-05 - Optimize Directory Traversal in os.walk
+**Learning:** When using `os.walk`, checking against excluded directories later in the loop can be very slow. Modifying `dirnames` in-place (`dirnames[:] = [d for d in dirnames if d not in exclude]`) prevents `os.walk` from descending into excluded directories, drastically reducing I/O and traversal time for deep trees (e.g. `node_modules`).
+**Action:** Always modify `dirnames[:]` in-place to exclude unwanted directories when traversing with `os.walk` instead of skipping files post-traversal.
