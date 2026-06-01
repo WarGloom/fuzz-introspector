@@ -40,10 +40,10 @@ EXCLUDE_DIRECTORIES = [
 def capture_source_files_in_tree(directory_tree: str,
                                  language: str) -> list[str]:
     """Captures source code files in a given directory."""
-    language_files = []
+    language_files: list[str] = []
     # Performance Optimization: Precompute tuple for endswith leveraging C backend
-    language_extensions = tuple(constants.LANGUAGE_EXTENSIONS.get(
-        language.lower(), []))
+    language_extensions = tuple(
+        constants.LANGUAGE_EXTENSIONS.get(language.lower(), []))
 
     if not language_extensions:
         return language_files
@@ -52,8 +52,8 @@ def capture_source_files_in_tree(directory_tree: str,
         # Performance Optimization: Modify dirnames in-place to prevent os.walk
         # from descending into excluded directories, avoiding I/O overhead.
         dirnames[:] = [
-            d for d in dirnames
-            if not any(exclude in os.path.join(dirpath, d) for exclude in EXCLUDE_DIRECTORIES)
+            d for d in dirnames if not any(exclude in os.path.join(dirpath, d)
+                                           for exclude in EXCLUDE_DIRECTORIES)
         ]
 
         # Skip some non project directories
