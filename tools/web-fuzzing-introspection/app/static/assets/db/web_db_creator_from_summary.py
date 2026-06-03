@@ -69,8 +69,34 @@ FI_EXCLUDE_ALL_NON_MUSTS = bool(int(os.getenv('FI_EXCLUDE_ALL_NON_MUSTS',
 NUM_RECENT_DAYS = 30
 FUZZER_COVERAGE_IS_DEGRADED = 5  # 5% or more is a degradation
 
-MUST_INCLUDES = set()
+MUST_INCLUDES: set[str] = set()
 MUST_INCLUDE_WITH_LANG: List[Any] = []
+
+# Per-pipeline date-indexed build history populated by
+# extract_oss_fuzz_build_status. Shape:
+#   {pipeline: {project_name: [(YYYY-MM-DD, success_bool), ...] desc-sorted}}
+# Used by build_status_on_or_before to skip GETs against (project, date)
+# pairs whose build is known to have failed.
+BUILD_HISTORY: Dict[str, Dict[str, List[Tuple[str, bool]]]] = {}
+
+
+def build_status_on_or_before(pipeline: str, project_name: str,
+                              date_str: str) -> Optional[bool]:
+    """Look up whether the most recent build of `pipeline` for `project_name`
+    completed on or before `date_str` was successful. Returns None when the
+    answer isn't known (no history loaded, project not present, or the date
+    predates the recorded window) — callers should treat None as "no signal,
+    proceed as usual"."""
+    if not BUILD_HISTORY:
+        return None
+    history = BUILD_HISTORY.get(pipeline, {}).get(project_name)
+    if not history:
+        return None
+    for d, ok in history:  # sorted descending by date
+        if d <= date_str:
+            return ok
+    return None
+
 
 logging.getLogger("requests").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -851,7 +877,6 @@ def extract_local_project_data(project_name, oss_fuzz_path,
         'all-header-files': all_header_files,
     }
 
-
 def extract_local_report_data(project_name, report_dir, manager_return_dict):
     print(f'Analysing {project_name}')
 
@@ -1047,9 +1072,11 @@ def _update_local_db_from_analyses_dictionary(analyses_dictionary):
                     should_include_details=True,
                     all_header_files=all_header_files)
 
-
-def extract_project_data(project_name, date_str, should_include_details,
-                         manager_return_dict):
+def extract_project_data(project_name,
+                         date_str,
+                         should_include_details,
+                         manager_return_dict,
+                         build_status=None):
     """
     Extracts data about a given project on a given date. The data will be placed
     in manager_return dict.
@@ -1087,14 +1114,35 @@ def extract_project_data(project_name, date_str, should_include_details,
 
     collect_debug_info = project_language in {'c', 'c++'}
 
+    # Decide whether to attempt the per-artefact GETs against GCS. We consult
+    # the per-pipeline build-history index for the specific date being
+    # processed: if the most recent build at or before this date is recorded
+    # as a failure, the artefacts won't exist on GCS and the GETs would just
+    # 404. Returns None when the date predates the recorded history window;
+    # in that case we fall back to the previous unconditional behaviour.
+    try_coverage_fetches = True
+    try_introspector_fetches = project_language in {
+        'c', 'c++', 'python', 'java'
+    }
+
+    if build_status_on_or_before('introspector', project_name,
+                                 date_str) is False:
+        try_introspector_fetches = False
+    if build_status_on_or_before('coverage', project_name, date_str) is False:
+        try_coverage_fetches = False
+
     # Extract code coverage and introspector reports.
-    code_coverage_summary = oss_fuzz.get_code_coverage_summary(
-        project_name, date_str.replace("-", ""))
-    cov_fuzz_stats = oss_fuzz.get_fuzzer_stats_fuzz_count(
-        project_name, date_str.replace("-", ""))
+    if try_coverage_fetches:
+        code_coverage_summary = oss_fuzz.get_code_coverage_summary(
+            project_name, date_str.replace("-", ""))
+        cov_fuzz_stats = oss_fuzz.get_fuzzer_stats_fuzz_count(
+            project_name, date_str.replace("-", ""))
+    else:
+        code_coverage_summary = None
+        cov_fuzz_stats = None
 
     # Get introspector reports for languages with introspector support
-    if project_language in {'c', 'c++', 'python', 'java'}:
+    if try_introspector_fetches:
         introspector_report = oss_fuzz.extract_introspector_report(
             project_name, date_str)
     else:
@@ -1103,27 +1151,30 @@ def extract_project_data(project_name, date_str, should_include_details,
     introspector_report_url = oss_fuzz.get_introspector_report_url_report(
         project_name, date_str.replace("-", ""))
 
-    branch_blockers = oss_fuzz.extract_introspector_branch_blockers(
-        project_name, date_str.replace("-", ""))
+    if try_introspector_fetches:
+        branch_blockers = oss_fuzz.extract_introspector_branch_blockers(
+            project_name, date_str.replace("-", ""))
 
-    test_files = oss_fuzz.extract_introspector_test_files(
-        project_name, date_str.replace("-", ""))
-    if test_files:
-        save_test_files_report(test_files, project_name)
-    test_files_xref = oss_fuzz.extract_introspector_test_files_xref(
-        project_name, date_str.replace("-", ""))
-    if test_files_xref:
-        save_test_files_xref_report(test_files_xref, project_name)
+        test_files = oss_fuzz.extract_introspector_test_files(
+            project_name, date_str.replace("-", ""))
+        if test_files:
+            save_test_files_report(test_files, project_name)
+        test_files_xref = oss_fuzz.extract_introspector_test_files_xref(
+            project_name, date_str.replace("-", ""))
+        if test_files_xref:
+            save_test_files_xref_report(test_files_xref, project_name)
 
-    all_files = oss_fuzz.extract_introspector_all_files(
-        project_name, date_str.replace("-", ""))
-    if all_files:
-        new_all_files = []
-        for file in all_files:
-            if '/src/inspector/source-code/' in file:
-                continue
-            new_all_files.append(file)
-        save_all_files_report(new_all_files, project_name)
+        all_files = oss_fuzz.extract_introspector_all_files(
+            project_name, date_str.replace("-", ""))
+        if all_files:
+            new_all_files = []
+            for file in all_files:
+                if '/src/inspector/source-code/' in file:
+                    continue
+                new_all_files.append(file)
+            save_all_files_report(new_all_files, project_name)
+    else:
+        branch_blockers = None
 
     # Collet debug informaiton for languages with debug information
     # Disable dumping type map for now because it takes too much storage.
@@ -1162,12 +1213,17 @@ def extract_project_data(project_name, date_str, should_include_details,
     # Save the report
     save_fuzz_introspector_report(introspector_report, project_name, date_str)
 
-    light_test_files = oss_fuzz.extract_introspector_light_all_tests(
-        project_name, date_str.replace("-", ""))
-    light_all_files = oss_fuzz.extract_introspector_light_all_files(
-        project_name, date_str.replace("-", ""))
-    light_all_pairs = oss_fuzz.extract_introspector_light_all_pairs(
-        project_name, date_str.replace("-", ""))
+    if try_introspector_fetches:
+        light_test_files = oss_fuzz.extract_introspector_light_all_tests(
+            project_name, date_str.replace("-", ""))
+        light_all_files = oss_fuzz.extract_introspector_light_all_files(
+            project_name, date_str.replace("-", ""))
+        light_all_pairs = oss_fuzz.extract_introspector_light_all_pairs(
+            project_name, date_str.replace("-", ""))
+    else:
+        light_test_files = []
+        light_all_files = []
+        light_all_pairs = []
 
     light_report = {
         'test-files': light_test_files,
@@ -1257,8 +1313,14 @@ def extract_project_data(project_name, date_str, should_include_details,
             if all_function_list is None:
                 all_function_list = oss_fuzz.extract_new_introspector_functions(
                     project_name, date_str)
-            all_constructor_list = oss_fuzz.extract_new_introspector_constructors(
-                project_name, date_str)
+            # The constructor list is JVM-only; skip the GET for other
+            # languages where the artefact does not exist.
+            if project_language == 'java':
+                all_constructor_list = (
+                    oss_fuzz.extract_new_introspector_constructors(
+                        project_name, date_str))
+            else:
+                all_constructor_list = []
 
             refined_proj_list = extract_and_refine_functions(
                 all_function_list, date_str)
@@ -1400,7 +1462,8 @@ def analyse_list_of_projects(date, projects_to_analyse,
     for project_name in project_name_list:
         futures.append(
             executor.submit(extract_project_data, project_name, date,
-                            should_include_details, analyses_dictionary))
+                            should_include_details, analyses_dictionary,
+                            projects_to_analyse.get(project_name)))
 
     # wait for all tasks to complete
     logger.info('Waiting for completion.')
@@ -1655,23 +1718,36 @@ def calculate_recent_results(projects_with_new_results, timestamps,
     return results
 
 
+_EXISTING_TIMESTAMPS_CACHE = None
+
+
 def extend_db_json_files(project_timestamps, output_directory,
                          should_include_details):
     """Extends a set of DB .json files."""
 
-    existing_timestamps = []
-    logging.info('Loading existing timestamps')
-    if os.path.isfile(
-            os.path.join(output_directory, DB_JSON_ALL_PROJECT_TIMESTAMP)):
-        with open(
-                os.path.join(output_directory, DB_JSON_ALL_PROJECT_TIMESTAMP),
-                'r') as f:
-            try:
-                existing_timestamps = orjson.loads(f.read())
-            except:
-                existing_timestamps = []
+    # The aggregate timestamp file can hold ~1M+ entries on a full historical
+    # sweep, and parsing it from JSON takes ~30s. Since the same process wrote
+    # it on the previous iteration, we keep an in-memory copy and only load
+    # from disk once per process. The on-disk write still happens every
+    # iteration so downstream consumers see the same behaviour as before.
+    global _EXISTING_TIMESTAMPS_CACHE
+    if _EXISTING_TIMESTAMPS_CACHE is not None:
+        existing_timestamps = _EXISTING_TIMESTAMPS_CACHE
+        logging.info('Reusing cached existing timestamps')
     else:
         existing_timestamps = []
+        logging.info('Loading existing timestamps')
+        if os.path.isfile(
+                os.path.join(output_directory, DB_JSON_ALL_PROJECT_TIMESTAMP)):
+            with open(
+                    os.path.join(output_directory,
+                                 DB_JSON_ALL_PROJECT_TIMESTAMP), 'r') as f:
+                try:
+                    existing_timestamps = orjson.loads(f.read())
+                except:
+                    existing_timestamps = []
+        else:
+            existing_timestamps = []
     logging.info('Number of existing timestamps: %d', len(existing_timestamps))
 
     logging.info('Creating timestamp mapping')
@@ -1746,6 +1822,11 @@ def extend_db_json_files(project_timestamps, output_directory,
                 os.path.join(output_directory, DB_JSON_ALL_PROJECT_TIMESTAMP),
                 'w') as f:
             f.write(orjson.dumps(existing_timestamps).decode('utf-8'))
+
+    # Update the in-memory cache so the next iteration in this process can
+    # skip the disk load. `existing_timestamps` may have been rebound above
+    # (e.g. by the FI_EXCLUDE_ALL_NON_MUSTS filter), so re-bind from the local.
+    _EXISTING_TIMESTAMPS_CACHE = existing_timestamps
 
 
 def extend_func_db(function_dict, output_dir, target):
@@ -1996,7 +2077,12 @@ def extract_oss_fuzz_build_status(output_directory):
         shutil.rmtree(oss_fuzz_local_clone)
     git_clone_project(constants.OSS_FUZZ_REPO, oss_fuzz_local_clone)
 
-    build_status_dict = oss_fuzz.get_projects_build_status()
+    build_status_dict, build_history = oss_fuzz.get_projects_build_status()
+
+    # Stash the per-pipeline date-indexed history so per-(project, date) GETs
+    # can be skipped when the build for that date is known to have failed.
+    global BUILD_HISTORY
+    BUILD_HISTORY = build_history
 
     if FI_EXCLUDE_ALL_NON_MUSTS:
         new_build_status_dict = {}

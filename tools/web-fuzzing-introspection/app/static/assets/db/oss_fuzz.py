@@ -17,8 +17,38 @@ import os
 import json
 import yaml
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 import constants
+
+
+def _build_session():
+    """Build a requests Session that reuses connections to the GCS/GitHub hosts
+    we hit. The DB creator issues many thousands of small GETs to a handful of
+    hosts; without keep-alive every call pays a fresh TCP+TLS handshake. The
+    pool sizes are set well above the thread-pool width used by
+    web_db_creator_from_summary.py (20 workers) so concurrent fetches do not
+    serialise on pool checkout."""
+    session = requests.Session()
+    retry = Retry(
+        total=2,
+        backoff_factor=0.3,
+        status_forcelist=(500, 502, 503, 504),
+        allowed_methods=('GET', ),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(
+        pool_connections=32,
+        pool_maxsize=64,
+        max_retries=retry,
+    )
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+    return session
+
+
+_SESSION = _build_session()
 
 
 def get_introspector_report_url_base(project_name, datestr):
@@ -109,7 +139,7 @@ def extract_introspector_light_all_pairs(project_name, date_str):
     debug_data_url = get_introspector_light_pairs_url(
         project_name, date_str.replace("-", ""))
     try:
-        raw_introspector_json_request = requests.get(debug_data_url,
+        raw_introspector_json_request = _SESSION.get(debug_data_url,
                                                      timeout=10)
     except:
         return []
@@ -131,7 +161,7 @@ def extract_introspector_light_all_tests(project_name, date_str):
     debug_data_url = get_introspector_light_tests_url(
         project_name, date_str.replace("-", ""))
     try:
-        raw_introspector_json_request = requests.get(debug_data_url,
+        raw_introspector_json_request = _SESSION.get(debug_data_url,
                                                      timeout=10)
     except:
         return []
@@ -153,7 +183,7 @@ def extract_introspector_light_all_files(project_name, date_str):
     debug_data_url = get_introspector_light_all_files_url(
         project_name, date_str.replace("-", ""))
     try:
-        raw_introspector_json_request = requests.get(debug_data_url,
+        raw_introspector_json_request = _SESSION.get(debug_data_url,
                                                      timeout=10)
     except:
         return []
@@ -171,7 +201,7 @@ def extract_introspector_branch_blockers(project_name, date_str):
 
     # Read the introspector atifact
     try:
-        raw_introspector_json_request = requests.get(
+        raw_introspector_json_request = _SESSION.get(
             introspector_branch_blockers_url, timeout=10)
     except:
         return None
@@ -192,7 +222,7 @@ def get_fuzzer_stats_fuzz_count(project_name, date_str):
     coverage_stats_url = get_fuzzer_stats_fuzz_count_url(
         project_name, date_str)
     try:
-        coverage_summary_raw = requests.get(coverage_stats_url,
+        coverage_summary_raw = _SESSION.get(coverage_stats_url,
                                             timeout=20).text
     except:
         return None
@@ -252,7 +282,7 @@ def extract_introspector_debug_info(project_name, date_str):
     #print("Getting: %s" % (introspector_summary_url))
     # Read the introspector atifact
     try:
-        raw_introspector_json_request = requests.get(debug_data_url,
+        raw_introspector_json_request = _SESSION.get(debug_data_url,
                                                      timeout=10)
     except:
         return dict()
@@ -475,7 +505,7 @@ def get_local_code_coverage_stats(project_name, oss_fuzz_folder):
 def get_code_coverage_summary(project_name, datestr):
     cov_summary_url = get_code_coverage_summary_url(project_name, datestr)
     try:
-        coverage_summary_raw = requests.get(cov_summary_url, timeout=20).text
+        coverage_summary_raw = _SESSION.get(cov_summary_url, timeout=20).text
     except:
         return None
     try:
@@ -489,7 +519,7 @@ def get_fuzzer_code_coverage_summary(project_name, datestr, fuzzer):
     cov_summary_url = get_fuzzer_code_coverage_summary_url(
         project_name, datestr, fuzzer)
     try:
-        coverage_summary_raw = requests.get(cov_summary_url, timeout=20).text
+        coverage_summary_raw = _SESSION.get(cov_summary_url, timeout=20).text
     except:
         return None
     try:
@@ -503,7 +533,7 @@ def get_fuzzer_target_coverage_error_log(project_name, datestr, fuzzer):
     url = get_fuzzer_target_coverage_error_log_url(project_name, datestr,
                                                    fuzzer)
     try:
-        response = requests.get(url, timeout=20)
+        response = _SESSION.get(url, timeout=20)
         if response.status_code == 200:
             return response.text.strip()
     except Exception as e:
@@ -537,7 +567,7 @@ def get_fuzzer_corpus_size(project_name, datestr, fuzzer, introspector_report):
     for url in fuzzer_program_coverage_urls:
         found = False
         try:
-            cov_res = requests.get(url, timeout=20).text
+            cov_res = _SESSION.get(url, timeout=20).text
             for ll in cov_res.splitlines():
                 if found:
                     # Letters used is implemented here:
@@ -569,7 +599,7 @@ def extract_new_introspector_functions(project_name, date_str):
 
     # Read the introspector artifact
     try:
-        raw_introspector_json_request = requests.get(
+        raw_introspector_json_request = _SESSION.get(
             introspector_functions_url, timeout=10)
         introspector_functions = json.loads(raw_introspector_json_request.text)
     except:
@@ -584,7 +614,7 @@ def extract_new_introspector_constructors(project_name, date_str):
 
     # Read the introspector artifact
     try:
-        raw_introspector_json_request = requests.get(
+        raw_introspector_json_request = _SESSION.get(
             introspector_constructor_url, timeout=10)
         introspector_constructors = json.loads(
             raw_introspector_json_request.text)
@@ -600,7 +630,7 @@ def extract_introspector_all_files(project_name, date_str):
 
     # Read the introspector atifact
     try:
-        raw_introspector_json_request = requests.get(
+        raw_introspector_json_request = _SESSION.get(
             introspector_all_files_url, timeout=10)
     except:
         return None
@@ -618,7 +648,7 @@ def extract_introspector_test_files(project_name, date_str):
 
     # Read the introspector atifact
     try:
-        raw_introspector_json_request = requests.get(introspector_test_url,
+        raw_introspector_json_request = _SESSION.get(introspector_test_url,
                                                      timeout=10)
     except:
         return None
@@ -636,7 +666,7 @@ def extract_introspector_test_files_xref(project_name, date_str):
 
     # Read the introspector atifact
     try:
-        raw_introspector_json_request = requests.get(introspector_test_url,
+        raw_introspector_json_request = _SESSION.get(introspector_test_url,
                                                      timeout=10)
     except:
         return None
@@ -655,7 +685,7 @@ def extract_introspector_typedef(project_name, date_str):
     # Read the introspector artifact
     try:
         typedef_list = json.loads(
-            requests.get(introspector_test_url, timeout=10).text)
+            _SESSION.get(introspector_test_url, timeout=10).text)
 
     except:
         # Failed to locate the json in first introspector run
@@ -664,7 +694,7 @@ def extract_introspector_typedef(project_name, date_str):
             project_name, date_str.replace("-", ""), True)
         try:
             typedef_list = json.loads(
-                requests.get(introspector_test_url, timeout=10).text)
+                _SESSION.get(introspector_test_url, timeout=10).text)
         except:
             return []
 
@@ -677,7 +707,7 @@ def extract_introspector_macro_block(project_name, date_str):
 
     # Read the introspector atifact
     try:
-        return json.loads(requests.get(introspector_test_url, timeout=10).text)
+        return json.loads(_SESSION.get(introspector_test_url, timeout=10).text)
     except:
         # Failed to locate the json in first introspector run
         # Possibly run from LTO, try locate the file in second introspector run
@@ -685,7 +715,7 @@ def extract_introspector_macro_block(project_name, date_str):
             project_name, date_str.replace("-", ""), True)
         try:
             return json.loads(
-                requests.get(introspector_test_url, timeout=10).text)
+                _SESSION.get(introspector_test_url, timeout=10).text)
         except:
             return []
 
@@ -700,7 +730,7 @@ def extract_introspector_report(project_name, date_str):
 
     # Read the introspector artifact
     try:
-        raw_introspector_json_request = requests.get(introspector_summary_url,
+        raw_introspector_json_request = _SESSION.get(introspector_summary_url,
                                                      timeout=10)
     except:
         return None
@@ -798,7 +828,7 @@ def get_introspector_type_map(project_name, date_str):
 
     # Read the introspector atifact
     try:
-        raw_introspector_json_request = requests.get(introspector_type_api_url,
+        raw_introspector_json_request = _SESSION.get(introspector_type_api_url,
                                                      timeout=10)
     except:
         return None
@@ -810,19 +840,44 @@ def get_introspector_type_map(project_name, date_str):
     return introspector_type_map
 
 
+def _index_history_by_date(build_json):
+    """Turn one of the OSS-Fuzz status-*.json files into a per-project history
+    index: {project_name: [(YYYY-MM-DD, success_bool), ...]} sorted descending
+    by date so callers can look up "most recent build on or before date X" in
+    a short linear walk. Entries with an unparseable finish_time are skipped."""
+    idx = {}
+    for p in build_json.get('projects', []):
+        entries = []
+        for h in p.get('history', []):
+            ft = h.get('finish_time') or ''
+            # finish_time is an ISO 8601 timestamp; the first 10 chars are the
+            # YYYY-MM-DD date which is the granularity we compare against.
+            if len(ft) >= 10 and ft[4] == '-' and ft[7] == '-':
+                entries.append((ft[:10], bool(h.get('success', False))))
+        entries.sort(reverse=True)
+        idx[p['name']] = entries
+    return idx
+
+
 def get_projects_build_status():
     fuzz_build_url = constants.OSS_FUZZ_BUILD_STATUS_URL + '/' + constants.FUZZ_BUILD_JSON
     coverage_build_url = constants.OSS_FUZZ_BUILD_STATUS_URL + '/' + constants.COVERAGE_BUILD_JSON
     introspector_build_url = constants.OSS_FUZZ_BUILD_STATUS_URL + '/' + constants.INTROSPECTOR_BUILD_JSON
 
-    fuzz_build_raw = requests.get(fuzz_build_url, timeout=20).text
-    coverage_build_raw = requests.get(coverage_build_url, timeout=20).text
-    introspector_build_raw = requests.get(introspector_build_url,
+    fuzz_build_raw = _SESSION.get(fuzz_build_url, timeout=20).text
+    coverage_build_raw = _SESSION.get(coverage_build_url, timeout=20).text
+    introspector_build_raw = _SESSION.get(introspector_build_url,
                                           timeout=20).text
 
     fuzz_build_json = json.loads(fuzz_build_raw)
     cov_build_json = json.loads(coverage_build_raw)
     introspector_build_json = json.loads(introspector_build_raw)
+
+    build_history = {
+        'fuzz': _index_history_by_date(fuzz_build_json),
+        'coverage': _index_history_by_date(cov_build_json),
+        'introspector': _index_history_by_date(introspector_build_json),
+    }
 
     build_status_dict = dict()
     for p in fuzz_build_json['projects']:
@@ -868,7 +923,7 @@ def get_projects_build_status():
         project_language = try_to_get_project_language(project_name)
         build_status_dict[project_name]['language'] = project_language
     print("Number of projects: %d" % (len(build_status_dict)))
-    return build_status_dict
+    return build_status_dict, build_history
 
 
 def try_to_get_project_language(project_name):
@@ -886,7 +941,7 @@ def try_to_get_project_language(project_name):
         proj_yaml_url = 'https://raw.githubusercontent.com/google/oss-fuzz/master/projects/%s/project.yaml' % (
             project_name)
         try:
-            r = requests.get(proj_yaml_url, timeout=10)
+            r = _SESSION.get(proj_yaml_url, timeout=10)
         except:
             return "N/A"
         project_yaml = yaml.safe_load(r.text)
@@ -909,7 +964,7 @@ def try_to_get_project_repository(project_name):
         proj_yaml_url = 'https://raw.githubusercontent.com/google/oss-fuzz/master/projects/%s/project.yaml' % (
             project_name)
         try:
-            r = requests.get(proj_yaml_url, timeout=10)
+            r = _SESSION.get(proj_yaml_url, timeout=10)
         except:
             return "N/A"
         project_yaml = yaml.safe_load(r.text)
