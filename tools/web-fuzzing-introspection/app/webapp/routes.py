@@ -478,12 +478,78 @@ def get_all_related_functions(primary_function) -> List[models.Function]:
     return related_functions
 
 
+def _filter_outage_timestamps(
+        db_timestamps: List[models.DBTimestamp]) -> List[models.DBTimestamp]:
+    """Drops snapshots that reflect Fuzz Introspector pipeline outages rather
+    than real OSS-Fuzz progress.
+
+    Uses a small state machine over the time series so that both the initial
+    dip *and the multi-day recovery tail* of an outage are treated as one
+    event:
+
+    * Sentinel rows (``project_count <= 0``) are always dropped and put the
+      filter into the "outage" state.
+    * A value below ``drop_threshold`` (85%) of the trailing-median baseline
+      enters the outage state.
+    * While in the outage state every row is dropped until the count climbs
+      back to ``recover_threshold`` (95%) of the pre-outage baseline — this
+      hides the gradual rebuild that follows a multi-day pipeline failure
+      (e.g. the 2025-06-25 → 2025-07-09 recovery), which would otherwise
+      leave a visible dip in the chart.
+    * The baseline is the trailing 15-day median of *kept* values only, so
+      the rolling reference is never polluted by the very rows we are
+      classifying as outages.
+    """
+    window = 15
+    drop_threshold = 0.85
+    recover_threshold = 0.95
+
+    kept: List[models.DBTimestamp] = []
+    recent_kept: List[int] = []
+    in_outage = False
+
+    for ts in db_timestamps:
+        baseline: Optional[float] = None
+        if recent_kept:
+            tail = sorted(recent_kept[-window:])
+            mid = len(tail) // 2
+            baseline = (float(tail[mid]) if len(tail) % 2 else
+                        (tail[mid - 1] + tail[mid]) / 2.0)
+
+        if ts.project_count <= 0:
+            in_outage = True
+            continue
+
+        if baseline is None:
+            # Warm-up: no baseline yet, keep the row.
+            kept.append(ts)
+            recent_kept.append(ts.project_count)
+            continue
+
+        if in_outage:
+            if ts.project_count >= recover_threshold * baseline:
+                in_outage = False
+                kept.append(ts)
+                recent_kept.append(ts.project_count)
+            # else: still recovering — drop.
+        else:
+            if ts.project_count < drop_threshold * baseline:
+                in_outage = True
+                # Drop this row; it's the start of the outage.
+            else:
+                kept.append(ts)
+                recent_kept.append(ts.project_count)
+
+    return kept
+
+
 @blueprint.route('/')
 def index():
     """Renders index page"""
     db_summary = get_frontpage_summary_stats()
-    db_timestamps = data_storage.DB_TIMESTAMPS
-    logger.info("Length of timestamps: %d", len(db_timestamps))
+    db_timestamps = _filter_outage_timestamps(data_storage.DB_TIMESTAMPS)
+    logger.info("Length of timestamps: %d (filtered from %d)",
+                len(db_timestamps), len(data_storage.DB_TIMESTAMPS))
     # Maximum projects
     max_proj = 0
     max_fuzzer_count = 0
@@ -563,6 +629,8 @@ def project_profile():
         datestr = None
         latest_statistics = None
         latest_coverage_report = None
+        coverage_date = None
+        latest_coverage_ps = None
         latest_fuzz_introspector_report = None
         latest_introspector_datestr = ""
         project_url = ''
@@ -573,13 +641,12 @@ def project_profile():
                 datestr = ps.date
                 latest_statistics = ps
 
-                if project_build_status:
-                    project_language = project_build_status.language
-                else:
-                    project_language = 'c++'
+                # Remember the most recent date for which coverage data
+                # actually exists, so the project page can link to that
+                # report instead of today's (potentially failing) one.
+                if ps.coverage_data is not None:
+                    latest_coverage_ps = ps
 
-                latest_coverage_report = get_coverage_report_url(
-                    project.name, datestr, project_language)
                 if ps.introspector_data is not None:
                     if ps.introspector_url:
                         latest_fuzz_introspector_report = ps.introspector_url
@@ -591,6 +658,13 @@ def project_profile():
                     project_url = ps.project_url
                 if ps.project_repository:
                     project_repo = ps.project_repository
+
+        if (latest_coverage_ps is not None
+                and latest_coverage_ps.coverage_data is not None):
+            latest_coverage_report = latest_coverage_ps.coverage_data.get(
+                'coverage_url')
+            coverage_date = latest_coverage_ps.date
+
         if not project_url:
             project_url = f'https://github.com/google/oss-fuzz/tree/master/projects/{project.name}'
 
@@ -622,7 +696,8 @@ def project_profile():
             has_project_stats=True,
             project_build_status=project_build_status,
             functions_of_interest=functions_of_interest,
-            latest_coverage_report=None,
+            latest_coverage_report=latest_coverage_report,
+            coverage_date=coverage_date,
             latest_statistics=latest_statistics,
             latest_fuzz_introspector_report=latest_fuzz_introspector_report,
             latest_introspector_datestr=latest_introspector_datestr,
@@ -653,6 +728,8 @@ def project_profile():
             datestr = None
             latest_statistics = None
             latest_coverage_report = None
+            coverage_date = None
+            latest_coverage_ps = None
             latest_fuzz_introspector_report = None
             latest_introspector_datestr = ""
             project_repo = ''
@@ -661,9 +738,10 @@ def project_profile():
                     real_stats.append(ps)
                     datestr = ps.date
                     latest_statistics = ps
-                    latest_coverage_report = get_coverage_report_url(
-                        build_status.project_name, datestr,
-                        build_status.language)
+                    # Track the most recent date that actually has coverage
+                    # data so the page links to a real report.
+                    if ps.coverage_data is not None:
+                        latest_coverage_ps = ps
                     if ps.introspector_data is not None:
                         if ps.introspector_url:
                             latest_fuzz_introspector_report = ps.introspector_url
@@ -674,11 +752,11 @@ def project_profile():
                     if ps.project_repository:
                         project_repo = ps.project_repository
 
-            if datestr and real_stats:
-                latest_coverage_report = get_coverage_report_url(
-                    build_status.project_name, datestr, build_status.language)
-            else:
-                latest_coverage_report = None
+            if (latest_coverage_ps is not None
+                    and latest_coverage_ps.coverage_data is not None):
+                latest_coverage_report = latest_coverage_ps.coverage_data.get(
+                    'coverage_url')
+                coverage_date = latest_coverage_ps.date
             project_url = f'https://github.com/google/oss-fuzz/tree/master/projects/{project.name}'
             return render_template(
                 'project-profile.html',
@@ -690,7 +768,7 @@ def project_profile():
                 project_build_status=build_status,
                 functions_of_interest=[],
                 latest_coverage_report=latest_coverage_report,
-                coverage_date=datestr,
+                coverage_date=coverage_date,
                 project_url=project_url,
                 latest_statistics=latest_statistics,
                 latest_introspector_datestr=latest_introspector_datestr,

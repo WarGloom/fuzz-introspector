@@ -63,42 +63,47 @@ class EngineInput(analysis.AnalysisInterface):
             # the html in the resulting report.
             table_of_contents = html_helpers.HtmlTableOfContents()
 
-        html_string = ""
-        html_string += "<div class=\"report-box\">"
-        html_string += html_helpers.html_add_header_with_link(
-            "Fuzz engine guidance", html_helpers.HTML_HEADING.H1,
-            table_of_contents)
-        html_string += "<div class=\"collapsible\">"
-        html_string += ("<p>This sections provides heuristics that can be used"
-                        " as input to a fuzz engine when running a given fuzz "
-                        "target. The current focus is on providing input that "
-                        "is usable by libFuzzer.</p>")
+        # Performance Optimization: Use list appending to avoid O(N^2) string concatenation
+        html_string = []
+        html_string.append("<div class=\"report-box\">")
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Fuzz engine guidance", html_helpers.HTML_HEADING.H1,
+                table_of_contents))
+        html_string.append("<div class=\"collapsible\">")
+        html_string.append(
+            "<p>This sections provides heuristics that can be used"
+            " as input to a fuzz engine when running a given fuzz "
+            "target. The current focus is on providing input that "
+            "is usable by libFuzzer.</p>")
 
         for prof in profiles:
             logger.info('Generating input for %s', prof.identifier)
-            html_string += html_helpers.html_add_header_with_link(
-                prof.fuzzer_source_file, html_helpers.HTML_HEADING.H2,
-                table_of_contents)
+            html_string.append(
+                html_helpers.html_add_header_with_link(
+                    prof.fuzzer_source_file, html_helpers.HTML_HEADING.H2,
+                    table_of_contents))
 
             # Create dictionary section
-            html_string += self.get_dictionary_section(prof, table_of_contents,
-                                                       out_dir)
+            html_string.append(
+                self.get_dictionary_section(prof, table_of_contents, out_dir))
 
-            html_string += "<br>"
+            html_string.append("<br>")
 
             # Create focus function section
-            html_string += self.get_fuzzer_focus_function_section(
-                prof,
-                table_of_contents,
-            )
-        html_string += "</div>"  # .collapsible
-        html_string += "</div>"  # report-box
+            html_string.append(
+                self.get_fuzzer_focus_function_section(
+                    prof,
+                    table_of_contents,
+                ))
+        html_string.append("</div>")  # .collapsible
+        html_string.append("</div>")  # report-box
 
         logger.info('- Completed analysis %s', self.get_name())
         if not self.display_html:
-            html_string = ""
+            return ""
 
-        return html_string
+        return "".join(html_string)
 
     def get_dictionary(self, profile: fuzzer_profile.FuzzerProfile,
                        out_dir) -> str:
@@ -133,21 +138,28 @@ class EngineInput(analysis.AnalysisInterface):
         link to the table_of_contents.
         """
 
-        html_string = html_helpers.html_add_header_with_link(
-            "Dictionary", html_helpers.HTML_HEADING.H3, table_of_contents)
-        html_string += "<p>Use this with the libFuzzer -dict=DICT.file flag</p>"
-        html_string += "<pre><code class='language-clike'>"
-        html_string += self.get_dictionary(profile, out_dir)
-        html_string += "</code></pre>"
-        return html_string
+        # Performance Optimization: Use list appending to avoid O(N^2) string concatenation
+        html_string = []
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Dictionary", html_helpers.HTML_HEADING.H3, table_of_contents))
+        html_string.append(
+            "<p>Use this with the libFuzzer -dict=DICT.file flag</p>")
+        html_string.append("<pre><code class='language-clike'>")
+        html_string.append(self.get_dictionary(profile, out_dir))
+        html_string.append("</code></pre>")
+        return "".join(html_string)
 
     def get_fuzzer_focus_function_section(
             self, profile: fuzzer_profile.FuzzerProfile,
             table_of_contents: html_helpers.HtmlTableOfContents) -> str:
         """Returns HTML string with fuzzer focus function"""
-        html_string = html_helpers.html_add_header_with_link(
-            "Fuzzer function priority", html_helpers.HTML_HEADING.H3,
-            table_of_contents)
+        # Performance Optimization: Use list appending to avoid O(N^2) string concatenation
+        html_string = []
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Fuzzer function priority", html_helpers.HTML_HEADING.H3,
+                table_of_contents))
 
         calltree_analysis = cta.FuzzCalltreeAnalysis()
         fuzz_blockers = calltree_analysis.get_fuzz_blockers(
@@ -176,13 +188,13 @@ class EngineInput(analysis.AnalysisInterface):
         self.add_to_json_file(constants.ENGINE_INPUT_FILE, profile.identifier,
                               "focus-functions", focus_functions)
 
-        html_string += (
+        html_string.append(
             f"<p>Use one of these functions as input to libfuzzer with flag: "
             f"-focus_function name </p>"
             f"<pre><code class='language-clike'>"
             f"-focus_function={focus_functions}"
             f"</code></pre><br>")
-        return html_string
+        return "".join(html_string)
 
     def add_to_json_file(self, json_file_path: str, fuzzer_name: str, key: str,
                          val: List[str]) -> None:
