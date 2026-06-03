@@ -69,7 +69,7 @@ FI_EXCLUDE_ALL_NON_MUSTS = bool(int(os.getenv('FI_EXCLUDE_ALL_NON_MUSTS',
 NUM_RECENT_DAYS = 30
 FUZZER_COVERAGE_IS_DEGRADED = 5  # 5% or more is a degradation
 
-MUST_INCLUDES = set()
+MUST_INCLUDES: set[str] = set()
 MUST_INCLUDE_WITH_LANG: List[Any] = []
 
 logging.getLogger("requests").setLevel(logging.WARNING)
@@ -1390,7 +1390,7 @@ def analyse_list_of_projects(date, projects_to_analyse,
 
     idx = 0
     jobs = []
-    analyses_dictionary = dict()
+    analyses_dictionary: dict[str, dict] = dict()
     sem_count = 20 if not should_include_details else 1
     project_name_list = list(projects_to_analyse.keys())
 
@@ -2179,14 +2179,14 @@ def create_local_db(oss_fuzz_path):
             continue
         projects_to_analyse.append(project_out)
 
-    analyses_dictionary = dict()
+    analyses_dictionary: dict[str, dict] = dict()
     for project in projects_to_analyse:
         extract_local_project_data(project, oss_fuzz_path, analyses_dictionary)
     _update_local_db_from_analyses_dictionary(analyses_dictionary)
 
 
 def create_local_report_db(local_report_specs: List[str]):
-    analyses_dictionary = dict()
+    analyses_dictionary: dict[str, dict] = dict()
     normalized_specs = _normalize_local_report_specs(local_report_specs)
     for project_name, report_dir in normalized_specs.items():
         extract_local_report_data(project_name, report_dir,
