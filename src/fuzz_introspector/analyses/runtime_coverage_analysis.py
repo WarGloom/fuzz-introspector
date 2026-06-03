@@ -59,15 +59,17 @@ class RuntimeCoverageAnalysis(analysis.AnalysisInterface):
     ) -> str:
         logger.info(f" - Running analysis {self.get_name()}")
 
-        html_string = ""
-        html_string += '<div class="report-box">'
-        html_string += html_helpers.html_add_header_with_link(
-            "Runtime coverage analysis", html_helpers.HTML_HEADING.H1,
-            table_of_contents)
-        html_string += '<div class="collapsible">'
+        # Performance Optimization: Use list appending to avoid O(N^2) string concatenation
+        html_string = []
+        html_string.append('<div class="report-box">')
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Runtime coverage analysis", html_helpers.HTML_HEADING.H1,
+                table_of_contents))
+        html_string.append('<div class="collapsible">')
 
         if not proj_profile.has_coverage_data():
-            html_string += "<p>No runtime coverage data was found</p>"
+            html_string.append("<p>No runtime coverage data was found</p>")
         else:  # Some coverage was found
             functions_of_interest = None
             if analysis.NativePluginProxy.is_enabled():
@@ -96,30 +98,32 @@ class RuntimeCoverageAnalysis(analysis.AnalysisInterface):
                     min_total_lines=30,
                     max_hit_proportion=55)
 
-            html_string += (
+            html_string.append(
                 "<p>This section shows analysis of runtime coverage data.</p> "
             )
-            html_string += (
+            html_string.append(
                 f"<p>For futher technical details on how this section is generated, please "
                 f"see the "
                 f'<a href="{constants.GIT_BRANCH_URL}/doc/Glossary.md#runtime'
                 f'-coverage-analysis">Glossary</a>.</p>')
-            html_string += html_helpers.html_add_header_with_link(
-                "Complex functions with low coverage",
-                html_helpers.HTML_HEADING.H3,
-                table_of_contents,
-            )
+            html_string.append(
+                html_helpers.html_add_header_with_link(
+                    "Complex functions with low coverage",
+                    html_helpers.HTML_HEADING.H3,
+                    table_of_contents,
+                ))
             tables.append(f"myTable{len(tables)}")
-            html_string += html_helpers.html_create_table_head(
-                tables[-1],
-                [
-                    ("Func name", ""),
-                    ("Function total lines", ""),
-                    ("Lines covered at runtime", ""),
-                    ("percentage covered", ""),
-                    ("Reached by fuzzers", ""),
-                ],
-            )
+            html_string.append(
+                html_helpers.html_create_table_head(
+                    tables[-1],
+                    [
+                        ("Func name", ""),
+                        ("Function total lines", ""),
+                        ("Lines covered at runtime", ""),
+                        ("percentage covered", ""),
+                        ("Reached by fuzzers", ""),
+                    ],
+                ))
 
             for funcname in functions_of_interest:
                 logger.debug("Iterating the function %s", funcname)
@@ -140,21 +144,22 @@ class RuntimeCoverageAnalysis(analysis.AnalysisInterface):
                 else:
                     demangled_name = utils.demangle_cpp_func(funcname)
 
-                html_string += html_helpers.html_table_add_row([
-                    demangled_name,
-                    func_lines,
-                    hit_lines,
-                    "%.5s%%" % (str((hit_lines / func_lines) * 100.0)),
-                    reached_by,
-                ])
-            html_string += "</table>"
+                html_string.append(
+                    html_helpers.html_table_add_row([
+                        demangled_name,
+                        func_lines,
+                        hit_lines,
+                        "%.5s%%" % (str((hit_lines / func_lines) * 100.0)),
+                        reached_by,
+                    ]))
+            html_string.append("</table>")
 
-        html_string += "</div>"  # .collapsible
-        html_string += "</div>"  # report-box
+        html_string.append("</div>")  # .collapsible
+        html_string.append("</div>")  # report-box
 
         logger.info(" - Completed analysis %s", self.get_name())
 
-        return html_string
+        return "".join(html_string)
 
     def get_low_cov_high_line_funcs(
         self,
