@@ -637,28 +637,35 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
 
         handled: list[str] = []
 
-        html = "<table><thead>"
-        html += '<th bgcolor="#282A36">Blocker function</th>'
-        html += '<th bgcolor="#282A36">Arguments type</th>'
-        html += '<th bgcolor="#282A36">Return type</th>'
-        html += '<th bgcolor="#282A36">Constants touched</th>'
-        html += "</thead><tbody>"
+        # Performance Optimization: Replaced O(N^2) string concatenation with O(N) list joins.
+        html_parts = ["<table><thead>"]
+        html_parts.append('<th bgcolor="#282A36">Blocker function</th>')
+        html_parts.append('<th bgcolor="#282A36">Arguments type</th>')
+        html_parts.append('<th bgcolor="#282A36">Return type</th>')
+        html_parts.append('<th bgcolor="#282A36">Constants touched</th>')
+        html_parts.append("</thead><tbody>")
         for blocker in blocker_list:
             if blocker.function_name in handled:
                 # Skip repeat blockers
                 continue
             handled.append(blocker.function_name)
             link, line = self._retrieve_function_link(blocker, proj_profile)
-            html += f'<tr><td style="max-width: 150px">{blocker.function_name}<br/>'
-            html += f'in <a href="{link}">'
-            html += f"{blocker.function_source_file}:{line}</a>"
-            html += "</td>"
-            html += f'<td style="max-width: 150px">{str(blocker.arg_types)}</td>'
-            html += f'<td style="max-width: 150px">{str(blocker.return_type)}</td>'
-            html += (f'<td style="max-width: 150px">'
-                     f"{str(blocker.constants_touched)}</td></tr>")
-        html += "</tbody></table>"
-        return html
+            html_parts.append(
+                f'<tr><td style="max-width: 150px">{blocker.function_name}<br/>'
+            )
+            html_parts.append(f'in <a href="{link}">')
+            html_parts.append(f"{blocker.function_source_file}:{line}</a>")
+            html_parts.append("</td>")
+            html_parts.append(
+                f'<td style="max-width: 150px">{str(blocker.arg_types)}</td>')
+            html_parts.append(
+                f'<td style="max-width: 150px">{str(blocker.return_type)}</td>'
+            )
+            html_parts.append(
+                f'<td style="max-width: 150px">{str(blocker.constants_touched)}</td></tr>'
+            )
+        html_parts.append("</tbody></table>")
+        return "".join(html_parts)
 
     def _retrieve_content_rows(
         self,
@@ -680,7 +687,8 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         other is in json string for generating separate json report
         for sink coverage that could be readable by external analyser.
         """
-        html_string = ""
+        # Performance Optimization: Replaced O(N^2) string concatenation with O(N) list joins.
+        html_parts = []
         json_list = []
 
         target_sink_functions = sink_functions
@@ -741,7 +749,7 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
                     row = (f'{row_split[0]}<td style="max-width: 600px">'
                            f"<table>{row_split[1]}")
 
-                html_string += row
+                html_parts.append(row)
 
             json_dict["func_name"] = fd.function_name
             json_dict["fuzzer_reach"] = fd.reached_by_fuzzers
@@ -752,7 +760,7 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         cwe_json: dict[str, Any] = {}
         cwe_json[cwe] = json_list
 
-        return (html_string, json.dumps(cwe_json), index)
+        return ("".join(html_parts), json.dumps(cwe_json), index)
 
     def analysis_func(
         self,
