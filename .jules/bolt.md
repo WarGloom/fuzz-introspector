@@ -17,3 +17,8 @@
 ## 2024-05-18 - HTML String Concatenation Bottleneck
 **Learning:** Python's string concatenation using `+=` inside loops is notoriously slow due to O(N^2) memory reallocation. This was a significant bottleneck in Fuzz Introspector's HTML report generation (e.g. `calltree_analysis.py`, `sinks_analyser.py`) where large strings containing tables, inline JS, and JSON dumps were being appended repeatedly.
 **Action:** Always replace repetitive string concatenation loops (`html_str += ...`) with list accumulation and `"".join(list)`. It provides a significant, measurable performance boost for large string processing.
+## 2024-06-25 - pathlib.Path instantiation in hot loops
+
+**Learning:** Instantiating `pathlib.Path` objects strictly to extract file extensions (e.g., `pathlib.Path(filename).suffix`) inside hot loops (like `os.walk` directory traversals) creates a severe performance bottleneck.
+
+**Action:** Replace `pathlib.Path(filename).suffix in language_extensions` with `filename.endswith(language_extensions_tuple)`. Precompute the tuple of extensions (`language_extensions_tuple = tuple(language_extensions)`) outside the loop to avoid casting overhead on every iteration and leverage Python's fast C backend for substring matching.
