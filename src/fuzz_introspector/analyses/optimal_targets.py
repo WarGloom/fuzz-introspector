@@ -174,10 +174,12 @@ class OptimalTargets(analysis.AnalysisInterface):
         # pylint: disable=unused-argument
         logger.info("- Running analysis %s", self.get_name())
 
-        html_string = ""
-        html_string += html_helpers.html_add_header_with_link(
-            "Optimal target analysis", html_helpers.HTML_HEADING.H2,
-            table_of_contents)
+        # Performance Optimization: Use list appending to avoid O(N^2) string concatenation
+        html_string = []
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Optimal target analysis", html_helpers.HTML_HEADING.H2,
+                table_of_contents))
 
         # Try the native (Rust) path first.
         new_profile: Optional[project_profile.MergedProjectProfile] = None
@@ -211,31 +213,33 @@ class OptimalTargets(analysis.AnalysisInterface):
             new_profile, optimal_target_functions = (
                 self.iteratively_get_optimal_targets(proj_profile))
         assert new_profile is not None
-        html_string += self.get_optimal_target_section(
-            optimal_target_functions,
-            table_of_contents,
-            tables,
-            coverage_url,
-            out_dir,
-            profiles[0].target_lang,
-        )
+        html_string.append(
+            self.get_optimal_target_section(
+                optimal_target_functions,
+                table_of_contents,
+                tables,
+                coverage_url,
+                out_dir,
+                profiles[0].target_lang,
+            ))
 
         # Create section for how the state of the project will be if
         # the optimal target functions are hit.
-        html_string += self.get_consequential_section(
-            new_profile,
-            conclusions,
-            tables,
-            table_of_contents,
-            coverage_url,
-            basefolder,
-            out_dir=out_dir,
-        )
+        html_string.append(
+            self.get_consequential_section(
+                new_profile,
+                conclusions,
+                tables,
+                table_of_contents,
+                coverage_url,
+                basefolder,
+                out_dir=out_dir,
+            ))
 
         logger.info(" - Completed analysis %s", self.get_name())
-        html_string += "</div>"  # .collapsible
+        html_string.append("</div>")  # .collapsible
 
-        return html_string
+        return "".join(html_string)
 
     def qualifies_as_optimal_target(
             self, fd: function_profile.FunctionProfile) -> bool:
@@ -380,36 +384,40 @@ class OptimalTargets(analysis.AnalysisInterface):
         target_lang: str = "c-cpp",
     ) -> str:
         """Create optimal taget section in html report."""
+        # Performance Optimization: Use list appending to avoid O(N^2) string concatenation
         # Table with details about optimal target functions
-        html_string = html_helpers.html_add_header_with_link(
-            "Remaining optimal interesting functions",
-            html_helpers.HTML_HEADING.H3,
-            table_of_contents,
-        )
-        html_string += ("<p> The following table shows a list of functions "
-                        "that are optimal targets. Optimal targets are "
-                        "identified by finding the functions that in "
-                        "combination, yield a high code coverage. </p>")
+        html_string = []
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Remaining optimal interesting functions",
+                html_helpers.HTML_HEADING.H3,
+                table_of_contents,
+            ))
+        html_string.append("<p> The following table shows a list of functions "
+                           "that are optimal targets. Optimal targets are "
+                           "identified by finding the functions that in "
+                           "combination, yield a high code coverage. </p>")
         table_id = "remaining_optimal_interesting_functions"
         tables.append(table_id)
-        html_string += html_helpers.html_create_table_head(
-            table_id,
-            [
-                ("Func name", ""),
-                ("Functions filename", ""),
-                ("Arg count", ""),
-                ("Args", ""),
-                ("Function depth", ""),
-                ("hitcount", ""),
-                ("instr count", ""),
-                ("bb count", ""),
-                ("cyclomatic complexity", ""),
-                ("Reachable functions", ""),
-                ("Incoming references", ""),
-                ("total cyclomatic complexity", ""),
-                ("Unreached complexity", ""),
-            ],
-        )
+        html_string.append(
+            html_helpers.html_create_table_head(
+                table_id,
+                [
+                    ("Func name", ""),
+                    ("Functions filename", ""),
+                    ("Arg count", ""),
+                    ("Args", ""),
+                    ("Function depth", ""),
+                    ("hitcount", ""),
+                    ("instr count", ""),
+                    ("bb count", ""),
+                    ("cyclomatic complexity", ""),
+                    ("Reachable functions", ""),
+                    ("Incoming references", ""),
+                    ("total cyclomatic complexity", ""),
+                    ("Unreached complexity", ""),
+                ],
+            ))
         for fd in optimal_target_functions:
             func_cov_url = utils.resolve_coverage_link(
                 coverage_url,
@@ -423,21 +431,22 @@ class OptimalTargets(analysis.AnalysisInterface):
             html_func_row = (
                 f"<a href=\"{func_cov_url}\"><code class='language-clike'>"
                 f"{demangled}</code></a>")
-            html_string += html_helpers.html_table_add_row([
-                html_func_row,
-                fd.function_source_file,
-                fd.arg_count,
-                fd.arg_types,
-                fd.function_depth,
-                fd.hitcount,
-                fd.i_count,
-                fd.bb_count,
-                fd.cyclomatic_complexity,
-                len(fd.functions_reached),
-                len(fd.incoming_references),
-                fd.total_cyclomatic_complexity,
-                fd.new_unreached_complexity,
-            ])
+            html_string.append(
+                html_helpers.html_table_add_row([
+                    html_func_row,
+                    fd.function_source_file,
+                    fd.arg_count,
+                    fd.arg_types,
+                    fd.function_depth,
+                    fd.hitcount,
+                    fd.i_count,
+                    fd.bb_count,
+                    fd.cyclomatic_complexity,
+                    len(fd.functions_reached),
+                    len(fd.incoming_references),
+                    fd.total_cyclomatic_complexity,
+                    fd.new_unreached_complexity,
+                ]))
 
         json_dict = []
         for fd in optimal_target_functions:
@@ -460,34 +469,37 @@ class OptimalTargets(analysis.AnalysisInterface):
 
         json_report.add_analysis_json_str_as_dict_to_report(
             self.get_name(), self.get_json_string_result(), out_dir)
-        html_string += "</table>\n"
-        return html_string
+        html_string.append("</table>\n")
+        return "".join(html_string)
 
     def create_top_summary_info(
             self, tables: List[str],
             proj_profile: project_profile.MergedProjectProfile) -> str:
         """Create summary info in html report."""
         # pylint: disable=unused-argument
-        html_string = ""
+        # Performance Optimization: Use list appending to avoid O(N^2) string concatenation
+        html_string = []
 
         # Display reachability information
-        html_string += '<div style="display: flex; max-width: 50%">'
+        html_string.append('<div style="display: flex; max-width: 50%">')
 
-        html_string += html_helpers.create_percentage_graph(
-            "Functions statically reachable by fuzzers",
-            proj_profile.reached_func_count,
-            proj_profile.total_functions,
-        )
+        html_string.append(
+            html_helpers.create_percentage_graph(
+                "Functions statically reachable by fuzzers",
+                proj_profile.reached_func_count,
+                proj_profile.total_functions,
+            ))
 
-        html_string += html_helpers.create_percentage_graph(
-            "Cyclomatic complexity statically reachable by fuzzers",
-            proj_profile.reached_complexity,
-            proj_profile.total_complexity,
-        )
+        html_string.append(
+            html_helpers.create_percentage_graph(
+                "Cyclomatic complexity statically reachable by fuzzers",
+                proj_profile.reached_complexity,
+                proj_profile.total_complexity,
+            ))
 
-        html_string += "</div>"
+        html_string.append("</div>")
 
-        return html_string
+        return "".join(html_string)
 
     def get_consequential_section(
         self,
@@ -501,27 +513,31 @@ class OptimalTargets(analysis.AnalysisInterface):
     ) -> str:
         """Create section showing project state if optimal targets are hit"""
         # pylint: disable=unused-argument
-        html_string = (
+        # Performance Optimization: Use list appending to avoid O(N^2) string concatenation
+        html_string = []
+        html_string.append(
             "<p>Implementing fuzzers that target the above functions "
             "will improve reachability such that it becomes:</p>")
         tables.append(f"myTable{len(tables)}")
-        html_string += self.create_top_summary_info(tables, new_profile)
+        html_string.append(self.create_top_summary_info(tables, new_profile))
 
         # Table with details about all functions in the project in case the
         # suggested fuzzers are implemented.
-        html_string += html_helpers.html_add_header_with_link(
-            "All functions overview", html_helpers.HTML_HEADING.H4,
-            table_of_contents)
-        html_string += ("<p> If you implement fuzzers for these functions, the"
-                        " status of all functions in the project will be:</p>")
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "All functions overview", html_helpers.HTML_HEADING.H4,
+                table_of_contents))
+        html_string.append(
+            "<p> If you implement fuzzers for these functions, the"
+            " status of all functions in the project will be:</p>")
         table_id = "all_functions_overview_table"
         tables.append(table_id)
         all_function_table, all_functions_json, _ = (
             html_report.create_all_function_table(tables, new_profile,
                                                   coverage_url, out_dir,
                                                   table_id))
-        html_string += all_function_table
-        html_string += "</div>"  # close report-box
+        html_string.append(all_function_table)
+        html_string.append("</div>")  # close report-box
 
         # Write all functions to the .js file
         if self.dump_files:
@@ -531,4 +547,4 @@ class OptimalTargets(analysis.AnalysisInterface):
                     "w") as func_file:
                 func_file.write("var analysis_1_data = ")
                 func_file.write(json.dumps(all_functions_json))
-        return html_string
+        return "".join(html_string)

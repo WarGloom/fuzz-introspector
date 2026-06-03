@@ -61,14 +61,16 @@ class BugDigestor(analysis.AnalysisInterface):
         if len(input_bugs) == 0:
             return ""
 
-        html_string = ""
-        html_string += "<div class=\"report-box\">"
-        html_string += html_helpers.html_add_header_with_link(
-            "Bug detector analysis", html_helpers.HTML_HEADING.H1,
-            table_of_contents)
-        html_string += "<div class=\"collapsible\">"
+        # Performance Optimization: Use list appending to avoid O(N^2) string concatenation
+        html_string = []
+        html_string.append("<div class=\"report-box\">")
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Bug detector analysis", html_helpers.HTML_HEADING.H1,
+                table_of_contents))
+        html_string.append("<div class=\"collapsible\">")
 
-        html_string += (
+        html_string.append(
             "<p>This section provices analysis that matches bugs "
             "found by fuzzers with data about the rest of the analysis. "
             "This section is still in development and should be considered "
@@ -76,15 +78,18 @@ class BugDigestor(analysis.AnalysisInterface):
 
         # Create table header
         tables.append(f"myTable{len(tables)}")
-        html_string += html_helpers.html_create_table_head(
-            tables[-1], [("Bug type", "The type of bug."),
-                         ("Function", "The function in which the bug occurs")])
+        html_string.append(
+            html_helpers.html_create_table_head(
+                tables[-1],
+                [("Bug type", "The type of bug."),
+                 ("Function", "The function in which the bug occurs")]))
         for bug in input_bugs:
             logger.info("Adding row in input bugs table")
-            html_string += html_helpers.html_table_add_row(
-                [bug.bug_type, bug.function_name])
-        html_string += "</table>"
-        html_string += "</div>"  # .collapsible
-        html_string += "</div>"  # report-box
+            html_string.append(
+                html_helpers.html_table_add_row(
+                    [bug.bug_type, bug.function_name]))
+        html_string.append("</table>")
+        html_string.append("</div>")  # .collapsible
+        html_string.append("</div>")  # report-box
 
-        return html_string
+        return "".join(html_string)
