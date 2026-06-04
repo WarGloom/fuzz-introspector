@@ -1317,37 +1317,35 @@ class JvmProject(Project[JvmSourceCodeFile]):
         if not function:
             return ""
 
-        line_to_print = "  " * depth
-        line_to_print += function
-        line_to_print += " "
-        line_to_print += source_file
-        line_to_print += " "
-        line_to_print += str(line_number)
-        line_to_print += "\n"
+        line_to_print_parts = [
+            "  " * depth, function, " ", source_file, " ",
+            str(line_number), "\n"
+        ]
 
         if not source_code or not isinstance(source_code, JvmSourceCodeFile):
-            return line_to_print
+            return "".join(line_to_print_parts)
 
         function_node = source_code.get_method_node(function)
         if not function_node:
-            return line_to_print
+            return "".join(line_to_print_parts)
 
         callsites = function_node.base_callsites
 
         if function in visited_functions:
-            return line_to_print
+            return "".join(line_to_print_parts)
 
         visited_functions.add(function)
         for cs, line in callsites:
-            line_to_print += self.extract_calltree(
-                source_code.source_file,
-                function=cs,
-                visited_functions=visited_functions,
-                depth=depth + 1,
-                line_number=line,
-            )
+            line_to_print_parts.append(
+                self.extract_calltree(
+                    source_code.source_file,
+                    function=cs,
+                    visited_functions=visited_functions,
+                    depth=depth + 1,
+                    line_number=line,
+                ))
 
-        return line_to_print
+        return "".join(line_to_print_parts)
 
     def get_source_codes_with_harnesses(self) -> list[JvmSourceCodeFile]:
         return super().get_source_codes_with_harnesses()

@@ -877,6 +877,7 @@ def extract_local_project_data(project_name, oss_fuzz_path,
         'all-header-files': all_header_files,
     }
 
+
 def extract_local_report_data(project_name, report_dir, manager_return_dict):
     print(f'Analysing {project_name}')
 
@@ -1071,6 +1072,7 @@ def _update_local_db_from_analyses_dictionary(analyses_dictionary):
                     os.getcwd(),
                     should_include_details=True,
                     all_header_files=all_header_files)
+
 
 def extract_project_data(project_name,
                          date_str,
