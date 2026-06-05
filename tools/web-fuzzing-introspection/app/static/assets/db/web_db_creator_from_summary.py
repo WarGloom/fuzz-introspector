@@ -2274,7 +2274,7 @@ def create_local_db(oss_fuzz_path):
 
 
 def create_local_report_db(local_report_specs: List[str]):
-    analyses_dictionary = dict()
+    analyses_dictionary: Dict[str, Dict[str, Any]] = dict()
     normalized_specs = _normalize_local_report_specs(local_report_specs)
     for project_name, report_dir in normalized_specs.items():
         extract_local_report_data(project_name, report_dir,

@@ -33,6 +33,7 @@ import re
 import shutil
 import subprocess
 import time
+import weakref
 
 from typing import Any, Dict, List, Optional, Type, Set, Union, cast
 
@@ -494,6 +495,11 @@ class NativePluginProxy:
                                            dict[str, Any]] = {}
         self._prefetch_done_for_project: set[tuple[int, tuple[int,
                                                               ...]]] = set()
+        self._project_cache_objects: dict[
+            tuple[int, tuple[int, ...]],
+            tuple[weakref.ReferenceType[Any], tuple[weakref.ReferenceType[Any],
+                                                    ...]],
+        ] = {}
 
     @staticmethod
     def selected_backend() -> str:
@@ -563,7 +569,57 @@ class NativePluginProxy:
     ) -> tuple[int, tuple[int, ...]]:
         # Use tuple of profile ids for content-based caching, not list object id
         profiles_key = tuple(id(p) for p in profiles_list)
-        return (id(proj_profile_obj), profiles_key)
+        project_key = (id(proj_profile_obj), profiles_key)
+        self._ensure_project_cache_identity(project_key, proj_profile_obj,
+                                            profiles_list)
+        return project_key
+
+    def _ensure_project_cache_identity(
+        self,
+        project_key: tuple[int, tuple[int, ...]],
+        proj_profile_obj: "project_profile.MergedProjectProfile",
+        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
+    ) -> None:
+        cached_objects = self._project_cache_objects.get(project_key)
+        if cached_objects is not None:
+            cached_proj_ref, cached_profile_refs = cached_objects
+            cached_profiles_match = len(cached_profile_refs) == len(
+                profiles_list) and all(profile_ref() is profile
+                                       for profile_ref, profile in zip(
+                                           cached_profile_refs, profiles_list))
+            if (cached_proj_ref() is not proj_profile_obj
+                    or not cached_profiles_match):
+                self._clear_project_cache(project_key)
+
+        try:
+            self._project_cache_objects[project_key] = (
+                weakref.ref(proj_profile_obj),
+                tuple(weakref.ref(profile) for profile in profiles_list),
+            )
+        except TypeError:
+            self._clear_project_cache(project_key)
+
+    def _clear_project_cache(
+        self,
+        project_key: tuple[int, tuple[int, ...]],
+    ) -> None:
+        self._serialized_payload_cache = {
+            key: value
+            for key, value in self._serialized_payload_cache.items()
+            if (key[1], key[2]) != project_key
+        }
+        self._result_cache_by_plugin_set = {
+            key: value
+            for key, value in self._result_cache_by_plugin_set.items()
+            if (key[0], key[1]) != project_key
+        }
+        self._result_cache_by_plugin = {
+            key: value
+            for key, value in self._result_cache_by_plugin.items()
+            if (key[0], key[1]) != project_key
+        }
+        self._prefetch_done_for_project.discard(project_key)
+        self._project_cache_objects.pop(project_key, None)
 
     def _build_payload_bytes(
         self,
