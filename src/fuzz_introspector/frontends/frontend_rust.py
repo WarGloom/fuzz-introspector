@@ -879,17 +879,14 @@ class RustProject(datatypes.Project[RustSourceCodeFile]):
         else:
             return ''
 
-        line_to_print = '  ' * depth
-        line_to_print += func_name
-        line_to_print += ' '
-        line_to_print += source_file
-        line_to_print += ' '
-        line_to_print += str(line_number)
-        line_to_print += '\n'
+        line_to_print_parts = [
+            '  ' * depth, func_name, ' ', source_file, ' ',
+            str(line_number), '\n'
+        ]
 
         if (function in visited_functions or not func_node or not source_code
                 or not function):
-            return line_to_print
+            return "".join(line_to_print_parts)
 
         callsites = func_node.base_callsites
         visited_functions.add(function)
@@ -899,15 +896,15 @@ class RustProject(datatypes.Project[RustSourceCodeFile]):
                             and func_node.name != 'fuzz_target')
             other_props = {}
             other_props['is_macro'] = is_macro
-            line_to_print += self.extract_calltree(
-                source_code.source_file,
-                function=cs,
-                visited_functions=visited_functions,
-                depth=depth + 1,
-                line_number=line,
-                other_props=other_props)
+            line_to_print_parts.append(
+                self.extract_calltree(source_code.source_file,
+                                      function=cs,
+                                      visited_functions=visited_functions,
+                                      depth=depth + 1,
+                                      line_number=line,
+                                      other_props=other_props))
 
-        return line_to_print
+        return "".join(line_to_print_parts)
 
     def get_reachable_functions(
             self,

@@ -1327,15 +1327,11 @@ class CppProject(Project[CppSourceCodeFile]):
             logger.debug("Could not find function")
             return ""
 
-        line_to_print = "  " * depth
-        line_to_print += func_name
-        line_to_print += " "
-        line_to_print += source_file
+        line_to_print_parts = [
+            "  " * depth, func_name, " ", source_file, " ",
+            str(line_number), "\n"
+        ]
 
-        line_to_print += " "
-        line_to_print += str(line_number)
-
-        line_to_print += "\n"
         if func_node and not source_code:
             source_code = func_node.parent_source
 
@@ -1347,21 +1343,22 @@ class CppProject(Project[CppSourceCodeFile]):
             if not source_code:
                 logger.debug("Not source code")
             logger.debug("Function visited or no function node")
-            return line_to_print
+            return "".join(line_to_print_parts)
 
         visited_functions.add(function)
         logger.debug("Iterating %s callsites", len(func_node.base_callsites))
         for cs, line in func_node.base_callsites:
             logger.debug("Callsite: %s", cs)
-            line_to_print += self.extract_calltree(
-                source_file=source_code.source_file,
-                function=cs,
-                visited_functions=visited_functions,
-                depth=depth + 1,
-                line_number=line,
-            )
+            line_to_print_parts.append(
+                self.extract_calltree(
+                    source_file=source_code.source_file,
+                    function=cs,
+                    visited_functions=visited_functions,
+                    depth=depth + 1,
+                    line_number=line,
+                ))
         logger.debug("Done")
-        return line_to_print
+        return "".join(line_to_print_parts)
 
     def get_reachable_functions(
         self,

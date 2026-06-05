@@ -355,38 +355,34 @@ class GoProject(Project[GoSourceCodeFile]):
         if not function:
             return ""
 
-        line_to_print = "  " * depth
-        line_to_print += function
-        line_to_print += " "
-        line_to_print += source_file
+        line_to_print_parts = ["  " * depth, function, " ", source_file]
 
         if not source_code or not isinstance(source_code, GoSourceCodeFile):
             source_code = self.find_source_with_func_def(function)
 
-        line_to_print += " "
-        line_to_print += str(line_number)
+        line_to_print_parts.extend([" ", str(line_number), "\n"])
 
-        line_to_print += "\n"
         if not source_code:
-            return line_to_print
+            return "".join(line_to_print_parts)
 
         func = source_code.get_function_node(function)
         if not func:
-            return line_to_print
+            return "".join(line_to_print_parts)
 
         if function in visited_functions:
-            return line_to_print
+            return "".join(line_to_print_parts)
 
         visited_functions.add(function)
         for cs, line in func.base_callsites:
-            line_to_print += self.extract_calltree(
-                source_code.source_file,
-                function=cs,
-                visited_functions=visited_functions,
-                depth=depth + 1,
-                line_number=line,
-            )
-        return line_to_print
+            line_to_print_parts.append(
+                self.extract_calltree(
+                    source_code.source_file,
+                    function=cs,
+                    visited_functions=visited_functions,
+                    depth=depth + 1,
+                    line_number=line,
+                ))
+        return "".join(line_to_print_parts)
 
     def get_reachable_functions(
         self,

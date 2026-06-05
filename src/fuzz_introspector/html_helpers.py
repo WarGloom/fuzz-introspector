@@ -313,14 +313,15 @@ def html_create_table_head(
         f"<table id='{table_head}' class='cell-border compact stripe' "
         f"data-sort-by-column='{sort_by_column}' data-sort-order='{sort_order}'>"
     )
-    html_str += "<thead><tr>\n"
+    html_parts = [html_str, "<thead><tr>\n"]
     for column_title, column_description in items:
         if column_description == "":
-            html_str += f"<th>{column_title}</th>\n"
+            html_parts.append(f"<th>{column_title}</th>\n")
         else:
-            html_str += f"<th title='{column_description}'>{column_title}</th>\n"
-    html_str += "</tr></thead><tbody>"
-    return html_str
+            html_parts.append(
+                f"<th title='{column_description}'>{column_title}</th>\n")
+    html_parts.append("</tr></thead><tbody>")
+    return "".join(html_parts)
 
 
 def get_simple_box(title: str, value: str) -> str:
@@ -409,8 +410,7 @@ def create_conclusions_box(conclusions: List[HTMLConclusion]) -> str:
     severity are placed lowest (positive conclusiosn at top, negative at
     bottom).
     """
-    html_string = ""
-    html_string += '<div class="high-level-conclusions-wrapper">'
+    html_parts = ['<div class="high-level-conclusions-wrapper">']
 
     # Sort conclusions to show highest level (positive conclusion) first
     conclusions = list(reversed(sorted(conclusions)))
@@ -421,19 +421,19 @@ def create_conclusions_box(conclusions: List[HTMLConclusion]) -> str:
             conclusion_color = "yellow"
         else:
             conclusion_color = "green"
-        html_string += f"""<div class="line-wrapper">
+        html_parts.append(f"""<div class="line-wrapper">
     <div class="high-level-conclusion {conclusion_color}-conclusion collapsed">
     {conclusion.title}
         <div class="high-level-extended" style="background:transparent; overflow:hidden">
             {conclusion.description}
         </div>
     </div>
-</div>"""
+</div>""")
     # TODO(david)
     # The below </div> was there when refactoring, but it does not look like
     # it shuold be there. Verify.
-    html_string += "</div>"
-    return html_string
+    html_parts.append("</div>")
+    return "".join(html_parts)
 
 
 def create_calltree_color_distribution_table(color_list: List[str]) -> str:
