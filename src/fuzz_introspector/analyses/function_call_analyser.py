@@ -193,63 +193,67 @@ class ThirdPartyAPICoverageAnalyser(analysis.AnalysisInterface):
          reachable_func_list) = (self.third_party_func_profile(
              proj_profile, callsite_list, function_list))
 
-        html_string = ""
-        html_string += '<div class="report-box">'
+        html_string = []
+        html_string.append('<div class="report-box">')
 
-        html_string += html_helpers.html_add_header_with_link(
-            "Function call coverage", html_helpers.HTML_HEADING.H1,
-            table_of_contents)
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Function call coverage", html_helpers.HTML_HEADING.H1,
+                table_of_contents))
 
         # Table with all function calls for each files
-        html_string += '<div class="collapsible">'
-        html_string += ("<p>"
-                        "This section shows a list of 3rd party function "
-                        "calls and their relative coverage information. "
-                        "By static analysis of the target project code, "
-                        "all of the 3rd party function call and their caller "
-                        "information, including the source file and line "
-                        "number that initiate the call are captured. "
-                        "The caller source code file and line number are "
-                        "shown in column 2 while column 1 is the function "
-                        "name of the 3rd party function call. Each occurrent "
-                        "of the 3rd party function call will occuply "
-                        "a separate row. Column 3 of each row indicate if "
-                        "the 3rd party call in the source file line is "
-                        "unreachable. Column 4 lists all fuzzers that have "
-                        "covered that particular system call in "
-                        "that specific location (source file and line)"
-                        "during their dynamic fuzzing."
-                        "</p>")
+        html_string.append('<div class="collapsible">')
+        html_string.append(
+            "<p>"
+            "This section shows a list of 3rd party function "
+            "calls and their relative coverage information. "
+            "By static analysis of the target project code, "
+            "all of the 3rd party function call and their caller "
+            "information, including the source file and line "
+            "number that initiate the call are captured. "
+            "The caller source code file and line number are "
+            "shown in column 2 while column 1 is the function "
+            "name of the 3rd party function call. Each occurrent "
+            "of the 3rd party function call will occuply "
+            "a separate row. Column 3 of each row indicate if "
+            "the 3rd party call in the source file line is "
+            "unreachable. Column 4 lists all fuzzers that have "
+            "covered that particular system call in "
+            "that specific location (source file and line)"
+            "during their dynamic fuzzing."
+            "</p>")
 
-        html_string += html_helpers.html_add_header_with_link(
-            "Function in each files in report",
-            html_helpers.HTML_HEADING.H2,
-            table_of_contents,
-        )
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Function in each files in report",
+                html_helpers.HTML_HEADING.H2,
+                table_of_contents,
+            ))
 
         # Third party function calls table
         tables.append(f"myTable{len(tables)}")
-        html_string += html_helpers.html_create_table_head(
-            tables[-1],
-            [
-                ("Target sink", ""),
-                (
-                    "Callsite location",
-                    "Source file, line number and parent function of this function call. "
-                    "Based on static analysis.",
-                ),
-                (
-                    "Reached by fuzzer",
-                    "Is this code reachable by any functions? "
-                    "Based on static analysis.",
-                ),
-                (
-                    "Covered by Fuzzers",
-                    "The specific list of fuzzers that cover this function call. "
-                    "Based on dynamic analysis.",
-                ),
-            ],
-        )
+        html_string.append(
+            html_helpers.html_create_table_head(
+                tables[-1],
+                [
+                    ("Target sink", ""),
+                    (
+                        "Callsite location",
+                        "Source file, line number and parent function of this function call. "
+                        "Based on static analysis.",
+                    ),
+                    (
+                        "Reached by fuzzer",
+                        "Is this code reachable by any functions? "
+                        "Based on static analysis.",
+                    ),
+                    (
+                        "Covered by Fuzzers",
+                        "The specific list of fuzzers that cover this function call. "
+                        "Based on dynamic analysis.",
+                    ),
+                ],
+            ))
 
         # Loop through each function call exists in this project
         # Filer to only look for functions of interest
@@ -307,15 +311,16 @@ class ThirdPartyAPICoverageAnalyser(analysis.AnalysisInterface):
                 list_of_fuzzer_covered = (fd.reached_by_fuzzers_combined
                                           if fuzzer_hit else [""])
 
-                html_string += html_helpers.html_table_add_row([
-                    f"{func_name}",
-                    f"{called_location}",
-                    f"{hit}",
-                    f"{str(list_of_fuzzer_covered)}",
-                ])
-        html_string += "</table>"
+                html_string.append(
+                    html_helpers.html_table_add_row([
+                        f"{func_name}",
+                        f"{called_location}",
+                        f"{hit}",
+                        f"{str(list_of_fuzzer_covered)}",
+                    ]))
+        html_string.append("</table>")
 
-        html_string += "</div>"  # .collapsible
-        html_string += "</div>"  # report-box
+        html_string.append("</div>")  # .collapsible
+        html_string.append("</div>")  # report-box
 
-        return html_string
+        return "".join(html_string)

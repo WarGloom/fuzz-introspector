@@ -73,12 +73,13 @@ class DriverSynthesizer(analysis.AnalysisInterface):
         fuzz_targets=None,
     ) -> str:
         logger.info(f" - Running analysis {self.get_name()}")
-        html_string = ""
-        html_string += '<div class="report-box">'
-        html_string += html_helpers.html_add_header_with_link(
-            "Fuzz driver synthesis", html_helpers.HTML_HEADING.H1,
-            table_of_contents)
-        html_string += '<div class="collapsible">'
+        html_string = []
+        html_string.append('<div class="report-box">')
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Fuzz driver synthesis", html_helpers.HTML_HEADING.H1,
+                table_of_contents))
+        html_string.append('<div class="collapsible">')
 
         if fuzz_targets is None or len(fuzz_targets) == 0:
             A1 = optimal_targets.OptimalTargets()
@@ -172,28 +173,31 @@ class DriverSynthesizer(analysis.AnalysisInterface):
             % (str([f.function_name for f in fuzz_targets])))
 
         # Create the necessary HTML code for displaying the fuzz drivers
-        html_string += html_helpers.html_add_header_with_link(
-            "New fuzzers", html_helpers.HTML_HEADING.H3, table_of_contents)
-        html_string += (
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "New fuzzers", html_helpers.HTML_HEADING.H3,
+                table_of_contents))
+        html_string.append(
             "<p>The below fuzzers are templates and suggestions for how "
             "to target the set of optimal functions above</p>")
 
         for filename in final_fuzzers:
-            html_string += html_helpers.html_add_header_with_link(
-                str(filename.split("/")[-1]),
-                html_helpers.HTML_HEADING.H4,
-                table_of_contents,
-            )
-            html_string += f"<b>Target file:</b>{filename}<br>"
+            html_string.append(
+                html_helpers.html_add_header_with_link(
+                    str(filename.split("/")[-1]),
+                    html_helpers.HTML_HEADING.H4,
+                    table_of_contents,
+                ))
+            html_string.append(f"<b>Target file:</b>{filename}<br>")
             all_functions = ", ".join(
                 [f.function_name for f in final_fuzzers[filename].target_fds])
-            html_string += f"<b>Target functions:</b> {all_functions}"
-            html_string += (f"<pre><code class='language-clike'>"
-                            f"{final_fuzzers[filename].source_code}"
-                            f"</code></pre><br>")
+            html_string.append(f"<b>Target functions:</b> {all_functions}")
+            html_string.append(f"<pre><code class='language-clike'>"
+                               f"{final_fuzzers[filename].source_code}"
+                               f"</code></pre><br>")
 
-        html_string += "</div>"  # .collapsible
-        html_string += "</div>"  # report-box
+        html_string.append("</div>")  # .collapsible
+        html_string.append("</div>")  # report-box
         logger.info(f" - Completed analysis {self.get_name()}")
 
-        return html_string
+        return "".join(html_string)
