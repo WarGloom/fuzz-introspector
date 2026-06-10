@@ -385,6 +385,18 @@ def test_if_debug_correlator_env_invalid_values_fall_back(
     )
 
 
+def test_if_debug_correlator_env_defaults_to_rust_even_without_global_native_backend(
+    monkeypatch,
+):
+    monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, raising=False)
+    monkeypatch.delenv("FI_NATIVE_BACKENDS", raising=False)
+
+    assert (
+        analysis._parse_if_debug_correlator_backend_env()
+        == analysis.backend_loaders.BACKEND_RUST
+    )
+
+
 def test_if_debug_correlator_env_accepts_go(monkeypatch):
     monkeypatch.setenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, "go")
 
@@ -486,6 +498,66 @@ def test_if_debug_correlator_rust_invokes_native_branch_when_available(monkeypat
     assert llvm_functions[0]["debug_function_info"]["name"] == "native_target"
     assert captured_payload["command_env_prefix"] == "FI_IF_DEBUG_CORRELATOR"
     assert captured_payload["selected_backend"] == analysis.backend_loaders.BACKEND_RUST
+
+
+def test_if_debug_correlator_default_rust_invokes_native_branch(
+    monkeypatch,
+):
+    monkeypatch.delenv(analysis.FI_IF_DEBUG_CORRELATOR_BACKEND_ENV, raising=False)
+    monkeypatch.delenv("FI_NATIVE_BACKENDS", raising=False)
+
+    llvm_functions = [
+        {
+            "Func name": "native_target",
+            "Functions filename": "/src/project/native_target.cc",
+            "source_line_begin": "10",
+        }
+    ]
+
+    def fake_run_correlator_backend(**_kwargs):
+        return analysis.backend_loaders.CorrelatorBackendResult(
+            selected_backend=analysis.backend_loaders.BACKEND_RUST,
+            strict_mode=False,
+            response={
+                "schema_version": analysis.backend_loaders.CORRELATOR_SCHEMA_VERSION,
+                "status": "success",
+                "counters": {},
+                "artifacts": {
+                    "function_updates": [
+                        {
+                            "row_idx": 0,
+                            "function_signature": "sig::native-default",
+                            "debug_function_info": {"name": "native_target"},
+                        }
+                    ]
+                },
+                "timings": {},
+            },
+        )
+
+    def _python_fallback_must_not_run(*_args, **_kwargs):
+        raise AssertionError("python fallback should not run after native success")
+
+    monkeypatch.setattr(
+        analysis.backend_loaders,
+        "run_correlator_backend",
+        fake_run_correlator_backend,
+    )
+    monkeypatch.setattr(
+        analysis,
+        "_correlate_introspection_functions_to_debug_info_python",
+        _python_fallback_must_not_run,
+    )
+
+    analysis.correlate_introspection_functions_to_debug_info(
+        llvm_functions,
+        [],
+        "c-cpp",
+        report_dict={"all_files_in_project": []},
+    )
+
+    assert llvm_functions[0]["function_signature"] == "sig::native-default"
+    assert llvm_functions[0]["debug_function_info"]["name"] == "native_target"
 
 
 def test_if_debug_correlator_go_forces_shadow_mode_for_c_cpp(
