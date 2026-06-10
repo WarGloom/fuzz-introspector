@@ -146,15 +146,15 @@ def test_reaches_func(tmpdir, sample_cfg1):
     fp._set_all_reached_functions_runtime()
 
     assert fp.reaches_func_runtime('abc')
-    assert fp.reaches_func_runtime('stu')
-    assert fp.reaches_func_runtime('Random')
+    assert not fp.reaches_func_runtime('stu')
+    assert not fp.reaches_func_runtime('Random')
     assert not fp.reaches_func_runtime('def')
     assert not fp.reaches_func_runtime('jkl')
 
     # Runtime or tatically reached functions
     assert fp.reaches_func_combined('abc')
-    assert fp.reaches_func_combined('stu')
-    assert fp.reaches_func_combined('Random')
+    assert not fp.reaches_func_combined('stu')
+    assert not fp.reaches_func_combined('Random')
     assert fp.reaches_func_combined('def')
     assert not fp.reaches_func_combined('jkl')
 
@@ -345,6 +345,92 @@ LLVMFuzzerTestOneInput /src/project/fuzzer.cc linenumber=-1
     assert fp.file_targets["/src/project/file.cc"] == {"allowed"}
 
 
+def test_runtime_reached_functions_use_canonical_profile_names() -> None:
+    fp = fuzzer_profile.FuzzerProfile(
+        "test.data",
+        {
+            "Fuzzer filename": "/src/project/fuzzer.cc",
+            "All functions": {
+                "Elements": [
+                    {
+                        "functionName": "LLVMFuzzerTestOneInput",
+                        "functionsReached": ["target()"],
+                        "functionSourceFile": "/src/project/fuzzer.cc",
+                        "linkageType": None,
+                        "functionLinenumber": None,
+                        "returnType": None,
+                        "argCount": None,
+                        "argTypes": None,
+                        "argNames": None,
+                        "BBCount": None,
+                        "ICount": None,
+                        "EdgeCount": None,
+                        "CyclomaticComplexity": None,
+                        "functionUses": None,
+                        "functionDepth": None,
+                        "constantsTouched": None,
+                        "BranchProfiles": [],
+                        "Callsites": [],
+                    },
+                    {
+                        "functionName": "_Z6targetv",
+                        "functionsReached": [],
+                        "functionSourceFile": "/src/project/target.cc",
+                        "linkageType": None,
+                        "functionLinenumber": None,
+                        "returnType": None,
+                        "argCount": None,
+                        "argTypes": None,
+                        "argNames": None,
+                        "BBCount": None,
+                        "ICount": None,
+                        "EdgeCount": None,
+                        "CyclomaticComplexity": None,
+                        "functionUses": None,
+                        "functionDepth": None,
+                        "constantsTouched": None,
+                        "BranchProfiles": [],
+                        "Callsites": [],
+                    },
+                    {
+                        "functionName": "LLVMFuzzerInitialize",
+                        "functionsReached": [],
+                        "functionSourceFile": "/src/project/fuzzer.cc",
+                        "linkageType": None,
+                        "functionLinenumber": None,
+                        "returnType": None,
+                        "argCount": None,
+                        "argTypes": None,
+                        "argNames": None,
+                        "BBCount": None,
+                        "ICount": None,
+                        "EdgeCount": None,
+                        "CyclomaticComplexity": None,
+                        "functionUses": None,
+                        "functionDepth": None,
+                        "constantsTouched": None,
+                        "BranchProfiles": [],
+                        "Callsites": [],
+                    },
+                ]
+            },
+        },
+        "c-cpp",
+        cfg_content="""Call tree
+LLVMFuzzerTestOneInput /src/project/fuzzer.cc linenumber=-1
+  target() /src/project/target.cc linenumber=10""",
+    )
+    coverage = code_coverage.CoverageProfile()
+    coverage.covmap["_Z6targetv"] = [(10, 1)]
+    coverage.covmap["LLVMFuzzerInitialize"] = [(5, 1)]
+    fp.coverage = coverage
+
+    fp._set_all_reached_functions()
+    fp._set_all_reached_functions_runtime()
+
+    assert fp.functions_reached_by_fuzzer_runtime == {"target()"}
+
+
 def test_invalid_exclusion_patterns_are_ignored_with_warning(
         caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level("WARNING"):
@@ -481,3 +567,87 @@ def test_is_file_covered_caches_coverage_scans(tmpdir) -> None:
     fp.coverage = second_cov
     assert not fp.is_file_covered("/src/project/file_a.cc", "/src/project")
     assert second_cov.call_count == 2
+
+
+def _func_elem(name, source_file, reached=None):
+    return {
+        "functionName": name,
+        "functionsReached": reached or [],
+        "functionSourceFile": source_file,
+        "linkageType": None,
+        "functionLinenumber": None,
+        "returnType": None,
+        "argCount": None,
+        "argTypes": None,
+        "argNames": None,
+        "BBCount": None,
+        "ICount": None,
+        "EdgeCount": None,
+        "CyclomaticComplexity": None,
+        "functionUses": None,
+        "functionDepth": None,
+        "constantsTouched": None,
+        "BranchProfiles": [],
+        "Callsites": [],
+    }
+
+
+def test_coverage_blocker_stats_canonicalize_and_deduplicate_aliases() -> None:
+    fp = fuzzer_profile.FuzzerProfile(
+        "test.data",
+        {
+            "Fuzzer filename": "/src/project/fuzzer.cc",
+            "All functions": {
+                "Elements": [
+                    _func_elem("LLVMFuzzerTestOneInput",
+                               "/src/project/fuzzer.cc", ["_Z6targetv"]),
+                    _func_elem("_Z6targetv", "/src/project/target.cc"),
+                ]
+            },
+        },
+        "c-cpp",
+        cfg_content="""Call tree
+LLVMFuzzerTestOneInput /src/project/fuzzer.cc linenumber=-1
+  target() /src/project/target.cc linenumber=10""",
+    )
+    fp.coverage = code_coverage.CoverageProfile()
+    fp.coverage.covmap["_Z6targetv"] = [(10, 1)]
+    fp.functions_reached_by_fuzzer = {"_Z6targetv", "target()"}
+    fp._set_all_reached_functions_runtime()
+
+    assert fp.get_coverage_blocker_stats() == {
+        "reachable-funcs": 1,
+        "reached-funcs": 1,
+        "cov-reach-proportion": 100.0,
+    }
+
+
+def test_coverage_blocker_stats_keep_broad_runtime_stats() -> None:
+    fp = fuzzer_profile.FuzzerProfile(
+        "test.data",
+        {
+            "Fuzzer filename": "/src/project/fuzzer.cc",
+            "All functions": {
+                "Elements": [
+                    _func_elem("LLVMFuzzerTestOneInput",
+                               "/src/project/fuzzer.cc", ["helper"]),
+                    _func_elem("helper", "/src/project/fuzzer.cc"),
+                ]
+            },
+        },
+        "c-cpp",
+        cfg_content="""Call tree
+LLVMFuzzerTestOneInput /src/project/fuzzer.cc linenumber=-1
+  helper /src/project/fuzzer.cc linenumber=10""",
+    )
+    fp.coverage = code_coverage.CoverageProfile()
+    fp.coverage.covmap["LLVMFuzzerTestOneInput"] = [(1, 1)]
+    fp.coverage.covmap["helper"] = [(10, 1)]
+    fp.functions_reached_by_fuzzer = {"LLVMFuzzerTestOneInput", "helper"}
+    fp._set_all_reached_functions_runtime()
+
+    assert fp.get_coverage_blocker_stats() == {
+        "reachable-funcs": 2,
+        "reached-funcs": 2,
+        "cov-reach-proportion": 100.0,
+    }

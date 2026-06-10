@@ -1090,6 +1090,30 @@ class FuzzerProfile:
                 uncovered_funcs.append(funcname)
         return uncovered_funcs
 
+    def get_coverage_blocker_stats(self) -> Dict[str, float]:
+        function_aliases = self._build_function_name_alias_map()
+        reachable_funcs = {
+            function_aliases.get(func_name, func_name)
+            for func_name in self.functions_reached_by_fuzzer
+        }
+        runtime_reached_funcs = {
+            function_aliases.get(func_name, func_name)
+            for func_name in self.functions_reached_by_fuzzer_runtime
+        }
+        reached_funcs = reachable_funcs & runtime_reached_funcs
+
+        reachable_count = len(reachable_funcs)
+        reached_count = len(reached_funcs)
+        cov_reach_proportion = 0.0
+        if reachable_count > 0:
+            cov_reach_proportion = (float(reached_count) /
+                                    float(reachable_count)) * 100.0
+        return {
+            "reachable-funcs": reachable_count,
+            "reached-funcs": reached_count,
+            "cov-reach-proportion": cov_reach_proportion,
+        }
+
     def is_file_covered(self,
                         file_name: str,
                         basefolder: Optional[str] = None) -> bool:
@@ -1271,9 +1295,25 @@ class FuzzerProfile:
                 "No coverage report for retrieving runtime reached functions.")
             return
 
+        function_aliases = self._build_function_name_alias_map()
+        statically_reached_functions = {
+            function_aliases.get(func_name, func_name)
+            for func_name in self.functions_reached_by_fuzzer
+        }
         for func_name in self.coverage.covmap:
-            if self.coverage.is_func_hit(func_name):
-                self.functions_reached_by_fuzzer_runtime.add(func_name)
+            canonical_func_name = function_aliases.get(func_name, func_name)
+            if (self.coverage.is_func_hit(func_name)
+                    and canonical_func_name in statically_reached_functions):
+                self.functions_reached_by_fuzzer_runtime.add(
+                    canonical_func_name)
+
+    def _build_function_name_alias_map(self) -> Dict[str, str]:
+        function_aliases: Dict[str, str] = {}
+        for function_name, func_profile in self.all_class_functions.items():
+            for alias in function_profile.get_function_name_aliases(
+                    function_name, func_profile.raw_function_name):
+                function_aliases.setdefault(alias, function_name)
+        return function_aliases
 
     def _load_coverage(self, target_folder: str) -> None:
         """Load coverage data for this profile"""

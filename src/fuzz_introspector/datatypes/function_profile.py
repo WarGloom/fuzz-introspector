@@ -30,6 +30,19 @@ from fuzz_introspector import utils
 logger = logging.getLogger(name=__name__)
 
 
+def get_function_name_aliases(function_name: str,
+                              raw_function_name: str = "") -> set[str]:
+    aliases = {function_name, raw_function_name}
+    for alias in list(aliases):
+        if not alias:
+            continue
+        aliases.add(utils.demangle_cpp_func(alias))
+        aliases.add(utils.demangle_rust_func(alias))
+        aliases.add(utils.normalise_str(alias))
+        aliases.add(utils.remove_jvm_generics(alias))
+    return {alias for alias in aliases if alias}
+
+
 class FunctionProfile:
     """
     Class for storing information about a given Function
