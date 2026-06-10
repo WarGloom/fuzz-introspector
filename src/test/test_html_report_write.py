@@ -248,6 +248,14 @@ def test_create_runtime_coverage_section_reuses_cov_metrics(
             counter["calls"] += 1
             return cov_metrics[funcname]
 
+        @staticmethod
+        def get_coverage_blocker_stats():
+            return {
+                "reachable-funcs": 2,
+                "reached-funcs": 1,
+                "cov-reach-proportion": 50.0,
+            }
+
     monkeypatch.setattr(
         html_report.json_report,
         "add_fuzzer_key_value_to_report",
@@ -286,6 +294,83 @@ def test_create_runtime_coverage_section_reuses_cov_metrics(
             "percentage hit": "0.0%",
         },
     ]
+
+
+def test_runtime_coverage_section_writes_broad_blocker_stats(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    written_stats = {}
+
+    class DummyProfile:
+        identifier = "dummy-fuzzer"
+        coverage = SimpleNamespace(covmap={
+            "target": object(),
+            "harness-helper": object(),
+        })
+        functions_reached_by_fuzzer = {"target", "harness-helper"}
+        functions_reached_by_fuzzer_runtime = {"target", "harness-helper"}
+
+        @staticmethod
+        def get_cov_metrics(funcname: str):
+            return {
+                "target": (4, 4, 100.0),
+                "harness-helper": (3, 3, 100.0),
+            }[funcname]
+
+        @staticmethod
+        def get_coverage_blocker_stats():
+            return {
+                "reachable-funcs": 2,
+                "reached-funcs": 2,
+                "cov-reach-proportion": 100.0,
+            }
+
+    def capture_stats(_identifier, key, value, _out_dir):
+        if key == "coverage-blocker-stats":
+            written_stats.update(value)
+
+    monkeypatch.setattr(html_report.json_report,
+                        "add_fuzzer_key_value_to_report", capture_stats)
+
+    fuzzer_table_data: dict[str, list[dict[str, object]]] = {}
+    html = html_report.create_fuzzer_profile_runtime_coverage_section(
+        proj_profile=SimpleNamespace(),
+        profile=DummyProfile(),
+        table_of_contents=html_report.html_helpers.HtmlTableOfContents(),
+        profile_idx=0,
+        fuzzer_table_data=fuzzer_table_data,
+        extract_conclusion=True,
+        conclusions=[],
+        tables=[],
+        out_dir=str(tmp_path),
+    )
+
+    assert written_stats == {
+        "reachable-funcs": 2,
+        "reached-funcs": 2,
+        "cov-reach-proportion": 100.0,
+    }
+    assert fuzzer_table_data["myTable0"][1]["Function name"] == "harness-helper"
+    assert "Covered functions" in html
+    assert "Reachable functions" in html
+
+
+def test_top_summary_warning_uses_runtime_reached_scope() -> None:
+    proj_profile = SimpleNamespace(
+        reached_func_count=1,
+        total_functions=2,
+        reached_complexity=1,
+        total_complexity=2,
+        reached_func_percentage=50.0,
+        reached_complexity_percentage=50.0,
+        target_lang="c-cpp",
+        get_all_runtime_covered_functions=lambda: ["covered_a", "covered_b"],
+        get_all_runtime_reached_functions=lambda: ["covered_a"],
+        has_coverage_data=lambda: True,
+    )
+
+    html = html_report.create_boxed_top_summary_info(proj_profile, [])
+
+    assert "runtime covered functions are larger" not in html
 
 
 def test_create_horisontal_calltree_image_uses_agg_when_backend_not_set(

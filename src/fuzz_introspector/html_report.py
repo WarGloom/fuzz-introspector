@@ -945,6 +945,7 @@ def create_boxed_top_summary_info(
 
     # Function code coverage
     covered_funcs = proj_profile.get_all_runtime_covered_functions()
+    runtime_reached_funcs = proj_profile.get_all_runtime_reached_functions()
     html_string += html_helpers.create_percentage_graph(
         "Runtime code coverage of functions",
         len(covered_funcs),
@@ -956,7 +957,7 @@ def create_boxed_top_summary_info(
         {html_string}
     </div>"""
 
-    if len(covered_funcs) > proj_profile.reached_func_count:
+    if len(runtime_reached_funcs) > proj_profile.reached_func_count:
         # Add warning
         html_string += """<span class="warning-box blue-warning">
             <p> <b>Warning:</b>
@@ -1071,7 +1072,6 @@ def create_fuzzer_profile_runtime_coverage_section(
         "desc",
     )
 
-    total_hit_functions = 0
     get_cov_metrics = profile.get_cov_metrics
     coverage_metrics: Dict[str, Tuple[Optional[int], Optional[int],
                                       Optional[float]]] = {}
@@ -1084,8 +1084,6 @@ def create_fuzzer_profile_runtime_coverage_section(
                                           hit_percentage)
 
             if hit_percentage is not None:
-                if hit_lines and hit_lines > 0:
-                    total_hit_functions += 1
                 table_rows.append({
                     "Function name":
                     funcname,
@@ -1101,37 +1099,22 @@ def create_fuzzer_profile_runtime_coverage_section(
                              funcname)
     func_hit_table_string += "</table>"
 
-    # Get how many functions are covered relative to reachability
-    uncovered_reachable_funcs = 0
-    if profile.coverage is not None:
-        for funcname in profile.functions_reached_by_fuzzer:
-            metrics = coverage_metrics.get(funcname)
-            if metrics is None:
-                metrics = get_cov_metrics(funcname)
-            total_func_lines, hit_lines, _ = metrics
-            if total_func_lines is None or hit_lines == 0:
-                uncovered_reachable_funcs += 1
-    reachable_funcs = len(profile.functions_reached_by_fuzzer)
-    reached_funcs = reachable_funcs - uncovered_reachable_funcs
-    try:
-        cov_reach_proportion = (float(reached_funcs) /
-                                float(reachable_funcs)) * 100.0
-    except Exception:
-        logger.info("reachable funcs is 0")
-        cov_reach_proportion = 0.0
+    blocker_stats = profile.get_coverage_blocker_stats()
+    reachable_funcs = int(blocker_stats["reachable-funcs"])
+    reached_funcs = int(blocker_stats["reached-funcs"])
+    uncovered_reachable_funcs = reachable_funcs - reached_funcs
+    cov_reach_proportion = float(blocker_stats["cov-reach-proportion"])
+    runtime_reached_func_count = len(
+        getattr(profile, "functions_reached_by_fuzzer_runtime", set()))
     str_percentage = "%.5s%%" % str(cov_reach_proportion)
     json_report.add_fuzzer_key_value_to_report(
         profile.identifier,
         "coverage-blocker-stats",
-        {
-            "reachable-funcs": reachable_funcs,
-            "reached-funcs": reached_funcs,
-            "cov-reach-proportion": cov_reach_proportion,
-        },
+        blocker_stats,
         out_dir,
     )
     if extract_conclusion:
-        if cov_reach_proportion < 30.0:
+        if reachable_funcs > 0 and cov_reach_proportion < 30.0:
             conclusions.append(
                 html_helpers.HTMLConclusion(
                     2,
@@ -1144,8 +1127,7 @@ def create_fuzzer_profile_runtime_coverage_section(
 
     html_parts.append('<div style="display: flex; margin-bottom: 10px;">')
     html_parts.append(
-        html_helpers.get_simple_box("Covered functions",
-                                    str(total_hit_functions)))
+        html_helpers.get_simple_box("Covered functions", str(reached_funcs)))
     html_parts.append(
         html_helpers.get_simple_box(
             "Functions that are reachable but not covered",
@@ -1163,7 +1145,7 @@ def create_fuzzer_profile_runtime_coverage_section(
     html_parts.append(
         html_constants.INFO_SUM_OF_COVERED_FUNCS_EQ_REACHABLE_FUNCS)
 
-    if total_hit_functions > reachable_funcs:
+    if runtime_reached_func_count > reachable_funcs:
         html_parts.append(
             html_constants.WARNING_TOTAL_FUNC_OVER_REACHABLE_FUNC)
 
