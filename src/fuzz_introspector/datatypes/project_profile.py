@@ -65,6 +65,17 @@ def _choose_canonical_profile(
     return current_fd
 
 
+def _build_function_name_alias_map(
+        functions: Dict[str,
+                        function_profile.FunctionProfile]) -> Dict[str, str]:
+    function_aliases: Dict[str, str] = {}
+    for function_name, func_profile in functions.items():
+        for alias in function_profile.get_function_name_aliases(
+                function_name, func_profile.raw_function_name):
+            function_aliases.setdefault(alias, function_name)
+    return function_aliases
+
+
 class MergedProjectProfile:
     """
     Class for storing information about all fuzzers combined in a given project.
@@ -114,11 +125,21 @@ class MergedProjectProfile:
             str, set[str]] = collections.defaultdict(set)
         for profile in profiles:
             profile_id = profile.identifier
+            function_aliases = _build_function_name_alias_map(
+                profile.all_class_functions)
             # functions_reached_by_fuzzer* are already Set[str]; no copy needed.
+            profile_static_reached: set[str] = set()
             for func_name in profile.functions_reached_by_fuzzer:
-                static_reached_by_fuzzers[func_name].add(profile_id)
+                canonical_func_name = function_aliases.get(
+                    func_name, func_name)
+                profile_static_reached.add(canonical_func_name)
+                static_reached_by_fuzzers[canonical_func_name].add(profile_id)
             for func_name in profile.functions_reached_by_fuzzer_runtime:
-                runtime_reached_by_fuzzers[func_name].add(profile_id)
+                canonical_func_name = function_aliases.get(
+                    func_name, func_name)
+                if canonical_func_name in profile_static_reached:
+                    runtime_reached_by_fuzzers[canonical_func_name].add(
+                        profile_id)
 
         # Add all functions from the various profiles into the merged profile. Don't
         # add duplicates
@@ -267,7 +288,10 @@ class MergedProjectProfile:
         :returns: List of strings corresponding to function names
         """
         all_covered_functions = []
-        for funcname in self.get_all_functions_with_source():
+        for funcname, func_profile in self.get_all_functions_with_source(
+        ).items():
+            if func_profile.hitcount == 0:
+                continue
             is_covered = False
             coverage_data = self.runtime_coverage.get_hit_details(funcname)
             if len(coverage_data) > 0:
@@ -278,6 +302,13 @@ class MergedProjectProfile:
                 all_covered_functions.append(funcname)
 
         return all_covered_functions
+
+    def get_all_runtime_reached_functions(self) -> List[str]:
+        return [
+            funcname for funcname, func_profile in
+            self.get_all_functions_with_source().items()
+            if func_profile.hitcount_runtime > 0
+        ]
 
     def get_function_summaries(self) -> Tuple[int, int, int, float, float]:
         """Gets data points summarising data with respect to static reachability of
@@ -515,6 +546,7 @@ class MergedProjectProfile:
         ) = self.get_function_summaries()
 
         covered_funcs = self.get_all_runtime_covered_functions()
+        runtime_reached_funcs = self.get_all_runtime_reached_functions()
         try:
             cov_percentage = round(len(covered_funcs) / total_functions,
                                    2) * 100.0
@@ -538,6 +570,7 @@ class MergedProjectProfile:
                 "unreached-function-percentage": unreached_func_percentage,
                 "code-coverage-function-count": len(covered_funcs),
                 "code-coverage-function-percentage": cov_percentage,
+                "runtime-reached-function-count": len(runtime_reached_funcs),
             },
             out_dir,
         )

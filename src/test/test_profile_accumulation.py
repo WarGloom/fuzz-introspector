@@ -22,7 +22,7 @@ import pytest
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../")
 
-from fuzz_introspector import analysis  # noqa: E402
+from fuzz_introspector import analysis, code_coverage  # noqa: E402
 from fuzz_introspector.datatypes import fuzzer_profile, project_profile  # noqa: E402
 from fuzz_introspector.exceptions import DataLoaderError  # noqa: E402
 
@@ -644,6 +644,36 @@ def test_merged_project_profile_duplicate_choice_is_order_independent():
         chosen_b.function_source_file,
         chosen_b.function_linenumber,
     )
+
+
+def test_merged_project_profile_joins_raw_reached_names_to_canonical_rows():
+    profile = _MergedProfileStub(
+        "fuzz-a",
+        [
+            _MergedFunctionStub("target()", "/src/project/target.cc", 10,
+                                "_Z6targetv"),
+            _MergedFunctionStub("LLVMFuzzerInitialize",
+                                "/src/project/fuzzer.cc", 1),
+        ],
+    )
+    profile.functions_reached_by_fuzzer = {"_Z6targetv"}
+    profile.functions_reached_by_fuzzer_runtime = {
+        "_Z6targetv", "LLVMFuzzerInitialize"
+    }
+    profile.coverage = code_coverage.CoverageProfile()
+    profile.coverage.covmap["target()"] = [(10, 1)]
+    profile.coverage.covmap["LLVMFuzzerInitialize"] = [(1, 1)]
+
+    merged = project_profile.MergedProjectProfile([profile], "c-cpp")
+    function_data = merged.all_functions["target()"]
+    lifecycle_data = merged.all_functions["LLVMFuzzerInitialize"]
+
+    assert function_data.reached_by_fuzzers == ["fuzz-a"]
+    assert function_data.reached_by_fuzzers_runtime == ["fuzz-a"]
+    assert function_data.reached_by_fuzzers_combined == ["fuzz-a"]
+    assert lifecycle_data.reached_by_fuzzers_runtime == []
+    assert merged.get_all_runtime_covered_functions() == ["target()"]
+    assert merged.get_all_runtime_reached_functions() == ["target()"]
 
 
 def test_batch_returns_false_on_invalid_json(monkeypatch):
