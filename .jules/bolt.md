@@ -20,3 +20,7 @@
 ## 2025-05-18 - Python String Concatenation in Calltree Extracts
 **Learning:** O(N^2) string concatenation (`+=`) was found to be a severe bottleneck in recursive `extract_calltree` methods inside the frontends (`frontend_c_cpp`, `frontend_rust`, `frontend_jvm`, `frontend_go`). Recursively building massive tree strings using string concatenation creates an exponential explosion of intermediate allocations.
 **Action:** Replace `string += string` in deep recursive functions with `list.append()` and `"".join(list)`. This reduces GC overhead and significantly speeds up tree generation.
+
+## 2024-05-18 - HTML String Concatenation Bottleneck
+**Learning:** Python's string concatenation using `+=` inside loops is notoriously slow due to O(N^2) memory reallocation. This was a significant bottleneck in Fuzz Introspector's HTML report generation (e.g. `calltree_analysis.py`, `sinks_analyser.py`) where large strings containing tables, inline JS, and JSON dumps were being appended repeatedly.
+**Action:** Always replace repetitive string concatenation loops (`html_str += ...`) with list accumulation and `"".join(list)`. It provides a significant, measurable performance boost for large string processing.
