@@ -49,7 +49,15 @@ def capture_source_files_in_tree(directory_tree: str,
     for dirpath, dirnames, filenames in os.walk(directory_tree):
         # Check the current dirpath too, in case the root directory
         # itself contains an excluded string
-        if any(exclude in dirpath for exclude in EXCLUDE_DIRECTORIES):
+        # Performance Optimization: Using a manual loop with early break instead of any()
+        # with a generator expression avoids generator creation overhead in hot loops.
+        skip_dir = False
+        for exclude in EXCLUDE_DIRECTORIES:
+            if exclude in dirpath:
+                skip_dir = True
+                break
+
+        if skip_dir:
             # Performance Optimization: Modify dirnames in-place to prevent os.walk
             # from descending into excluded directories, saving significant I/O overhead.
             dirnames[:] = []
@@ -57,10 +65,17 @@ def capture_source_files_in_tree(directory_tree: str,
 
         # Performance Optimization: Modify dirnames in-place to prevent os.walk
         # from descending into excluded directories, saving significant I/O overhead.
-        dirnames[:] = [
-            d for d in dirnames
-            if not any(exclude in d for exclude in EXCLUDE_DIRECTORIES)
-        ]
+        # Use an explicit loop instead of any() with generator for string containment
+        new_dirnames = []
+        for d in dirnames:
+            exclude_found = False
+            for exclude in EXCLUDE_DIRECTORIES:
+                if exclude in d:
+                    exclude_found = True
+                    break
+            if not exclude_found:
+                new_dirnames.append(d)
+        dirnames[:] = new_dirnames
 
         for filename in filenames:
             # Performance Optimization: Use C-optimized string matching instead of

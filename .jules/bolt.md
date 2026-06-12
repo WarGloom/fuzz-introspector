@@ -20,3 +20,10 @@
 ## 2025-05-18 - Python String Concatenation in Calltree Extracts
 **Learning:** O(N^2) string concatenation (`+=`) was found to be a severe bottleneck in recursive `extract_calltree` methods inside the frontends (`frontend_c_cpp`, `frontend_rust`, `frontend_jvm`, `frontend_go`). Recursively building massive tree strings using string concatenation creates an exponential explosion of intermediate allocations.
 **Action:** Replace `string += string` in deep recursive functions with `list.append()` and `"".join(list)`. This reduces GC overhead and significantly speeds up tree generation.
+## 2025-03-09 - HTML Report Generation Optimization
+**Learning:** Found significant N^2 memory reallocation overhead in HTML report generation loops using string concatenation `+=`. Python's `list.append()` + `"".join()` strategy avoids this bottleneck in `fuzz_introspector`.
+**Action:** Always prefer `"".join(list)` when building large strings in loops or multiple concatenations, particularly in large text serialization or HTML generation tasks.
+
+## 2025-03-09 - any() Generator Overhead
+**Learning:** `any()` combined with a generator expression inside hot loops (e.g. string substring checks like `any(exclude in dirpath for exclude in EXCLUDE_DIRECTORIES)`) incurs significant generator creation overhead.
+**Action:** An explicit `for` loop with an early `break` or `return` is substantially faster. Look out for `any()` generator expressions in hot loops (e.g. `os.walk` or large iteration tasks) and rewrite them explicitly.
