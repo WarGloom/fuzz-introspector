@@ -68,6 +68,7 @@ type overlayNode struct {
 	CovColor              string `json:"cov_color"`
 	CovLink               string `json:"cov_link"`
 	CovCallsiteLink       string `json:"cov_callsite_link"`
+	CovParent             string `json:"cov_parent"`
 	CovForwardReds        int    `json:"cov_forward_reds"`
 	CovLargestBlockedFunc string `json:"cov_largest_blocked_func"`
 }
@@ -233,6 +234,19 @@ func resolveCoverageLookupName(req request, functionName string) string {
 	return functionName
 }
 
+func functionForCallsite(req request, cs callsite) (string, functionData, bool) {
+	if fd, ok := req.Functions[cs.DstFunctionName]; ok {
+		return cs.DstFunctionName, fd, true
+	}
+	lookupName := cs.coverageLookupName()
+	if lookupName != cs.DstFunctionName {
+		if fd, ok := req.Functions[lookupName]; ok {
+			return lookupName, fd, true
+		}
+	}
+	return "", functionData{}, false
+}
+
 func lookupCovRows(req request, functionName string) [][]int {
 	if rows, ok := req.Coverage.CovMap[functionName]; ok {
 		return rows
@@ -272,6 +286,12 @@ func buildOverlayNodes(req request) []overlayNode {
 		lookupName := cs.coverageLookupName()
 		callstack[cs.Depth] = lookupName
 		callstackSourceFiles[cs.Depth] = cs.DstFunctionSourceFile
+		covParent := ""
+		if idx == 0 {
+			covParent = "EP"
+		} else if parent, ok := callstack[cs.Depth-1]; ok {
+			covParent = parent
+		}
 		hit := 0
 		if idx == 0 {
 			if req.TargetLang == "c-cpp" && req.Coverage.Type == "kernel" {
@@ -303,6 +323,7 @@ func buildOverlayNodes(req request) []overlayNode {
 			CovColor:              colorForHitcount(hit),
 			CovLink:               cs.CovLink,
 			CovCallsiteLink:       cs.CovCallsiteLink,
+			CovParent:             covParent,
 			CovForwardReds:        0,
 			CovLargestBlockedFunc: "",
 		})
@@ -365,8 +386,8 @@ func run() error {
 				break
 			}
 
-			lookName := req.Callsites[lookAhead].DstFunctionName
-			if fd, ok := req.Functions[lookName]; ok {
+			lookName, fd, ok := functionForCallsite(req, req.Callsites[lookAhead])
+			if ok {
 				if fd.TotalCyclomaticComplexity > largestBlockedCount {
 					largestBlockedCount = fd.TotalCyclomaticComplexity
 					largestBlockedName = lookName

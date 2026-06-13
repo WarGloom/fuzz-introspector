@@ -2015,6 +2015,8 @@ def _normalize_overlay_nodes(
             str(node.get("cov_link", "")),
             "cov_callsite_link":
             str(node.get("cov_callsite_link", "")),
+            "cov_parent":
+            str(node.get("cov_parent", "")),
             "cov_forward_reds":
             int(node.get("cov_forward_reds", -1)),
             "cov_largest_blocked_func":
@@ -2115,6 +2117,8 @@ def _capture_python_overlay_outputs(
             node.cov_link,
             "cov_callsite_link":
             node.cov_callsite_link,
+            "cov_parent":
+            node.cov_parent,
             "cov_forward_reds":
             node.cov_forward_reds,
             "cov_largest_blocked_func":
@@ -2242,6 +2246,8 @@ def _apply_native_overlay_outputs(
         node.cov_link = str(node_update.get("cov_link", node.cov_link))
         node.cov_callsite_link = str(
             node_update.get("cov_callsite_link", node.cov_callsite_link))
+        node.cov_parent = str(
+            node_update.get("cov_parent", node.cov_parent))
         node.cov_forward_reds = int(
             node_update.get("cov_forward_reds", node.cov_forward_reds))
         node.cov_largest_blocked_func = str(
