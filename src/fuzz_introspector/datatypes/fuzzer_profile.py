@@ -143,6 +143,8 @@ class FuzzerProfile:
 
         except KeyError:
             self.fuzzer_source_file = ""
+        self._fuzzer_source_file_aliases: Set[str] = set()
+        self._add_fuzzer_source_file_alias(self.fuzzer_source_file)
 
         # Store exclusion patterns and compiled regexes.
         self.exclude_patterns: List[str] = []
@@ -331,6 +333,7 @@ class FuzzerProfile:
         # but only the start of the string.
         self.fuzzer_source_file = self.fuzzer_source_file.replace(
             basefolder, "")
+        self._add_fuzzer_source_file_alias(self.fuzzer_source_file)
 
         if self.fuzzer_callsite_calltree is not None:
             all_callsites = cfg_load.extract_all_callsites(
@@ -634,6 +637,8 @@ class FuzzerProfile:
             self._serialize_calltree_node(self.fuzzer_callsite_calltree),
             "fuzzer_source_file":
             self.fuzzer_source_file,
+            "fuzzer_source_file_aliases":
+            sorted(self._fuzzer_source_file_aliases),
             "exclude_patterns":
             list(self.exclude_patterns) if self.exclude_patterns else [],
             "exclude_function_patterns":
@@ -686,6 +691,9 @@ class FuzzerProfile:
         profile.fuzzer_callsite_calltree = cls._deserialize_calltree_node(
             payload.get("fuzzer_callsite_calltree"))
         profile.fuzzer_source_file = payload.get("fuzzer_source_file", "")
+        profile._fuzzer_source_file_aliases = set(
+            payload.get("fuzzer_source_file_aliases", []))
+        profile._add_fuzzer_source_file_alias(profile.fuzzer_source_file)
         profile.exclude_patterns = []
         profile.exclude_function_patterns = []
         profile._exclude_file_regexes = []
@@ -1090,6 +1098,51 @@ class FuzzerProfile:
                 uncovered_funcs.append(funcname)
         return uncovered_funcs
 
+    def get_target_reachable_functions(self) -> Set[str]:
+        """Return canonical target-code functions statically reached by the fuzzer."""
+        function_aliases = self._build_function_name_alias_map()
+        reachable_funcs: Set[str] = set()
+        for func_name in self.functions_reached_by_fuzzer:
+            canonical_func_name = function_aliases.get(func_name, func_name)
+            func_profile = self.all_class_functions.get(canonical_func_name)
+            if func_profile is None:
+                continue
+            if self._is_runtime_helper_function(canonical_func_name,
+                                                func_profile):
+                continue
+            reachable_funcs.add(canonical_func_name)
+        return reachable_funcs
+
+    def get_body_covered_target_functions(self) -> Set[str]:
+        """Return target functions with function-body coverage evidence."""
+        function_aliases = self._build_function_name_alias_map()
+        target_reachable = self.get_target_reachable_functions()
+        body_covered: Set[str] = set()
+        for func_name in self.functions_reached_by_fuzzer_runtime:
+            canonical_func_name = function_aliases.get(func_name, func_name)
+            if canonical_func_name in target_reachable:
+                body_covered.add(canonical_func_name)
+        return body_covered
+
+    def get_callsite_covered_target_functions(self) -> Set[str]:
+        """Return target functions whose callsites were covered at runtime."""
+        function_aliases = self._build_function_name_alias_map()
+        target_reachable = self.get_target_reachable_functions()
+        callsite_covered: Set[str] = set()
+        for node in cfg_load.extract_all_callsites(self.fuzzer_callsite_calltree):
+            if node.cov_hitcount <= 0:
+                continue
+            canonical_func_name = function_aliases.get(node.dst_function_name,
+                                                       node.dst_function_name)
+            if canonical_func_name in target_reachable:
+                callsite_covered.add(canonical_func_name)
+        return callsite_covered
+
+    def get_runtime_reached_target_functions(self) -> Set[str]:
+        """Return target functions reached by body coverage or callsite evidence."""
+        return (self.get_body_covered_target_functions()
+                | self.get_callsite_covered_target_functions())
+
     def get_coverage_blocker_stats(self) -> Dict[str, float]:
         function_aliases = self._build_function_name_alias_map()
         reachable_funcs = {
@@ -1113,6 +1166,35 @@ class FuzzerProfile:
             "reached-funcs": reached_count,
             "cov-reach-proportion": cov_reach_proportion,
         }
+
+    def _normalize_source_path(self, source_file: str) -> str:
+        if not source_file:
+            return ""
+        return os.path.normpath(source_file.strip())
+
+    def _add_fuzzer_source_file_alias(self, source_file: str) -> None:
+        normalized_source_file = self._normalize_source_path(source_file)
+        if normalized_source_file:
+            self._fuzzer_source_file_aliases.add(normalized_source_file)
+
+    def _is_runtime_helper_function(
+            self, function_name: str,
+            func_profile: function_profile.FunctionProfile) -> bool:
+        for alias in function_profile.get_function_name_aliases(
+                function_name, func_profile.raw_function_name):
+            if self.func_is_entrypoint(alias):
+                return True
+            if alias.startswith(("__clang_", "__cxa_", "LLVMFuzzer")):
+                return True
+            if alias.startswith(("__sanitizer", "__asan_", "llvm.")):
+                return True
+
+        return self._is_same_source_file_as_fuzzer(
+            func_profile.function_source_file)
+
+    def _is_same_source_file_as_fuzzer(self, source_file: str) -> bool:
+        func_source_file = self._normalize_source_path(source_file)
+        return func_source_file in self._fuzzer_source_file_aliases
 
     def is_file_covered(self,
                         file_name: str,
