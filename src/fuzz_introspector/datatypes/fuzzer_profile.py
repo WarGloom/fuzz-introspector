@@ -1129,7 +1129,8 @@ class FuzzerProfile:
         function_aliases = self._build_function_name_alias_map()
         target_reachable = self.get_target_reachable_functions()
         callsite_covered: Set[str] = set()
-        for node in cfg_load.extract_all_callsites(self.fuzzer_callsite_calltree):
+        for node in cfg_load.extract_all_callsites(
+                self.fuzzer_callsite_calltree):
             if node.cov_hitcount <= 0:
                 continue
             canonical_func_name = function_aliases.get(node.dst_function_name,
