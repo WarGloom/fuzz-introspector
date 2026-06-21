@@ -70,17 +70,18 @@ class FilePathAnalysis(analysis.AnalysisInterface):
         for fnm in all_proj_files:
             all_proj_dirs.add(fnm.replace(os.path.basename(fnm), ""))
 
-        html_string = ""
-        html_string += '<div class="report-box">'
+        html_string = []
+        html_string.append('<div class="report-box">')
 
         # Table with all files
-        html_string += html_helpers.html_add_header_with_link(
-            "Files and Directories in report",
-            html_helpers.HTML_HEADING.H1,
-            table_of_contents,
-        )
-        html_string += '<div class="collapsible">'
-        html_string += (
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Files and Directories in report",
+                html_helpers.HTML_HEADING.H1,
+                table_of_contents,
+            ))
+        html_string.append('<div class="collapsible">')
+        html_string.append(
             "<p>This section shows which files and directories are considered "
             "in this report. The main reason for showing this is fuzz introspector "
             "may include more code in the reasoning than is desired. This section "
@@ -92,12 +93,16 @@ class FilePathAnalysis(analysis.AnalysisInterface):
             '<a href="https://github.com/ossf/fuzz-introspector/blob/main/doc/'
             'Config.md#code-exclusion-from-the-report">link</a></p>')
 
-        html_string += html_helpers.html_add_header_with_link(
-            "Files in report", html_helpers.HTML_HEADING.H2, table_of_contents)
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Files in report", html_helpers.HTML_HEADING.H2,
+                table_of_contents))
         tables.append(f"myTable{len(tables)}")
-        html_string += html_helpers.html_create_table_head(
-            tables[-1], [("Source file", ""), ("Reached by", ""),
-                         ("Covered by", "")])
+        html_string.append(
+            html_helpers.html_create_table_head(tables[-1],
+                                                [("Source file", ""),
+                                                 ("Reached by", ""),
+                                                 ("Covered by", "")]))
         for fnm in all_proj_files:
             profiles_that_hit = []
             for profile in profiles:
@@ -111,28 +116,31 @@ class FilePathAnalysis(analysis.AnalysisInterface):
                 if is_file_covered:
                     profiles_that_cover.append(profile.identifier)
 
-            html_string += html_helpers.html_table_add_row([
-                f"{fnm}", f"{str(profiles_that_hit)}",
-                f"{str(profiles_that_cover)}"
-            ])
-        html_string += "</table>"
+            html_string.append(
+                html_helpers.html_table_add_row([
+                    f"{fnm}", f"{str(profiles_that_hit)}",
+                    f"{str(profiles_that_cover)}"
+                ]))
+        html_string.append("</table>")
 
         # Table with all directories
-        html_string += html_helpers.html_add_header_with_link(
-            "Directories in report", html_helpers.HTML_HEADING.H2,
-            table_of_contents)
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Directories in report", html_helpers.HTML_HEADING.H2,
+                table_of_contents))
         tables.append(f"myTable{len(tables)}")
-        html_string += html_helpers.html_create_table_head(
-            tables[-1],
-            [
-                ("Directory", ""),
-            ],
-        )
+        html_string.append(
+            html_helpers.html_create_table_head(
+                tables[-1],
+                [
+                    ("Directory", ""),
+                ],
+            ))
         for dr in all_proj_dirs:
-            html_string += html_helpers.html_table_add_row([f"{dr}"])
-        html_string += "</table>"
+            html_string.append(html_helpers.html_table_add_row([f"{dr}"]))
+        html_string.append("</table>")
 
-        html_string += "</div>"  # .collapsible
-        html_string += "</div>"  # report-box
+        html_string.append("</div>")  # .collapsible
+        html_string.append("</div>")  # report-box
 
-        return html_string
+        return "".join(html_string)
