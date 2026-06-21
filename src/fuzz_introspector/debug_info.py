@@ -824,6 +824,7 @@ def _iter_spill_items(spill_path: str):
         # 35-40% faster than processing lines individually with json.loads.
         batch = []
         batch_size = 100
+        line_number = 0
         for line_number, line in enumerate(spill_fp, start=1):
             line = line.strip()
             if not line:
