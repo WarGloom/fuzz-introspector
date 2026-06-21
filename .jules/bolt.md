@@ -23,3 +23,7 @@
 ## 2024-05-23 - String concatenation performance
 **Learning:** Using `+=` for string concatenation in loops or repeatedly for large strings (like HTML report generation) creates O(N^2) memory reallocation bottlenecks in Python.
 **Action:** Use list appending and `"".join()` for constructing large strings programmatically.
+
+## 2025-05-18 - Python `any()` generator in hot loops
+**Learning:** Using `any()` combined with a generator expression inside a hot loop (e.g., for substring checks like `any(exclude in d for exclude in EXCLUDE_DIRECTORIES)`) incurs significant generator creation overhead.
+**Action:** Replace `any()` with an explicit `for` loop with an early `break`. It is substantially faster.
