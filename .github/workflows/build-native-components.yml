@@ -33,7 +33,7 @@ jobs:
           - path: tools/native_calltree_bitmap_rust
             name: native_calltree_bitmap_rust
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo
@@ -81,7 +81,7 @@ jobs:
           - path: tools/native_calltree_bitmap_go
             name: native_calltree_bitmap_go
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install Go 1.22
         uses: actions/setup-go@v6
         with:
