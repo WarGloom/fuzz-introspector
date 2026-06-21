@@ -432,6 +432,7 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
             sort_by_column=0,
             sort_order="desc",
         )
+        html_table_list = [html_table_string]
         for node in fuzz_blockers:
             link_prefix = "0" * (5 - len(str(node.cov_ct_idx)))
             node_id = f"{link_prefix}{node.cov_ct_idx}"
@@ -450,16 +451,18 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
             if parent_display == "EP":
                 parent_display = f"{node.dst_function_name} (entrypoint)"
 
-            html_table_string += html_helpers.html_table_add_row([
-                str(node.cov_forward_reds),
-                str(node.cov_ct_idx),
-                parent_display,
-                cs_link,
-                node.cov_largest_blocked_func,
-            ])
-        html_table_string += "</table>"
+            # Performance Optimization: O(n) list accumulation instead of O(n^2) string +=
+            html_table_list.append(
+                html_helpers.html_table_add_row([
+                    str(node.cov_forward_reds),
+                    str(node.cov_ct_idx),
+                    parent_display,
+                    cs_link,
+                    node.cov_largest_blocked_func,
+                ]))
+        html_table_list.append("</table>")
 
-        return html_table_string
+        return "".join(html_table_list)
 
     def create_branch_blocker_table(
         self,
@@ -518,6 +521,7 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         ]
         html_table_string += html_helpers.html_create_table_head(
             tables[-1], branch_table_rows, sort_by_column=0, sort_order="desc")
+        html_table_list = [html_table_string]
         for entry in branch_blockers:
             if entry in blockers_node_map:
                 calltree_idx = blockers_node_map[entry].cov_ct_idx
@@ -551,18 +555,20 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                 entry_function_name = utils.demangle_cpp_func(
                     entry.function_name)
 
-            html_table_string += html_helpers.html_table_add_row([
-                str(entry.blocked_unique_not_covered_complexity),
-                str(entry.blocked_unique_reachable_complexity),
-                collapsible_string,
-                str(entry.blocked_not_covered_complexity),
-                str(entry.blocked_reachable_complexity),
-                entry_function_name,
-                cs_link,
-                f"""<a href="{entry.coverage_report_link}">
+            # Performance Optimization: O(n) list accumulation instead of O(n^2) string +=
+            html_table_list.append(
+                html_helpers.html_table_add_row([
+                    str(entry.blocked_unique_not_covered_complexity),
+                    str(entry.blocked_unique_reachable_complexity),
+                    collapsible_string,
+                    str(entry.blocked_not_covered_complexity),
+                    str(entry.blocked_reachable_complexity),
+                    entry_function_name,
+                    cs_link,
+                    f"""<a href="{entry.coverage_report_link}">
                     {entry.source_file}:{entry.branch_line_number}
                 </a>""",
-            ])
-        html_table_string += "</table>"
+                ]))
+        html_table_list.append("</table>")
 
-        return html_table_string
+        return "".join(html_table_list)
