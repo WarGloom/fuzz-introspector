@@ -590,7 +590,7 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         if target_func.function_name in handled_sink:
             return handled_sink[target_func.function_name], index
 
-        html = ""
+        html_parts = []
         count = 0
 
         for parent_func in callpath_dict.keys():
@@ -612,13 +612,15 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
                     index += 1
                     callpath_link = self._generate_callpath_page(
                         callpath, proj_profile, index, out_dir)
-                    html += f'<a href="{callpath_link}">Path {count}</a><br/>'
+                    html_parts.append(
+                        f'<a href="{callpath_link}">Path {count}</a><br/>')
                 else:
                     break
             if count > constants.SINK_FUNCTION_CALLPATH_MAX_COUNT:
                 break
 
-        if html:
+        if html_parts:
+            html = "".join(html_parts)
             handled_sink[target_func.function_name] = html
             return html, index
 
@@ -845,15 +847,17 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         logger.info(fuzzer_name_list)
 
         # Generate html section header for sink analyser
-        html_string = '<div class="report-box">'
+        html_string = []
+        html_string.append('<div class="report-box">')
 
-        html_string += html_helpers.html_add_header_with_link(
-            "Sink analyser for CWEs", html_helpers.HTML_HEADING.H1,
-            table_of_contents)
-        html_string += '<div class="collapsible">'
+        html_string.append(
+            html_helpers.html_add_header_with_link(
+                "Sink analyser for CWEs", html_helpers.HTML_HEADING.H1,
+                table_of_contents))
+        html_string.append('<div class="collapsible">')
 
         # Generate tables for each CWEs
-        cwe_html_string = ""
+        cwe_html_parts = []
         for cwe in CWES:
             logger.info(" - Running analysis %s for %s", self.get_name(), cwe)
 
@@ -882,47 +886,49 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
             if not self.display_html or not html_rows:
                 continue
 
-            cwe_html_string += html_helpers.html_add_header_with_link(
-                f"Sink functions/methods found for {cwe}",
-                html_helpers.HTML_HEADING.H2,
-                table_of_contents,
-            )
+            cwe_html_parts.append(
+                html_helpers.html_add_header_with_link(
+                    f"Sink functions/methods found for {cwe}",
+                    html_helpers.HTML_HEADING.H2,
+                    table_of_contents,
+                ))
 
             # Third party function calls table
             tables.append(f"myTable{len(tables)}")
-            cwe_html_string += html_helpers.html_create_table_head(
-                tables[-1],
-                [
-                    ("Target sink", ""),
-                    (
-                        "Reached by fuzzer",
-                        "Is this code reachable by any fuzzer functions? "
-                        "Based on static analysis.",
-                    ),
-                    (
-                        "Function call path",
-                        "All call paths of the project calling to each sink "
-                        "function. This column is only shown if no fuzzer "
-                        "statically reached the target sink function.",
-                    ),
-                    (
-                        "Possible branch blockers",
-                        "Determine which branch blockers avoid fuzzers to cover the"
-                        "sink function during runtime and its information. This "
-                        "column is only shown if there is fuzzer statically reached "
-                        "the target sink function but failed to reach it "
-                        "dynamically.",
-                    ),
-                ],
-            )
+            cwe_html_parts.append(
+                html_helpers.html_create_table_head(
+                    tables[-1],
+                    [
+                        ("Target sink", ""),
+                        (
+                            "Reached by fuzzer",
+                            "Is this code reachable by any fuzzer functions? "
+                            "Based on static analysis.",
+                        ),
+                        (
+                            "Function call path",
+                            "All call paths of the project calling to each sink "
+                            "function. This column is only shown if no fuzzer "
+                            "statically reached the target sink function.",
+                        ),
+                        (
+                            "Possible branch blockers",
+                            "Determine which branch blockers avoid fuzzers to cover the"
+                            "sink function during runtime and its information. This "
+                            "column is only shown if there is fuzzer statically reached "
+                            "the target sink function but failed to reach it "
+                            "dynamically.",
+                        ),
+                    ],
+                ))
 
-            cwe_html_string += html_rows
-            cwe_html_string += "</table>"
+            cwe_html_parts.append(html_rows)
+            cwe_html_parts.append("</table>")
 
         # Add cwe tables into the html report
-        if cwe_html_string:
+        if cwe_html_parts:
             # At least one sink functions/methods found
-            html_string += (
+            html_string.append(
                 "<p>"
                 "This section contains multiple tables, each table "
                 "contains a list of sink functions/methods found in "
@@ -941,15 +947,15 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
                 "existing fuzzer from reaching the target sink functions/"
                 "methods dynamically."
                 "</p>")
-            html_string += cwe_html_string
+            html_string.extend(cwe_html_parts)
         else:
             # No sink functions/methods found
-            html_string += (
+            html_string.append(
                 "<p>No sink functions/methods found in the target project.</p>"
             )
 
-        html_string += "</div>"  # .collapsible
-        html_string += "</div>"  # report-box
+        html_string.append("</div>")  # .collapsible
+        html_string.append("</div>")  # report-box
 
         json_report.add_analysis_json_str_as_dict_to_report(
             self.get_name(), self.get_json_string_result(), out_dir)
@@ -957,6 +963,6 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         logger.info(" - Finish running analysis %s", self.get_name())
 
         if self.display_html:
-            return html_string
+            return "".join(html_string)
 
         return ""

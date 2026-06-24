@@ -1076,8 +1076,9 @@ def create_fuzzer_profile_runtime_coverage_section(
     coverage_metrics: Dict[str, Tuple[Optional[int], Optional[int],
                                       Optional[float]]] = {}
     table_rows = fuzzer_table_data[table_name]
+    target_reachable_funcs = sorted(profile.get_target_reachable_functions())
     if profile.coverage is not None:
-        for funcname in profile.coverage.covmap:
+        for funcname in target_reachable_funcs:
             total_func_lines, hit_lines, hit_percentage = get_cov_metrics(
                 funcname)
             coverage_metrics[funcname] = (total_func_lines, hit_lines,
@@ -1095,8 +1096,12 @@ def create_fuzzer_profile_runtime_coverage_section(
                     "%.5s" % (str(hit_percentage)) + "%",
                 })
             else:
-                logger.error("Could not write coverage line for function %s",
-                             funcname)
+                table_rows.append({
+                    "Function name": funcname,
+                    "source code lines": "N/A",
+                    "source lines hit": "N/A",
+                    "percentage hit": "N/A",
+                })
     func_hit_table_string += "</table>"
 
     blocker_stats = profile.get_coverage_blocker_stats()

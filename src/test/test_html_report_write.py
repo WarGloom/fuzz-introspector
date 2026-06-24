@@ -86,6 +86,13 @@ def test_get_body_script_tags_does_not_mutate_main_js_list(
     assert styling.MAIN_JS_FILES == original
 
 
+def test_custom_js_draws_each_fuzzer_runtime_table() -> None:
+    custom_js = (Path(styling.__file__).parent / "custom.js").read_text(
+        encoding="utf-8")
+
+    assert "table.rows.add(value);\n    table.draw();" in custom_js
+
+
 def test_parse_calltree_bitmap_max_nodes_env(
         monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("FI_CALLTREE_BITMAP_MAX_NODES", raising=False)
@@ -231,17 +238,22 @@ def test_create_runtime_coverage_section_reuses_cov_metrics(
     counter = {"calls": 0}
     cov_metrics = {
         "func-hit": (8, 4, 50.0),
-        "func-miss": (5, 0, 0.0),
         "func-unknown": (None, None, None),
+        "raw-harness-helper": (5, 5, 100.0),
     }
 
     class DummyProfile:
         identifier = "dummy-fuzzer"
         coverage = SimpleNamespace(covmap={
             "func-hit": object(),
-            "func-miss": object()
+            "raw-harness-helper": object(),
         })
         functions_reached_by_fuzzer = {"func-hit", "func-unknown"}
+        functions_reached_by_fuzzer_runtime = {"func-hit"}
+
+        @staticmethod
+        def get_target_reachable_functions():
+            return {"func-hit", "func-unknown"}
 
         @staticmethod
         def get_cov_metrics(funcname: str):
@@ -275,7 +287,7 @@ def test_create_runtime_coverage_section_reuses_cov_metrics(
         out_dir=str(tmp_path),
     )
 
-    assert 2 <= counter["calls"] <= 3
+    assert counter["calls"] == 2
     assert "Covered functions" in html
     assert "Functions that are reachable but not covered" in html
     assert "Reachable functions" in html
@@ -288,10 +300,10 @@ def test_create_runtime_coverage_section_reuses_cov_metrics(
             "percentage hit": "50.0%",
         },
         {
-            "Function name": "func-miss",
-            "source code lines": 5,
-            "source lines hit": 0,
-            "percentage hit": "0.0%",
+            "Function name": "func-unknown",
+            "source code lines": "N/A",
+            "source lines hit": "N/A",
+            "percentage hit": "N/A",
         },
     ]
 
@@ -305,23 +317,34 @@ def test_runtime_coverage_section_writes_broad_blocker_stats(
         coverage = SimpleNamespace(covmap={
             "target": object(),
             "harness-helper": object(),
+            "protobuf-runtime": object(),
         })
-        functions_reached_by_fuzzer = {"target", "harness-helper"}
-        functions_reached_by_fuzzer_runtime = {"target", "harness-helper"}
+        functions_reached_by_fuzzer = {
+            "target",
+            "missing-target",
+            "harness-helper",
+        }
+        functions_reached_by_fuzzer_runtime = {"target"}
+
+        @staticmethod
+        def get_target_reachable_functions():
+            return {"target", "missing-target"}
 
         @staticmethod
         def get_cov_metrics(funcname: str):
             return {
                 "target": (4, 4, 100.0),
+                "missing-target": (None, None, None),
                 "harness-helper": (3, 3, 100.0),
+                "protobuf-runtime": (6, 6, 100.0),
             }[funcname]
 
         @staticmethod
         def get_coverage_blocker_stats():
             return {
-                "reachable-funcs": 2,
+                "reachable-funcs": 3,
                 "reached-funcs": 2,
-                "cov-reach-proportion": 100.0,
+                "cov-reach-proportion": 66.66666666666666,
             }
 
     def capture_stats(_identifier, key, value, _out_dir):
@@ -345,11 +368,24 @@ def test_runtime_coverage_section_writes_broad_blocker_stats(
     )
 
     assert written_stats == {
-        "reachable-funcs": 2,
+        "reachable-funcs": 3,
         "reached-funcs": 2,
-        "cov-reach-proportion": 100.0,
+        "cov-reach-proportion": 66.66666666666666,
     }
-    assert fuzzer_table_data["myTable0"][1]["Function name"] == "harness-helper"
+    assert fuzzer_table_data["myTable0"] == [
+        {
+            "Function name": "missing-target",
+            "source code lines": "N/A",
+            "source lines hit": "N/A",
+            "percentage hit": "N/A",
+        },
+        {
+            "Function name": "target",
+            "source code lines": 4,
+            "source lines hit": 4,
+            "percentage hit": "100.0%",
+        },
+    ]
     assert "Covered functions" in html
     assert "Reachable functions" in html
 

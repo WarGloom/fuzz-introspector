@@ -178,9 +178,9 @@ function populateFunctionsHitTable() {
   // Add rows for "Functions hit" table for each fuzzer
   for (const [key, value] of Object.entries(fuzzer_table_data)) {
     var table = $('#'+key).DataTable();
-    table.rows.add(fuzzer_table_data[key]);
+    table.rows.add(value);
+    table.draw();
   }
-  table.draw();
 }
 function populateFuzzersOverviewTable(value) {
   console.log(value)

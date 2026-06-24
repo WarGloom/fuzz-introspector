@@ -49,21 +49,36 @@ def capture_source_files_in_tree(directory_tree: str,
     for dirpath, dirnames, filenames in os.walk(directory_tree):
         # Check the current dirpath too, in case the root directory
         # itself contains an excluded string
-        if any(exclude in dirpath for exclude in EXCLUDE_DIRECTORIES):
-            # Performance Optimization: Modify dirnames in-place to prevent os.walk
-            # from descending into excluded directories, saving significant I/O overhead.
+        # Optimization: Avoid any() with generator for O(N) substring checks
+        # Using explicit loop is significantly faster.
+        dirpath_excluded = False
+        for exclude in EXCLUDE_DIRECTORIES:
+            if exclude in dirpath:
+                dirpath_excluded = True
+                break
+
+        if dirpath_excluded:
+            # Optimization: Modify dirnames in-place to prevent os.walk
+            # from descending into excluded directories to save I/O overhead.
             dirnames[:] = []
             continue
 
-        # Performance Optimization: Modify dirnames in-place to prevent os.walk
-        # from descending into excluded directories, saving significant I/O overhead.
-        dirnames[:] = [
-            d for d in dirnames
-            if not any(exclude in d for exclude in EXCLUDE_DIRECTORIES)
-        ]
+        # Optimization: Modify dirnames in-place to prevent os.walk
+        # from descending into excluded directories to save I/O overhead.
+        # Avoid any() with generator for O(N) substring checks.
+        new_dirnames = []
+        for d in dirnames:
+            d_excluded = False
+            for exclude in EXCLUDE_DIRECTORIES:
+                if exclude in d:
+                    d_excluded = True
+                    break
+            if not d_excluded:
+                new_dirnames.append(d)
+        dirnames[:] = new_dirnames
 
         for filename in filenames:
-            # Performance Optimization: Use C-optimized string matching instead of
+            # Optimization: Use C-optimized string matching instead of
             # expensive pathlib.Path instantiation in hot loop
             if filename.endswith(language_extensions_tuple):
                 language_files.append(os.path.join(dirpath, filename))

@@ -476,6 +476,7 @@ def test_overlay_native_authoritative_applies_artifacts(
                     "cov_color": "green",
                     "cov_link": "link-a",
                     "cov_callsite_link": "link-b",
+                    "cov_parent": "native-parent",
                     "cov_forward_reds": 2,
                     "cov_largest_blocked_func": "blocked_func",
                 }
@@ -574,6 +575,7 @@ def test_overlay_native_authoritative_applies_artifacts(
     assert python_overlay_calls == []
     root = cfg_load.extract_all_callsites(profile.fuzzer_callsite_calltree)[0]
     assert root.cov_hitcount == 33
+    assert root.cov_parent == "native-parent"
     assert root.cov_forward_reds == 2
     side = project.all_functions["entry"].branch_profiles["a.c:10,1"].sides[0]
     assert side.reachable_complexity == 7
@@ -1112,6 +1114,7 @@ def test_overlay_parity_detects_forward_red_and_sentinel_drift() -> None:
                     "cov_color": "lawngreen",
                     "cov_link": "a",
                     "cov_callsite_link": "#",
+                    "cov_parent": "",
                     "cov_forward_reds": 0,
                     "cov_largest_blocked_func": "",
                 }
@@ -1129,6 +1132,7 @@ def test_overlay_parity_detects_forward_red_and_sentinel_drift() -> None:
                     "cov_color": "lawngreen",
                     "cov_link": "a",
                     "cov_callsite_link": "#",
+                    "cov_parent": "EP",
                     "cov_forward_reds": 0,
                     "cov_largest_blocked_func": "none",
                 }

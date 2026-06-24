@@ -98,6 +98,7 @@ struct OverlayNodeOutput {
     cov_color: String,
     cov_link: String,
     cov_callsite_link: String,
+    cov_parent: String,
     cov_forward_reds: i64,
     cov_largest_blocked_func: String,
 }
@@ -167,6 +168,22 @@ fn callsite_coverage_lookup_name(node: &Callsite) -> &str {
     }
 }
 
+fn request_function_for_callsite<'a>(
+    request: &'a OverlayRequest,
+    node: &'a Callsite,
+) -> Option<(&'a str, &'a FunctionInput)> {
+    if let Some(function_data) = request.functions.get(node.dst_function_name.as_str()) {
+        return Some((node.dst_function_name.as_str(), function_data));
+    }
+    let lookup_name = callsite_coverage_lookup_name(node);
+    if lookup_name != node.dst_function_name.as_str() {
+        if let Some(function_data) = request.functions.get(lookup_name) {
+            return Some((lookup_name, function_data));
+        }
+    }
+    None
+}
+
 fn normalize_kernel_target_file(path: &str) -> &str {
     path.trim_start_matches("../")
 }
@@ -191,7 +208,10 @@ fn kernel_hitcount(modules: &[KernelModule], target_file: &str, line_number: i64
     0
 }
 
-fn resolve_coverage_lookup_name<'a>(request: &'a OverlayRequest, function_name: &'a str) -> &'a str {
+fn resolve_coverage_lookup_name<'a>(
+    request: &'a OverlayRequest,
+    function_name: &'a str,
+) -> &'a str {
     request
         .functions
         .get(function_name)
@@ -205,7 +225,10 @@ fn resolve_coverage_lookup_name<'a>(request: &'a OverlayRequest, function_name: 
         .unwrap_or(function_name)
 }
 
-fn lookup_cov_rows<'a>(request: &'a OverlayRequest, function_name: &'a str) -> Option<&'a Vec<[i64; 2]>> {
+fn lookup_cov_rows<'a>(
+    request: &'a OverlayRequest,
+    function_name: &'a str,
+) -> Option<&'a Vec<[i64; 2]>> {
     if let Some(rows) = request.coverage.covmap.get(function_name) {
         return Some(rows);
     }
@@ -244,7 +267,11 @@ fn get_hitcount(
         if request.target_lang == "c-cpp" && request.coverage.r#type == "kernel" {
             return 100;
         }
-        if let Some(rows) = request.coverage.covmap.get(callsite_coverage_lookup_name(node)) {
+        if let Some(rows) = request
+            .coverage
+            .covmap
+            .get(callsite_coverage_lookup_name(node))
+        {
             return rows.iter().map(|row| row[1]).max().unwrap_or(0);
         }
         return 0;
@@ -298,18 +325,28 @@ fn parse_side_line(pos: &str) -> Option<i64> {
     line.parse::<i64>().ok()
 }
 
-fn is_side_hit(coverage: &CoverageInput, source_file: &str, function_name: &str, side_line: i64) -> bool {
+fn is_side_hit(
+    coverage: &CoverageInput,
+    source_file: &str,
+    function_name: &str,
+    side_line: i64,
+) -> bool {
     if let Some(file_rows) = coverage.file_map.get(source_file) {
-        return file_rows.iter().any(|row| row[0] == side_line && row[1] > 0);
+        return file_rows
+            .iter()
+            .any(|row| row[0] == side_line && row[1] > 0);
     }
     if let Some(func_rows) = coverage.covmap.get(function_name) {
-        return func_rows.iter().any(|row| row[0] == side_line && row[1] > 0);
+        return func_rows
+            .iter()
+            .any(|row| row[0] == side_line && row[1] > 0);
     }
     false
 }
 
 fn write_json_file<T: Serialize>(path: &Path, payload: &T) -> Result<(), String> {
-    let file = File::create(path).map_err(|err| format!("failed creating {}: {err}", path.display()))?;
+    let file =
+        File::create(path).map_err(|err| format!("failed creating {}: {err}", path.display()))?;
     serde_json::to_writer(file, payload)
         .map_err(|err| format!("failed writing {}: {err}", path.display()))
 }
@@ -361,6 +398,13 @@ fn run() -> Result<(), String> {
     for (idx, node) in sorted_callsites.iter().enumerate() {
         callstack.insert(node.depth, callsite_coverage_lookup_name(node).to_string());
         callstack_source_files.insert(node.depth, node.dst_function_source_file.clone());
+        let cov_parent = if idx == 0 {
+            "EP".to_string()
+        } else {
+            get_parent_name(&callstack, node.depth)
+                .unwrap_or("")
+                .to_string()
+        };
         let hit_count = get_hitcount(&request, &callstack, &callstack_source_files, node, idx);
         overlay_nodes.push(OverlayNodeOutput {
             cov_ct_idx: node.cov_ct_idx,
@@ -368,13 +412,18 @@ fn run() -> Result<(), String> {
             cov_color: color_for_hitcount(hit_count).to_string(),
             cov_link: node.cov_link.clone(),
             cov_callsite_link: node.cov_callsite_link.clone(),
+            cov_parent,
             cov_forward_reds: 0,
             cov_largest_blocked_func: "".to_string(),
         });
     }
 
     if overlay_nodes.len() > 1 {
-        if overlay_nodes.iter().skip(1).any(|node| node.cov_hitcount > 0) {
+        if overlay_nodes
+            .iter()
+            .skip(1)
+            .any(|node| node.cov_hitcount > 0)
+        {
             if let Some(first) = overlay_nodes.get_mut(0) {
                 first.cov_hitcount = 200;
                 first.cov_color = color_for_hitcount(200).to_string();
@@ -402,8 +451,9 @@ fn run() -> Result<(), String> {
             if overlay_nodes[look_ahead].cov_hitcount != 0 {
                 break;
             }
-            let look_name = &sorted_callsites[look_ahead].dst_function_name;
-            if let Some(function_data) = request.functions.get(look_name) {
+            if let Some((look_name, function_data)) =
+                request_function_for_callsite(&request, &sorted_callsites[look_ahead])
+            {
                 if function_data.total_cyclomatic_complexity > largest_complexity {
                     largest_complexity = function_data.total_cyclomatic_complexity;
                     largest_name = look_name.to_string();
@@ -477,10 +527,15 @@ fn run() -> Result<(), String> {
         (&a.function_name, &a.branch, a.side_idx).cmp(&(&b.function_name, &b.branch, b.side_idx))
     });
 
-    let mut branch_complexity_lookup: BTreeMap<(String, String, i64), &BranchComplexityOutput> = BTreeMap::new();
+    let mut branch_complexity_lookup: BTreeMap<(String, String, i64), &BranchComplexityOutput> =
+        BTreeMap::new();
     for item in &branch_complexities {
         branch_complexity_lookup.insert(
-            (item.function_name.clone(), item.branch.clone(), item.side_idx),
+            (
+                item.function_name.clone(),
+                item.branch.clone(),
+                item.side_idx,
+            ),
             item,
         );
     }
@@ -494,7 +549,8 @@ fn run() -> Result<(), String> {
             side_hits = side_hits[2..].to_vec();
         }
 
-        let Some((function_name, line_number, column_number)) = split_branch_key(branch_string) else {
+        let Some((function_name, line_number, column_number)) = split_branch_key(branch_string)
+        else {
             continue;
         };
         let Some(function_data) = request.functions.get(&function_name) else {
@@ -559,7 +615,11 @@ fn run() -> Result<(), String> {
                 continue;
             }
 
-            let key = (function_name.clone(), llvm_branch.clone(), blocked_idx as i64);
+            let key = (
+                function_name.clone(),
+                llvm_branch.clone(),
+                blocked_idx as i64,
+            );
             let Some(complexity) = branch_complexity_lookup.get(&key) else {
                 continue;
             };
@@ -627,7 +687,10 @@ fn run() -> Result<(), String> {
 
     let mut counters = BTreeMap::new();
     counters.insert("callsites".to_string(), overlay_nodes.len() as i64);
-    counters.insert("branch_complexities".to_string(), branch_complexities.len() as i64);
+    counters.insert(
+        "branch_complexities".to_string(),
+        branch_complexities.len() as i64,
+    );
     counters.insert("branch_blockers".to_string(), branch_blockers.len() as i64);
 
     let mut artifacts = BTreeMap::new();
@@ -782,8 +845,14 @@ mod tests {
         let root_stack = HashMap::from([(0, "entry()".to_string())]);
         let source_files = HashMap::from([(0, "a.cc".to_string())]);
 
-        assert_eq!(get_hitcount(&request, &HashMap::new(), &HashMap::new(), &root, 0), 11);
-        assert_eq!(get_hitcount(&request, &root_stack, &source_files, &child, 1), 11);
+        assert_eq!(
+            get_hitcount(&request, &HashMap::new(), &HashMap::new(), &root, 0),
+            11
+        );
+        assert_eq!(
+            get_hitcount(&request, &root_stack, &source_files, &child, 1),
+            11
+        );
     }
 
     #[test]
@@ -830,8 +899,14 @@ mod tests {
         let callstack = HashMap::from([(0, "entry".to_string())]);
         let source_files = HashMap::from([(0, "../src/foo.c".to_string())]);
 
-        assert_eq!(get_hitcount(&request, &HashMap::new(), &HashMap::new(), &root, 0), 100);
-        assert_eq!(get_hitcount(&request, &callstack, &source_files, &child, 1), 100);
+        assert_eq!(
+            get_hitcount(&request, &HashMap::new(), &HashMap::new(), &root, 0),
+            100
+        );
+        assert_eq!(
+            get_hitcount(&request, &callstack, &source_files, &child, 1),
+            100
+        );
     }
 
     #[test]

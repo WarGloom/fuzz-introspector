@@ -90,11 +90,13 @@ def test_reaches_file_with_refine_path(tmpdir, sample_cfg1):
     assert fp.reaches_file('/std/../fuzzlib/fuzzlib.c')
 
 
-def generate_temp_elem(name, func):
+def generate_temp_elem(
+        name, func,
+        source_file='/src/wuffs/fuzz/c/fuzzlib/fuzzlib.c'):
     return {
         "functionName": name,
         "functionsReached": func,
-        "functionSourceFile": '/src/wuffs/fuzz/c/fuzzlib/fuzzlib.c',
+        "functionSourceFile": source_file,
         "linkageType": None,
         "functionLinenumber": None,
         "returnType": None,
@@ -127,6 +129,16 @@ def test_reaches_func(tmpdir, sample_cfg1):
         generate_temp_elem(
             "Random",
             ["stu", "vwx"]
+        ),
+        generate_temp_elem(
+            "abc",
+            [],
+            "/src/wuffs/fuzz/...-snapshot.c"
+        ),
+        generate_temp_elem(
+            "def",
+            [],
+            "/src/wuffs/fuzz/...-snapshot.c"
         )
     ]
 
@@ -622,32 +634,145 @@ LLVMFuzzerTestOneInput /src/project/fuzzer.cc linenumber=-1
     }
 
 
-def test_coverage_blocker_stats_keep_broad_runtime_stats() -> None:
+def test_runtime_reachability_keeps_broad_runtime_stats() -> None:
     fp = fuzzer_profile.FuzzerProfile(
         "test.data",
         {
             "Fuzzer filename": "/src/project/fuzzer.cc",
             "All functions": {
                 "Elements": [
-                    _func_elem("LLVMFuzzerTestOneInput",
-                               "/src/project/fuzzer.cc", ["helper"]),
+                    _func_elem(
+                        "LLVMFuzzerTestOneInput",
+                        "/src/project/fuzzer.cc",
+                        [
+                            "helper",
+                            "_Z6targetv",
+                            "target_neighbour",
+                            "__clang_call_terminate",
+                        ],
+                    ),
                     _func_elem("helper", "/src/project/fuzzer.cc"),
+                    _func_elem("_Z6targetv", "/src/project/target.cc"),
+                    _func_elem("target_neighbour", "/src/project/lib/fuzzer.cc"),
+                    _func_elem("__clang_call_terminate", ""),
                 ]
             },
         },
         "c-cpp",
         cfg_content="""Call tree
 LLVMFuzzerTestOneInput /src/project/fuzzer.cc linenumber=-1
-  helper /src/project/fuzzer.cc linenumber=10""",
+  helper /src/project/fuzzer.cc linenumber=10
+  target() /src/project/target.cc linenumber=11
+  target_neighbour /src/project/lib/fuzzer.cc linenumber=12
+  __clang_call_terminate  linenumber=13""",
     )
     fp.coverage = code_coverage.CoverageProfile()
     fp.coverage.covmap["LLVMFuzzerTestOneInput"] = [(1, 1)]
     fp.coverage.covmap["helper"] = [(10, 1)]
-    fp.functions_reached_by_fuzzer = {"LLVMFuzzerTestOneInput", "helper"}
+    fp.coverage.covmap["_Z6targetv"] = [(11, 1)]
+    fp.coverage.covmap["target_neighbour"] = [(12, 1)]
+    fp.coverage.covmap["__clang_call_terminate"] = [(13, 1)]
+    fp._set_all_reached_functions()
+    fp.refine_paths("/src/project")
     fp._set_all_reached_functions_runtime()
 
+    assert fp.functions_reached_by_fuzzer_runtime == {
+        "LLVMFuzzerTestOneInput",
+        "helper",
+        "target()",
+        "target_neighbour",
+        "__clang_call_terminate",
+    }
+    assert fp.get_target_reachable_functions() == {
+        "target()",
+        "target_neighbour",
+    }
     assert fp.get_coverage_blocker_stats() == {
-        "reachable-funcs": 2,
-        "reached-funcs": 2,
+        "reachable-funcs": 5,
+        "reached-funcs": 5,
         "cov-reach-proportion": 100.0,
+    }
+
+
+def test_coverage_blocker_stats_keep_sourceless_target_blockers() -> None:
+    fp = fuzzer_profile.FuzzerProfile(
+        "test.data",
+        {
+            "Fuzzer filename": "/src/project/fuzzer.cc",
+            "All functions": {
+                "Elements": [
+                    _func_elem(
+                        "LLVMFuzzerTestOneInput",
+                        "/src/project/fuzzer.cc",
+                        [
+                            "_ZN7BaseXML9parseTextEPKcmbRPK12SharedString",
+                            "__clang_call_terminate",
+                        ],
+                    ),
+                    _func_elem(
+                        "_ZN7BaseXML9parseTextEPKcmbRPK12SharedString",
+                        "",
+                    ),
+                    _func_elem("__clang_call_terminate", ""),
+                ]
+            },
+        },
+        "c-cpp",
+        cfg_content="""Call tree
+LLVMFuzzerTestOneInput /src/project/fuzzer.cc linenumber=-1
+  _ZN7BaseXML9parseTextEPKcmbRPK12SharedString  linenumber=113
+  __clang_call_terminate  linenumber=120""",
+    )
+    fp.coverage = code_coverage.CoverageProfile()
+    fp.coverage.covmap["LLVMFuzzerTestOneInput"] = [(1, 1)]
+    fp._set_all_reached_functions()
+    fp._set_all_reached_functions_runtime()
+
+    assert fp.functions_reached_by_fuzzer_runtime == {"LLVMFuzzerTestOneInput"}
+    assert fp.get_coverage_blocker_stats() == {
+        "reachable-funcs": 3,
+        "reached-funcs": 1,
+        "cov-reach-proportion": 33.33333333333333,
+    }
+
+
+def test_coverage_blocker_stats_ignore_callsite_only_target_reach() -> None:
+    fp = fuzzer_profile.FuzzerProfile(
+        "test.data",
+        {
+            "Fuzzer filename": "/src/project/fuzzer.cc",
+            "All functions": {
+                "Elements": [
+                    _func_elem(
+                        "LLVMFuzzerTestOneInput",
+                        "/src/project/fuzzer.cc",
+                        ["_ZN7BaseXML9parseTextEPKcmbRPK12SharedString"],
+                    ),
+                    _func_elem(
+                        "_ZN7BaseXML9parseTextEPKcmbRPK12SharedString",
+                        "",
+                    ),
+                ]
+            },
+        },
+        "c-cpp",
+        cfg_content="""Call tree
+LLVMFuzzerTestOneInput /src/project/fuzzer.cc linenumber=-1
+  _ZN7BaseXML9parseTextEPKcmbRPK12SharedString  linenumber=113""",
+    )
+    fp.coverage = code_coverage.CoverageProfile()
+    fp.functions_reached_by_fuzzer = {
+        "_ZN7BaseXML9parseTextEPKcmbRPK12SharedString"
+    }
+    fp._set_all_reached_functions_runtime()
+    fp.get_callsites()[1].cov_hitcount = 1720
+
+    assert fp.functions_reached_by_fuzzer_runtime == set()
+    assert fp.get_callsite_covered_target_functions() == {
+        "BaseXML::parseText(char const*, unsigned long, bool, SharedString const*&)"
+    }
+    assert fp.get_coverage_blocker_stats() == {
+        "reachable-funcs": 1,
+        "reached-funcs": 0,
+        "cov-reach-proportion": 0.0,
     }
