@@ -934,8 +934,7 @@ bool FuzzIntrospector::runOnModule(Module &M) {
     moduleLogLevel = atoi(getenv("FUZZ_INTROSPECTOR_LOG_LEVEL"));
   }
 
-  std::string ModuleName = M.getName().str();
-  logPrintf(L1, "Running introspector on %s\n", ModuleName.c_str());
+  logPrintf(L1, "Running introspector on %s\n", M.getName());
   if (!getenv("FUZZ_INTROSPECTOR_FORCE_RUN")) {
     if (shouldRunIntrospector(M) == false) {
       // Run the analysis on a non-fuzzer binary.
