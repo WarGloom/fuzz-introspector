@@ -1336,7 +1336,7 @@ def create_fuzzer_profile_section_blocker_table(
 ):
     # Decide what kind of blockers to report: if branch blockers are not present,
     # fall back to calltree-based blockers.
-    html_string = ""
+    html_parts = []
     if profile.branch_blockers:
         # Populate branch blocker table
         html_fuzz_blocker_table = calltree_analysis.create_branch_blocker_table(
@@ -1346,14 +1346,15 @@ def create_fuzzer_profile_section_blocker_table(
         html_fuzz_blocker_table = calltree_analysis.create_fuzz_blocker_table(
             profile, tables, calltree_file_name, file_link=calltree_file_name)
     if html_fuzz_blocker_table is not None:
-        html_string += html_helpers.html_add_header_with_link(
-            "Fuzz blockers",
-            html_helpers.HTML_HEADING.H3,
-            table_of_contents,
-            link=f"fuzz_blocker{profile_idx}",
-        )
-        html_string += html_fuzz_blocker_table
-    return html_string
+        html_parts.append(
+            html_helpers.html_add_header_with_link(
+                "Fuzz blockers",
+                html_helpers.HTML_HEADING.H3,
+                table_of_contents,
+                link=f"fuzz_blocker{profile_idx}",
+            ))
+        html_parts.append(html_fuzz_blocker_table)
+    return "".join(html_parts)
 
 
 def create_fuzzer_profile_section_files_hit(profile, profile_idx,
