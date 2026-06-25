@@ -2246,7 +2246,8 @@ def _apply_native_overlay_outputs(
         node.cov_link = str(node_update.get("cov_link", node.cov_link))
         node.cov_callsite_link = str(
             node_update.get("cov_callsite_link", node.cov_callsite_link))
-        node.cov_parent = str(node_update.get("cov_parent", node.cov_parent))
+        node.cov_parent = str(
+            node_update.get("cov_parent", node.cov_parent))
         node.cov_forward_reds = int(
             node_update.get("cov_forward_reds", node.cov_forward_reds))
         node.cov_largest_blocked_func = str(

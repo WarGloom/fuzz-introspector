@@ -1097,10 +1097,14 @@ def create_fuzzer_profile_runtime_coverage_section(
                 })
             else:
                 table_rows.append({
-                    "Function name": funcname,
-                    "source code lines": "N/A",
-                    "source lines hit": "N/A",
-                    "percentage hit": "N/A",
+                    "Function name":
+                    funcname,
+                    "source code lines":
+                    "N/A",
+                    "source lines hit":
+                    "N/A",
+                    "percentage hit":
+                    "N/A",
                 })
     func_hit_table_string += "</table>"
 
