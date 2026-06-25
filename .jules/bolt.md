@@ -31,6 +31,3 @@
 ## 2024-05-30 - Python NDJSON Parsing Overhead
 **Learning:** Calling `json.loads` sequentially for each line in a newline-delimited JSON (NDJSON) file incurs noticeable performance overhead in Python. The C extensions for `json` are highly optimized for monolithic parses but parsing millions of single-line objects suffers from Python-level function call and context switching overhead.
 **Action:** When parsing NDJSON in Python, build an artificial array string containing batches of lines (`f"[{','.join(batch)}]"`) and parse the batch with a single `json.loads` call. This reduces overhead and is about 35-40% faster.
-## 2026-06-25 - String building in HTML generation
-**Learning:** Sequential `+=` string concatenation inside HTML generation blocks is significantly slower than building a list of string parts and calling `"".join(parts)` due to immutable string reallocation in Python.
-**Action:** Use list appending and `join()` for building large multi-part strings, especially in loops or repetitive report generation functions.
