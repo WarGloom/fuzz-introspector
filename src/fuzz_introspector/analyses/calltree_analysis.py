@@ -409,10 +409,9 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         # Performance Optimization: Using a list to collect string parts and joining them at the end
         # is significantly faster than repetitive string concatenation (+=) in Python,
         # reducing memory reallocation overhead and improving HTML generation time.
-        html_table_parts = [
-            ("<p class='no-top-margin'>The following nodes "
-             "represent call sites where fuzz blockers occur.</p>")
-        ]
+        html_table_parts = [(
+            "<p class='no-top-margin'>The following nodes "
+            "represent call sites where fuzz blockers occur.</p>")]
         tables.append(f"myTable{len(tables)}")
         html_table_parts.append(
             html_helpers.html_create_table_head(
