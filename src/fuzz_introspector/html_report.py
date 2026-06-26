@@ -927,34 +927,40 @@ def create_boxed_top_summary_info(
     proj_profile: project_profile.MergedProjectProfile,
     conclusions: List[html_helpers.HTMLConclusion],
 ) -> str:
-    html_string = ""
+    # Performance Optimization: Using a list to collect string parts and joining them at the end
+    # is significantly faster than repetitive string concatenation (+=) in Python,
+    # reducing memory reallocation overhead and improving HTML generation time.
+    html_parts = []
 
     # Functions statically reached
-    html_string += html_helpers.create_percentage_graph(
-        "Functions statically reachable by fuzzers",
-        proj_profile.reached_func_count,
-        proj_profile.total_functions,
-    )
+    html_parts.append(
+        html_helpers.create_percentage_graph(
+            "Functions statically reachable by fuzzers",
+            proj_profile.reached_func_count,
+            proj_profile.total_functions,
+        ))
 
     # Cyclomatic complexity reached
-    html_string += html_helpers.create_percentage_graph(
-        "Cyclomatic complexity statically reachable by fuzzers",
-        proj_profile.reached_complexity,
-        proj_profile.total_complexity,
-    )
+    html_parts.append(
+        html_helpers.create_percentage_graph(
+            "Cyclomatic complexity statically reachable by fuzzers",
+            proj_profile.reached_complexity,
+            proj_profile.total_complexity,
+        ))
 
     # Function code coverage
     covered_funcs = proj_profile.get_all_runtime_covered_functions()
     runtime_reached_funcs = proj_profile.get_all_runtime_reached_functions()
-    html_string += html_helpers.create_percentage_graph(
-        "Runtime code coverage of functions",
-        len(covered_funcs),
-        proj_profile.total_functions,
-    )
+    html_parts.append(
+        html_helpers.create_percentage_graph(
+            "Runtime code coverage of functions",
+            len(covered_funcs),
+            proj_profile.total_functions,
+        ))
 
     # Wrap it in a horisontal list.
     html_string = f"""<div style="display: flex; max-width: 800px">
-        {html_string}
+        {"".join(html_parts)}
     </div>"""
 
     if len(runtime_reached_funcs) > proj_profile.reached_func_count:
@@ -1330,7 +1336,7 @@ def create_fuzzer_profile_section_blocker_table(
 ):
     # Decide what kind of blockers to report: if branch blockers are not present,
     # fall back to calltree-based blockers.
-    html_string = ""
+    html_parts = []
     if profile.branch_blockers:
         # Populate branch blocker table
         html_fuzz_blocker_table = calltree_analysis.create_branch_blocker_table(
@@ -1340,14 +1346,15 @@ def create_fuzzer_profile_section_blocker_table(
         html_fuzz_blocker_table = calltree_analysis.create_fuzz_blocker_table(
             profile, tables, calltree_file_name, file_link=calltree_file_name)
     if html_fuzz_blocker_table is not None:
-        html_string += html_helpers.html_add_header_with_link(
-            "Fuzz blockers",
-            html_helpers.HTML_HEADING.H3,
-            table_of_contents,
-            link=f"fuzz_blocker{profile_idx}",
-        )
-        html_string += html_fuzz_blocker_table
-    return html_string
+        html_parts.append(
+            html_helpers.html_add_header_with_link(
+                "Fuzz blockers",
+                html_helpers.HTML_HEADING.H3,
+                table_of_contents,
+                link=f"fuzz_blocker{profile_idx}",
+            ))
+        html_parts.append(html_fuzz_blocker_table)
+    return "".join(html_parts)
 
 
 def create_fuzzer_profile_section_files_hit(profile, profile_idx,
@@ -1378,17 +1385,17 @@ def create_html_footer(tables):
     """Create an array of table ids wrapped in a <script> tag, and close
     <body> and <html> tags.
     """
-    html_footer = "<script>\n"
+    html_footer_parts = ["<script>\n"]
 
     # Create array of all table ids
     table_ids_str = ", ".join([f"'{tablename}'" for tablename in tables])
-    html_footer += f"var tableIds = [{table_ids_str}];\n"
+    html_footer_parts.append(f"var tableIds = [{table_ids_str}];\n")
 
     # Closing tags
-    html_footer += "</script>\n"
-    html_footer += "</body>\n"
-    html_footer += "</html>\n"
-    return html_footer
+    html_footer_parts.append("</script>\n")
+    html_footer_parts.append("</body>\n")
+    html_footer_parts.append("</html>\n")
+    return "".join(html_footer_parts)
 
 
 def write_content_to_html_files(html_full_doc, all_functions_json_html,
