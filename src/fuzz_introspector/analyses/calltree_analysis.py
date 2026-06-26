@@ -406,6 +406,7 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         if len(fuzz_blockers) == 0:
             return None
 
+        # Performance Optimization: Replaced O(N^2) string concatenation with O(N) list joins.
         # Performance Optimization: Using a list to collect string parts and joining them at the end
         # is significantly faster than repetitive string concatenation (+=) in Python,
         # reducing memory reallocation overhead and improving HTML generation time.
@@ -489,6 +490,7 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         blockers_node_map = self.collect_calltree_nodes(
             branch_blockers, profile.fuzzer_callsite_calltree)
 
+        # Performance Optimization: Replaced O(N^2) string concatenation with O(N) list joins.
         # Performance Optimization: Using a list to collect string parts and joining them at the end
         # is significantly faster than repetitive string concatenation (+=) in Python,
         # reducing memory reallocation overhead and improving HTML generation time.
