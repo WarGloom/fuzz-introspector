@@ -222,9 +222,11 @@ class FrontendAnalyser(analysis.AnalysisInterface):
             declarations = {}
             type_nodes = data.get('dt', [])
             name_nodes = data.get('dn', [])
-            kinds = {(n.start_point[0], n.start_point[1]): kind
-                     for kind in ('dp', 'da', 'dp')
-                     for n in data.get(kind, [])}
+            kinds = {
+                (n.start_point[0], n.start_point[1]): kind
+                for kind in ('dp', 'da', 'dp')
+                for n in data.get(kind, [])
+            }
 
             # Process variable declarations
             for name_node, type_node in zip(name_nodes, type_nodes):
