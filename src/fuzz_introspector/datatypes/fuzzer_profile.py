@@ -13,91 +13,23 @@
 # limitations under the License.
 """Fuzzer profile"""
 
-# pylint: disable=line-too-long,missing-function-docstring,unused-argument
-# pylint: disable=use-dict-literal,consider-using-in,no-else-return
-# pylint: disable=consider-using-max-builtin,logging-fstring-interpolation
-# pylint: disable=subprocess-run-check,too-many-nested-blocks
-
-import json
-import logging
 import os
-import re
-import shutil
-import subprocess
-import sys
+import logging
 
 from typing import (
     Any,
     Dict,
     List,
     Optional,
-    Pattern,
     Set,
     Tuple,
 )
 
-from fuzz_introspector import (
-    backend_loaders,
-    cfg_load,
-    code_coverage,
-    json_report,
-    utils,
-)
-from fuzz_introspector.datatypes import branch_profile, function_profile
+from fuzz_introspector import (cfg_load, code_coverage, json_report, utils)
+from fuzz_introspector.datatypes import function_profile
 from fuzz_introspector.exceptions import DataLoaderError
 
 logger = logging.getLogger(name=__name__)
-
-
-def _intern_function_name_list(function_names: list[Any]) -> list[Any]:
-    """Intern string entries in a reachability list."""
-    return [
-        sys.intern(function_name)
-        if isinstance(function_name, str) else function_name
-        for function_name in function_names
-    ]
-
-
-_FI_REACHABILITY_BACKEND_ENV = "FI_REACHABILITY_BACKEND"
-_FI_REACHABILITY_RUST_BIN_ENV = "FI_REACHABILITY_RUST_BIN"
-_FI_REACHABILITY_GO_BIN_ENV = "FI_REACHABILITY_GO_BIN"
-_REACHABILITY_BINARY_NAMES = {
-    backend_loaders.BACKEND_RUST: "native_reachability_rust",
-    backend_loaders.BACKEND_GO: "native_reachability_go",
-}
-
-
-def _resolve_reachability_binary(backend: str) -> str:
-    """Locate the selected native reachability binary.
-
-    Discovery order:
-      1. Backend-specific env var or ``FI_REACHABILITY_BIN``.
-      2. Repo-relative path (matches overlay backend pattern).
-      3. ``shutil.which`` PATH lookup.
-
-    Returns the resolved path, or ``""`` if not found.
-    """
-    command = backend_loaders.resolve_backend_command("FI_REACHABILITY",
-                                                      backend)
-    if command:
-        return command[0]
-
-    binary_name = _REACHABILITY_BINARY_NAMES.get(backend, "")
-    if not binary_name:
-        return ""
-
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), os.pardir, os.pardir,
-                     os.pardir))
-    repo_candidate = os.path.join(repo_root, "tools", binary_name, "target",
-                                  "release", binary_name)
-    if backend == backend_loaders.BACKEND_GO:
-        repo_candidate = os.path.join(repo_root, "tools", binary_name,
-                                      binary_name)
-    if os.path.isfile(repo_candidate) and os.access(repo_candidate, os.X_OK):
-        return repo_candidate
-
-    return shutil.which(binary_name) or ""
 
 
 class FuzzerProfile:
@@ -107,31 +39,26 @@ class FuzzerProfile:
     plugin. That means, the output from the plugin for a single fuzzer.
     """
 
-    def __init__(
-        self,
-        cfg_file: str,
-        frontend_yaml: Dict[Any, Any],
-        target_lang: str = "c-cpp",
-        cfg_content="",
-        exclude_patterns: Optional[List[str]] = None,
-        exclude_function_patterns: Optional[List[str]] = None,
-    ) -> None:
+    def __init__(self,
+                 cfg_file: str,
+                 frontend_yaml: Dict[Any, Any],
+                 target_lang: str = "c-cpp",
+                 cfg_content='') -> None:
         # Defaults
         self.binary_executable: str = ""
         self.file_targets: Dict[str, Set[str]] = dict()
         self.coverage: Optional[code_coverage.CoverageProfile] = None
         self.all_class_functions: Dict[
             str, function_profile.FunctionProfile] = dict()
-        self.all_class_constructors: Dict[str,
-                                          function_profile.FunctionProfile] = (
-                                              dict())
+        self.all_class_constructors: Dict[
+            str, function_profile.FunctionProfile] = dict()
 
         self.branch_blockers: List[Any] = []
         self._target_lang = target_lang
         self.introspector_data_file = cfg_file
 
-        self.functions_reached_by_fuzzer: Set[str] = set()
-        self.functions_reached_by_fuzzer_runtime: Set[str] = set()
+        self.functions_reached_by_fuzzer: List[str] = []
+        self.functions_reached_by_fuzzer_runtime: List[str] = []
 
         # Load calltree file
         self.fuzzer_callsite_calltree = cfg_load.data_file_read_calltree(
@@ -139,76 +66,27 @@ class FuzzerProfile:
 
         # Read yaml data (as dictionary) from frontend
         try:
-            self.fuzzer_source_file: str = frontend_yaml["Fuzzer filename"]
+            self.fuzzer_source_file: str = frontend_yaml['Fuzzer filename']
 
         except KeyError:
-            self.fuzzer_source_file = ""
-
-        # Store exclusion patterns and compiled regexes.
-        self.exclude_patterns: List[str] = []
-        self.exclude_function_patterns: List[str] = []
-        self._exclude_file_regexes: List[Pattern[str]] = []
-        self._exclude_function_regexes: List[Pattern[str]] = []
-        self.set_exclude_patterns(exclude_patterns, exclude_function_patterns)
-        self._covered_files_cache: Dict[str, Set[str]] = {}
-        self._covered_files_cache_metadata: Dict[str, Tuple[int, int]] = {}
-        self._file_targets_cache_version: int = 0
-        self._source_file_exclusion_cache: Dict[str, bool] = {}
+            self.fuzzer_source_file = ''
 
         # Read entrypoint of fuzzer if this is a Python module
-        if target_lang == "python":
-            self.entrypoint_fun = frontend_yaml["ep"]["func_name"]
-            self.entrypoint_mod = frontend_yaml["ep"]["module"]
+        if target_lang == 'python':
+            self.entrypoint_fun = frontend_yaml['ep']['func_name']
+            self.entrypoint_mod = frontend_yaml['ep']['module']
 
         # Read entrypoint of fuzzer if this is a jvm/go module
-        if target_lang == "jvm" or target_lang == "go":
-            self.entrypoint_method = frontend_yaml.get("Fuzzing method", "")
+        if target_lang == 'jvm' or target_lang == 'go':
+            self.entrypoint_method = frontend_yaml.get('Fuzzing method', '')
 
-        self._set_function_list(frontend_yaml, self.exclude_patterns)
+        self._set_function_list(frontend_yaml)
         self.dst_to_fd_cache: Dict[str,
                                    function_profile.FunctionProfile] = dict()
-        """Language the fuzzer is written in"""
-
-    def _compile_exclude_regexes(
-        self,
-        patterns: Optional[List[str]],
-        scope: str,
-    ) -> List[Pattern[str]]:
-        compiled_patterns: List[Pattern[str]] = []
-        for pattern in patterns or []:
-            try:
-                compiled_patterns.append(re.compile(pattern))
-            except re.error as err:
-                logger.warning(
-                    "Ignoring invalid %s exclusion pattern %r: %s",
-                    scope,
-                    pattern,
-                    err,
-                )
-        return compiled_patterns
-
-    def set_exclude_patterns(
-        self,
-        exclude_patterns: Optional[List[str]],
-        exclude_function_patterns: Optional[List[str]],
-    ) -> None:
-        self.exclude_patterns = list(
-            exclude_patterns) if exclude_patterns else []
-        self.exclude_function_patterns = (list(exclude_function_patterns)
-                                          if exclude_function_patterns else [])
-        self._exclude_file_regexes = self._compile_exclude_regexes(
-            self.exclude_patterns,
-            "file",
-        )
-        self._exclude_function_regexes = self._compile_exclude_regexes(
-            self.exclude_function_patterns,
-            "function",
-        )
-        self._source_file_exclusion_cache = {}
 
     @property
-    def target_lang(self) -> str:
-        """The language of the fuzzer"""
+    def target_lang(self):
+        """Language the fuzzer is written in"""
         return self._target_lang
 
     @property
@@ -216,7 +94,7 @@ class FuzzerProfile:
         """The name of the fuzzer entrypoint"""
 
         # if set in the evironment use that
-        ep_env = os.environ.get("FI_ENTRYPOINT", None)
+        ep_env = os.environ.get('FI_ENTRYPOINT', None)
         if ep_env:
             return ep_env
         if self.target_lang == "c-cpp":
@@ -227,9 +105,9 @@ class FuzzerProfile:
             cname = self.fuzzer_source_file
             mname = self.entrypoint_method
             if not mname:
-                return "fuzzerTestOneInput"
+                return 'fuzzerTestOneInput'
 
-            if "]." in mname:
+            if '].' in mname:
                 # For new tree-sitter frontend
                 return mname
             else:
@@ -250,8 +128,8 @@ class FuzzerProfile:
     def identifier(self):
         """Fuzzer identifier"""
         if self._target_lang == "c-cpp":
-            if (self.binary_executable != ""
-                    and os.path.basename(self.binary_executable) != ""):
+            if self.binary_executable != "" and os.path.basename(
+                    self.binary_executable) != '':
                 return os.path.basename(self.binary_executable)
 
         elif self._target_lang == "python":
@@ -343,8 +221,6 @@ class FuzzerProfile:
             for key, val in self.file_targets.items():
                 new_dict[key.replace(basefolder, "")] = val
             self.file_targets = new_dict
-            self._file_targets_cache_version += 1
-            self._invalidate_is_file_covered_cache()
 
     def get_callsites(self):
         return cfg_load.extract_all_callsites(self.fuzzer_callsite_calltree)
@@ -413,10 +289,10 @@ class FuzzerProfile:
                 or self.reaches_func_runtime(func_name))
 
     def correlate_executable_name(self, correlation_dict) -> None:
-        for elem in correlation_dict["pairings"]:
-            if (os.path.basename(self.introspector_data_file)
-                    in f"{elem['fuzzer_log_file']}.data"):
-                self.binary_executable = str(elem["executable_path"])
+        for elem in correlation_dict['pairings']:
+            if os.path.basename(self.introspector_data_file
+                                ) in f"{elem['fuzzer_log_file']}.data":
+                self.binary_executable = str(elem['executable_path'])
 
                 lval = os.path.basename(self.introspector_data_file)
                 rval = f"{elem['fuzzer_log_file']}.data"
@@ -425,558 +301,55 @@ class FuzzerProfile:
     def get_key(self) -> str:
         """Returns the "key" we use to identify this Fuzzer profile."""
         if self.binary_executable != "":
-            return os.path.normpath(self.binary_executable)
+            return os.path.basename(self.binary_executable)
 
-        if self.fuzzer_source_file != "":
-            return os.path.normpath(self.fuzzer_source_file)
-
-        return self.identifier
-
-    @staticmethod
-    def _serialize_branch_side(
-            side: branch_profile.BranchSide) -> Dict[str, Any]:
-        return {
-            "pos": side.pos,
-            "unique_not_covered_complexity":
-            side.unique_not_covered_complexity,
-            "unique_reachable_complexity": side.unique_reachable_complexity,
-            "reachable_complexity": side.reachable_complexity,
-            "not_covered_complexity": side.not_covered_complexity,
-            "hitcount": side.hitcount,
-            "funcs": list(side.funcs),
-        }
-
-    @staticmethod
-    def _deserialize_branch_side(
-            payload: Dict[str, Any]) -> branch_profile.BranchSide:
-        side = branch_profile.BranchSide()
-        side.pos = payload.get("pos", "")
-        side.unique_not_covered_complexity = payload.get(
-            "unique_not_covered_complexity", -1)
-        side.unique_reachable_complexity = payload.get(
-            "unique_reachable_complexity", -1)
-        side.reachable_complexity = payload.get("reachable_complexity", -1)
-        side.not_covered_complexity = payload.get("not_covered_complexity", -1)
-        side.hitcount = payload.get("hitcount", -1)
-        side.funcs = list(payload.get("funcs", []))
-        return side
-
-    @classmethod
-    def _serialize_branch_profile(
-            cls, profile: branch_profile.BranchProfile) -> Dict[str, Any]:
-        return {
-            "branch_pos": profile.branch_pos,
-            "sides":
-            [cls._serialize_branch_side(side) for side in profile.sides],
-        }
-
-    @classmethod
-    def _deserialize_branch_profile(
-            cls, payload: Dict[str, Any]) -> branch_profile.BranchProfile:
-        profile = branch_profile.BranchProfile()
-        profile.branch_pos = payload.get("branch_pos", "")
-        profile.sides = [
-            cls._deserialize_branch_side(side_payload)
-            for side_payload in payload.get("sides", [])
-        ]
-        return profile
-
-    @classmethod
-    def _serialize_function_profile(
-            cls, profile: function_profile.FunctionProfile) -> Dict[str, Any]:
-        payload: Dict[str, Any] = dict(profile.__dict__)
-        payload["branch_profiles"] = {
-            branch_key: cls._serialize_branch_profile(branch_value)
-            for branch_key, branch_value in profile.branch_profiles.items()
-        }
-        return payload
-
-    @classmethod
-    def _deserialize_function_profile(
-            cls, payload: Dict[str, Any]) -> function_profile.FunctionProfile:
-        profile = function_profile.FunctionProfile.__new__(
-            function_profile.FunctionProfile)
-        profile.__dict__.update(payload)
-        profile.branch_profiles = {
-            branch_key: cls._deserialize_branch_profile(branch_value)
-            for branch_key, branch_value in payload.get("branch_profiles",
-                                                        {}).items()
-        }
-        profile.functions_reached = _intern_function_name_list(
-            list(payload.get("functions_reached", [])))
-        return profile
-
-    @staticmethod
-    def _serialize_coverage_profile(
-        coverage: Optional[code_coverage.CoverageProfile],
-    ) -> Optional[Dict[str, Any]]:
-        if coverage is None:
-            return None
-        return dict(coverage.__dict__)
-
-    @staticmethod
-    def _deserialize_coverage_profile(
-        payload: Optional[Dict[str, Any]],
-    ) -> Optional[code_coverage.CoverageProfile]:
-        if payload is None:
-            return None
-        coverage = code_coverage.CoverageProfile()
-        coverage.__dict__.update(payload)
-        return coverage
-
-    @classmethod
-    def _serialize_calltree_node(
-            cls, node: Optional[cfg_load.CalltreeCallsite]
-    ) -> Optional[Dict[str, Any]]:
-        if node is None:
-            return None
-        return {
-            "dst_function_name":
-            node.dst_function_name,
-            "dst_function_source_file":
-            node.dst_function_source_file,
-            "src_linenumber":
-            node.src_linenumber,
-            "depth":
-            node.depth,
-            "src_function_source_file":
-            node.src_function_source_file,
-            "src_function_name":
-            node.src_function_name,
-            "cov_ct_idx":
-            node.cov_ct_idx,
-            "cov_parent":
-            node.cov_parent,
-            "cov_hitcount":
-            node.cov_hitcount,
-            "cov_color":
-            node.cov_color,
-            "hitcount":
-            node.hitcount,
-            "cov_link":
-            node.cov_link,
-            "cov_callsite_link":
-            node.cov_callsite_link,
-            "cov_forward_reds":
-            node.cov_forward_reds,
-            "cov_largest_blocked_func":
-            node.cov_largest_blocked_func,
-            "children":
-            [cls._serialize_calltree_node(child) for child in node.children],
-        }
-
-    @classmethod
-    def _deserialize_calltree_node(
-        cls,
-        payload: Optional[Dict[str, Any]],
-        parent: Optional[cfg_load.CalltreeCallsite] = None,
-    ) -> Optional[cfg_load.CalltreeCallsite]:
-        if payload is None:
-            return None
-        node = cfg_load.CalltreeCallsite(
-            payload.get("dst_function_name", ""),
-            payload.get("dst_function_source_file", ""),
-            payload.get("depth", 0),
-            payload.get("src_linenumber", 0),
-            parent,
-        )
-        node.src_function_source_file = payload.get("src_function_source_file")
-        node.src_function_name = payload.get("src_function_name")
-        node.cov_ct_idx = payload.get("cov_ct_idx", -1)
-        node.cov_parent = payload.get("cov_parent", "")
-        node.cov_hitcount = payload.get("cov_hitcount", -1)
-        node.cov_color = payload.get("cov_color", "")
-        node.hitcount = payload.get("hitcount", 0)
-        node.cov_link = payload.get("cov_link", "")
-        node.cov_callsite_link = payload.get("cov_callsite_link", "")
-        node.cov_forward_reds = payload.get("cov_forward_reds", -1)
-        node.cov_largest_blocked_func = payload.get("cov_largest_blocked_func",
-                                                    "")
-        node.children = []
-        for child_payload in payload.get("children", []):
-            child_node = cls._deserialize_calltree_node(child_payload, node)
-            if child_node is not None:
-                node.children.append(child_node)
-        return node
-
-    def to_worker_payload(self) -> Dict[str, Any]:
-        """Serialize this profile into a payload safe for worker transport."""
-        payload: Dict[str, Any] = {
-            "binary_executable":
-            self.binary_executable,
-            "file_targets": {
-                filename: sorted(functions)
-                for filename, functions in self.file_targets.items()
-            },
-            "coverage":
-            self._serialize_coverage_profile(self.coverage),
-            "all_class_functions": {
-                function_name: self._serialize_function_profile(function_data)
-                for function_name, function_data in
-                self.all_class_functions.items()
-            },
-            "all_class_constructors": {
-                function_name: self._serialize_function_profile(function_data)
-                for function_name, function_data in
-                self.all_class_constructors.items()
-            },
-            "branch_blockers":
-            list(self.branch_blockers),
-            "target_lang":
-            self._target_lang,
-            "introspector_data_file":
-            self.introspector_data_file,
-            "functions_reached_by_fuzzer":
-            list(self.functions_reached_by_fuzzer),
-            "functions_reached_by_fuzzer_runtime":
-            list(self.functions_reached_by_fuzzer_runtime),
-            "fuzzer_callsite_calltree":
-            self._serialize_calltree_node(self.fuzzer_callsite_calltree),
-            "fuzzer_source_file":
-            self.fuzzer_source_file,
-            "exclude_patterns":
-            list(self.exclude_patterns) if self.exclude_patterns else [],
-            "exclude_function_patterns":
-            list(self.exclude_function_patterns)
-            if self.exclude_function_patterns else [],
-            "functions_unreached_by_fuzzer":
-            list(getattr(self, "functions_unreached_by_fuzzer", [])),
-            "total_basic_blocks":
-            getattr(self, "total_basic_blocks", 0),
-            "total_cyclomatic_complexity":
-            getattr(self, "total_cyclomatic_complexity", 0),
-        }
-        if hasattr(self, "entrypoint_fun"):
-            payload["entrypoint_fun"] = self.entrypoint_fun
-        if hasattr(self, "entrypoint_mod"):
-            payload["entrypoint_mod"] = self.entrypoint_mod
-        if hasattr(self, "entrypoint_method"):
-            payload["entrypoint_method"] = self.entrypoint_method
-        return payload
-
-    @classmethod
-    def from_worker_payload(cls, payload: Dict[str, Any]) -> "FuzzerProfile":
-        """Rehydrate a profile from worker payload data."""
-        profile = cls.__new__(cls)
-        profile.binary_executable = payload.get("binary_executable", "")
-        profile.file_targets = {
-            filename: set(functions)
-            for filename, functions in payload.get("file_targets", {}).items()
-        }
-        profile.coverage = cls._deserialize_coverage_profile(
-            payload.get("coverage"))
-        profile.all_class_functions = {
-            function_name: cls._deserialize_function_profile(function_data)
-            for function_name, function_data in payload.get(
-                "all_class_functions", {}).items()
-        }
-        profile.all_class_constructors = {
-            function_name: cls._deserialize_function_profile(function_data)
-            for function_name, function_data in payload.get(
-                "all_class_constructors", {}).items()
-        }
-        profile.branch_blockers = list(payload.get("branch_blockers", []))
-        profile._target_lang = payload.get("target_lang", "c-cpp")
-        profile.introspector_data_file = payload.get("introspector_data_file",
-                                                     "")
-        profile.functions_reached_by_fuzzer = set(
-            payload.get("functions_reached_by_fuzzer", []))
-        profile.functions_reached_by_fuzzer_runtime = set(
-            payload.get("functions_reached_by_fuzzer_runtime", []))
-        profile.fuzzer_callsite_calltree = cls._deserialize_calltree_node(
-            payload.get("fuzzer_callsite_calltree"))
-        profile.fuzzer_source_file = payload.get("fuzzer_source_file", "")
-        profile.exclude_patterns = []
-        profile.exclude_function_patterns = []
-        profile._exclude_file_regexes = []
-        profile._exclude_function_regexes = []
-        profile.set_exclude_patterns(
-            list(payload.get("exclude_patterns", [])),
-            list(payload.get("exclude_function_patterns", [])),
-        )
-        profile.functions_unreached_by_fuzzer = set(
-            payload.get("functions_unreached_by_fuzzer", []))
-        profile.total_basic_blocks = payload.get("total_basic_blocks", 0)
-        profile.total_cyclomatic_complexity = payload.get(
-            "total_cyclomatic_complexity", 0)
-
-        if "entrypoint_fun" in payload:
-            profile.entrypoint_fun = payload["entrypoint_fun"]
-        if "entrypoint_mod" in payload:
-            profile.entrypoint_mod = payload["entrypoint_mod"]
-        if "entrypoint_method" in payload:
-            profile.entrypoint_method = payload["entrypoint_method"]
-
-        profile.dst_to_fd_cache = dict()
-        profile._covered_files_cache = {}
-        profile._covered_files_cache_metadata = {}
-        profile._file_targets_cache_version = 0
-        profile._source_file_exclusion_cache = {}
-        profile._set_fd_cache()
-        return profile
-
-    def _propagate_functions_reached_native(self) -> bool:
-        """Try to compute transitive closure via the selected native backend.
-
-        Only activated when ``FI_REACHABILITY_BACKEND`` (or the global
-        ``FI_NATIVE_BACKENDS``) selects ``rust`` or ``go``.
-
-        Returns ``True`` on success, ``False`` when the binary is unavailable
-        or the subprocess fails (caller falls back to the pure-Python path).
-        """
-        backend = backend_loaders.resolve_component_backend(
-            _FI_REACHABILITY_BACKEND_ENV)
-        if backend not in (backend_loaders.BACKEND_RUST,
-                           backend_loaders.BACKEND_GO):
-            return False
-
-        binary_name = _REACHABILITY_BINARY_NAMES[backend]
-        bin_path = _resolve_reachability_binary(backend)
-        if not bin_path:
-            logger.debug(
-                "%s: %s binary not found; falling back to Python",
-                self.identifier,
-                binary_name,
-            )
-            return False
-
-        # Build the JSON payload.  At this point fd.functions_reached still
-        # holds direct callees (not yet expanded), which is exactly what the
-        # Rust binary expects as "direct_callees".
-        payload: Dict[str, Any] = {
-            "schema_version":
-            1,
-            "profiles": [{
-                "profile_id":
-                self.identifier,
-                "functions": [{
-                    "name": name,
-                    "direct_callees": list(fd.functions_reached),
-                } for name, fd in self.all_class_functions.items()],
-            }],
-        }
-
-        try:
-            result = subprocess.run(
-                [bin_path],
-                input=json.dumps(payload),
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            logger.warning(
-                "%s: %s failed (%s); falling back to Python",
-                self.identifier,
-                binary_name,
-                exc,
-            )
-            return False
-
-        if result.returncode != 0:
-            logger.warning(
-                "%s: %s exited with code %d; falling back to Python",
-                self.identifier,
-                binary_name,
-                result.returncode,
-            )
-            return False
-
-        try:
-            output = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
-            logger.warning(
-                "%s: %s produced invalid JSON (%s); falling back to Python",
-                self.identifier,
-                binary_name,
-                exc,
-            )
-            return False
-
-        if output.get("status") != "success":
-            logger.warning(
-                "%s: %s returned status=%r reason=%r; falling back to Python",
-                self.identifier,
-                binary_name,
-                output.get("status"),
-                output.get("reason"),
-            )
-            return False
-
-        # Apply results back to FunctionProfile objects.
-        profiles = output.get("profiles", [])
-        if not profiles:
-            logger.warning(
-                "%s: %s returned no profiles; falling back to Python",
-                self.identifier,
-                binary_name,
-            )
-            return False
-
-        acf = self.all_class_functions
-        for func_result in profiles[0].get("results", []):
-            name = func_result.get("name")
-            if name in acf:
-                acf[name].functions_reached = _intern_function_name_list(
-                    list(func_result.get("functions_reached", [])))
-                acf[name].function_depth = func_result.get("function_depth", 0)
-
-        logger.debug("%s: transitive closure computed by native binary",
-                     self.identifier)
-        return True
+        return self.fuzzer_source_file
 
     def _propagate_functions_reached(self) -> None:
-        """Accumulates all functions transitively reached by each function.
-
-        Uses Tarjan's SCC algorithm + DAG condensation to compute the full
-        transitive closure correctly even when the call graph contains cycles
-        (strongly connected components).
-
-        Algorithm:
-        1. Build a full adjacency map covering both declared functions and any
-           external callees they reference.
-        2. Run iterative Tarjan's SCC.  Tarjan naturally yields SCCs in reverse
-           topological order (sinks/leaves first), which is the correct order for
-           the bottom-up union pass that follows.
-        3. Condense the call graph into a DAG of SCCs.
-        4. For each SCC (processed in Tarjan output order = sinks first):
-           ``reachable[scc] = members(scc) ∪ ⋃ reachable[successor_sccs]``
-           ``depth[scc]     = max over successor SCCs of (depth[succ] + 1)``
-        5. Write back: every function gets
-           ``fd.functions_reached = list(reachable[scc] − {name})``
-           ``fd.function_depth    = depth[scc]``
-
-        Correctness guarantee: all members of an SCC share the same reachable
-        set, so no function ever receives a truncated transitive closure due to
-        a cycle in the call graph.
+        """Accummulates all functions reached by a given fuzzer. This is
+        achieved by iterating the outgoing edges of each function recursively
         """
-        acf = self.all_class_functions
+        new_all_class_functions: Dict[
+            str, function_profile.FunctionProfile] = dict()
 
-        # ------------------------------------------------------------------
-        # Step 1 – build full adjacency (declared nodes + external callees).
-        # ------------------------------------------------------------------
-        adj: Dict[str, List[str]] = {}
-        all_nodes: Set[str] = set()
+        for func, func_profile in self.all_class_functions.items():
+            worklist = []
+            max_depth = 0
+            for func_reached in func_profile.functions_reached:
+                worklist.append((func_reached, 1))
+            visited = set()
 
-        for name, fd in acf.items():
-            direct = list(fd.functions_reached)  # direct callees at this point
-            adj[name] = direct
-            all_nodes.add(name)
-            all_nodes.update(direct)
+            while len(worklist) > 0:
+                elem, depth = worklist.pop()
+                max_depth = max(depth, max_depth)
 
-        # Ensure every node has an adjacency entry (external callees have none).
-        for node in all_nodes:
-            if node not in adj:
-                adj[node] = []
+                if elem in visited:
+                    continue
+                visited.add(elem)
 
-        # ------------------------------------------------------------------
-        # Step 2 – iterative Tarjan's SCC.
-        # Emits SCCs in reverse topological order (sinks first).
-        # ------------------------------------------------------------------
-        index: Dict[str, int] = {}
-        lowlink: Dict[str, int] = {}
-        on_stack: Set[str] = set()
-        tarjan_stack: List[str] = []
-        index_counter: List[int] = [0]
-        sccs: List[List[str]] = []
-
-        # call_stack entries: (node_name, iterator_over_its_children)
-        call_stack: List[Any] = []
-
-        for start in all_nodes:
-            if start in index:
-                continue
-
-            index[start] = lowlink[start] = index_counter[0]
-            index_counter[0] += 1
-            tarjan_stack.append(start)
-            on_stack.add(start)
-            call_stack.append((start, iter(adj.get(start, []))))
-
-            while call_stack:
-                v, children = call_stack[-1]
+                # Check if we have done this function already.
                 try:
-                    w = next(children)
-                    if w not in index:
-                        # Tree edge: recurse into w.
-                        index[w] = lowlink[w] = index_counter[0]
-                        index_counter[0] += 1
-                        tarjan_stack.append(w)
-                        on_stack.add(w)
-                        call_stack.append((w, iter(adj.get(w, []))))
-                    elif w in on_stack:
-                        # Back edge: update lowlink.
-                        if index[w] < lowlink[v]:
-                            lowlink[v] = index[w]
-                except StopIteration:
-                    # All children of v processed: pop and propagate lowlink.
-                    call_stack.pop()
-                    if call_stack:
-                        parent = call_stack[-1][0]
-                        if lowlink[v] < lowlink[parent]:
-                            lowlink[parent] = lowlink[v]
-                    # If v is an SCC root, pop the component from tarjan_stack.
-                    if lowlink[v] == index[v]:
-                        scc: List[str] = []
-                        while True:
-                            w = tarjan_stack.pop()
-                            on_stack.discard(w)
-                            scc.append(w)
-                            if w == v:
-                                break
-                        sccs.append(scc)
+                    fd = new_all_class_functions[elem]
+                    visited.update(set(fd.functions_reached))
+                    tmp_depth = fd.function_depth + depth
+                    max_depth = max(max_depth, tmp_depth)
+                    continue
+                except KeyError:
+                    pass
 
-        # ------------------------------------------------------------------
-        # Step 3 – map every node to its SCC index.
-        # ------------------------------------------------------------------
-        scc_id: Dict[str, int] = {}
-        for i, scc in enumerate(sccs):
-            for name in scc:
-                scc_id[name] = i
+                # Otherwise traverse the functions reached.
+                try:
+                    for func_reached2 in self.all_class_functions[
+                            elem].functions_reached:
+                        worklist.append((func_reached2, depth + 1))
+                except KeyError:
+                    pass
 
-        # ------------------------------------------------------------------
-        # Step 4 – condensed DAG: scc_successors[i] = set of successor SCC ids.
-        # ------------------------------------------------------------------
-        scc_successors: Dict[int, Set[int]] = {
-            i: set()
-            for i in range(len(sccs))
-        }
-        for node in all_nodes:
-            my_scc = scc_id[node]
-            for callee in adj[node]:
-                callee_scc = scc_id.get(callee)
-                if callee_scc is not None and callee_scc != my_scc:
-                    scc_successors[my_scc].add(callee_scc)
-
-        # ------------------------------------------------------------------
-        # Step 5 – bottom-up union pass (Tarjan order = sinks first).
-        # ------------------------------------------------------------------
-        scc_reachable: Dict[int, Set[str]] = {}
-        scc_depth: Dict[int, int] = {}
-
-        for i, scc in enumerate(sccs):
-            members: Set[str] = set(scc)
-            reachable: Set[str] = set(members)
-            max_d = 0
-            for j in scc_successors[i]:
-                reachable.update(scc_reachable[j])
-                d = scc_depth[j] + 1
-                if d > max_d:
-                    max_d = d
-            scc_reachable[i] = reachable
-            scc_depth[i] = max_d
-
-        # ------------------------------------------------------------------
-        # Step 6 – write results back into FunctionProfile objects.
-        # ------------------------------------------------------------------
-        for name, fp in acf.items():
-            scc_idx = scc_id.get(name)
-            if scc_idx is None:
-                fp.functions_reached = []
-                fp.function_depth = 0
-            else:
-                fp.functions_reached = list(scc_reachable[scc_idx] - {name})
-                fp.function_depth = scc_depth[scc_idx]
+            # Save the work
+            new_all_class_functions[func] = func_profile
+            new_all_class_functions[func].functions_reached = list(visited)
+            new_all_class_functions[func].function_depth = max_depth
+        self.all_class_functions = new_all_class_functions
 
     def _set_fd_cache(self):
         for _, fd in self.all_class_functions.items():
@@ -984,28 +357,16 @@ class FuzzerProfile:
                 fd.function_source_file, fd.function_name)] = fd
             self.dst_to_fd_cache[utils.normalise_str(fd.function_name)] = fd
 
-    def accummulate_profile(
-        self,
-        target_folder: str,
-        return_dict: None,
-        uniq_id: None,
-        semaphore: None,
-        skip_propagation: bool = False,
-    ) -> None:
+    def accummulate_profile(self, target_folder: str, return_dict: None,
+                            uniq_id: None, semaphore: None) -> None:
         """Triggers various analyses on the data of the fuzzer. This is used
         after a profile has been initialised to generate more interesting data.
-
-        When *skip_propagation* is ``True`` the transitive-reachability pass is
-        skipped (because the caller already ran it, e.g. via
-        :func:`propagate_reachability_native_batch`).
         """
         if semaphore is not None:
             semaphore.acquire()
 
-        if not skip_propagation:
-            logger.info("%s: propagating functions reached", self.identifier)
-            if not self._propagate_functions_reached_native():
-                self._propagate_functions_reached()
+        logger.info("%s: propagating functions reached", self.identifier)
+        self._propagate_functions_reached()
         logger.info("%s: setting reached funcs", self.identifier)
         self._set_all_reached_functions()
         logger.info("%s: setting unreached funcs", self.identifier)
@@ -1014,59 +375,19 @@ class FuzzerProfile:
         self._load_coverage(target_folder)
         logger.info("%s: setting file targets", self.identifier)
         self._set_file_targets()
-        logger.info("%s: setting reached funcs in runtime", self.identifier)
-        self._set_all_reached_functions_runtime()
-        logger.info("%s: pruning exclusion-derived values", self.identifier)
-        self._prune_excluded_profile_data()
         logger.info("%s: setting total basic blocks", self.identifier)
         self._set_total_basic_blocks()
         logger.info("%s: setting cyclomatic complexity", self.identifier)
         self._set_total_cyclomatic_complexity()
         logger.info("%s: setting fd cache", self.identifier)
         self._set_fd_cache()
+        logger.info("%s: setting reached funcs in runtime", self.identifier)
+        self._set_all_reached_functions_runtime()
         logger.info("%s: finished accummulating profile", self.identifier)
         if return_dict is not None:
             return_dict[uniq_id] = self
         if semaphore is not None:
             semaphore.release()
-
-    def _prune_excluded_profile_data(self) -> None:
-        """Prunes file and function derived data that matches exclude patterns."""
-        if not self.exclude_patterns and not self.exclude_function_patterns:
-            return
-
-        filtered_file_targets: Dict[str, Set[str]] = {}
-        removed_function_names: Set[str] = set()
-        for filename, targets in self.file_targets.items():
-            if self._matches_exclude_pattern(filename):
-                removed_function_names.update(targets)
-                continue
-            filtered_targets = {
-                func
-                for func in targets
-                if not self._should_exclude_function_name(func)
-            }
-            removed_function_names.update(targets - filtered_targets)
-            if not filtered_targets:
-                continue
-            filtered_file_targets[filename] = filtered_targets
-
-        self.file_targets = filtered_file_targets
-        self._file_targets_cache_version += 1
-        self._invalidate_is_file_covered_cache()
-        self.functions_reached_by_fuzzer = {
-            func
-            for func in self.functions_reached_by_fuzzer
-            if not self._should_exclude_function_name(func)
-            and func not in removed_function_names
-        }
-        self.functions_reached_by_fuzzer_runtime = {
-            func
-            for func in self.functions_reached_by_fuzzer_runtime
-            if not self._should_exclude_function_name(func)
-            and func not in removed_function_names
-        }
-        self._set_all_unreached_functions()
 
     def get_cov_uncovered_reachable_funcs(self) -> List[str]:
         """Gets all functions that are statically reachable but are not
@@ -1090,30 +411,6 @@ class FuzzerProfile:
                 uncovered_funcs.append(funcname)
         return uncovered_funcs
 
-    def get_coverage_blocker_stats(self) -> Dict[str, float]:
-        function_aliases = self._build_function_name_alias_map()
-        reachable_funcs = {
-            function_aliases.get(func_name, func_name)
-            for func_name in self.functions_reached_by_fuzzer
-        }
-        runtime_reached_funcs = {
-            function_aliases.get(func_name, func_name)
-            for func_name in self.functions_reached_by_fuzzer_runtime
-        }
-        reached_funcs = reachable_funcs & runtime_reached_funcs
-
-        reachable_count = len(reachable_funcs)
-        reached_count = len(reached_funcs)
-        cov_reach_proportion = 0.0
-        if reachable_count > 0:
-            cov_reach_proportion = (float(reached_count) /
-                                    float(reachable_count)) * 100.0
-        return {
-            "reachable-funcs": reachable_count,
-            "reached-funcs": reached_count,
-            "cov-reach-proportion": cov_reach_proportion,
-        }
-
     def is_file_covered(self,
                         file_name: str,
                         basefolder: Optional[str] = None) -> bool:
@@ -1129,67 +426,32 @@ class FuzzerProfile:
         :returns: `True` if the file is covered by runtime code coverage,
                   `False` otherwise.
         """
-        cache_key = basefolder if basefolder is not None else ""
-        cache_metadata = (
-            id(self.coverage),
-            self._file_targets_cache_version,
-        )
-        covered_files = self._covered_files_cache.get(cache_key)
-        if (covered_files is None
-                or self._covered_files_cache_metadata.get(cache_key)
-                != cache_metadata):
-            covered_files = self._build_covered_files_index(basefolder)
-            self._covered_files_cache[cache_key] = covered_files
-            self._covered_files_cache_metadata[cache_key] = cache_metadata
+        # We need to refine the pathname to match how coverage file paths are.
+        file_name = os.path.abspath(file_name)
 
-        normalized_file = self._normalize_file_path_for_coverage(
-            file_name, basefolder)
-        return (file_name in covered_files
-                or os.path.abspath(file_name) in covered_files
-                or normalized_file in covered_files)
-
-    def _normalize_file_path_for_coverage(self, file_name: str,
-                                          basefolder: Optional[str]) -> str:
-        normalized_file_name = os.path.abspath(file_name)
+        # Refine filename if needed
         if basefolder is not None and basefolder != "/":
-            normalized_file_name = normalized_file_name.replace(basefolder, "")
-        return normalized_file_name
-
-    def _invalidate_is_file_covered_cache(self) -> None:
-        self._covered_files_cache = {}
-        self._covered_files_cache_metadata = {}
-
-    def _build_covered_files_index(self,
-                                   basefolder: Optional[str]) -> Set[str]:
-        covered_files: Set[str] = set()
-        if self.coverage is None:
-            return covered_files
+            new_file_name = file_name.replace(basefolder, "")
+        else:
+            new_file_name = file_name
 
         for funcname, func_profile in self.all_class_functions.items():
+            # Check it's a relevant filename
             func_file_name = func_profile.function_source_file
-            if not func_file_name:
+            if basefolder is not None and basefolder != "/":
+                new_func_file_name = func_file_name.replace(basefolder, "")
+            else:
+                new_func_file_name = func_file_name
+            if (func_file_name != file_name
+                    and new_func_file_name != new_file_name):
                 continue
-
-            abs_func_file = os.path.abspath(func_file_name)
-            normalized_func_file = self._normalize_file_path_for_coverage(
-                func_file_name, basefolder)
-            normalized_abs_func_file = self._normalize_file_path_for_coverage(
-                abs_func_file, basefolder)
-            if (func_file_name not in self.file_targets
-                    and normalized_func_file not in self.file_targets
-                    and abs_func_file not in self.file_targets
-                    and normalized_abs_func_file not in self.file_targets):
-                continue
-
-            _, _, hit_percentage = self.get_cov_metrics(funcname)
-            if hit_percentage is None or hit_percentage <= 0.0:
-                continue
-
-            covered_files.add(func_file_name)
-            covered_files.add(abs_func_file)
-            covered_files.add(normalized_func_file)
-            covered_files.add(normalized_abs_func_file)
-        return covered_files
+            # Return true if the function is hit
+            _, _, hp = self.get_cov_metrics(funcname)
+            if hp is not None and hp > 0.0:
+                if (func_file_name in self.file_targets
+                        or new_file_name in self.file_targets):
+                    return True
+        return False
 
     def get_cov_metrics(
             self, funcname: str
@@ -1224,19 +486,15 @@ class FuzzerProfile:
             return None, None, None
 
     def write_stats_to_summary_file(self, out_dir) -> None:
-        file_target_count = (len(self.file_targets)
-                             if self.file_targets is not None else 0)
+        file_target_count = len(
+            self.file_targets) if self.file_targets is not None else 0
         json_report.add_fuzzer_key_value_to_report(
-            self.identifier,
-            "stats",
-            {
+            self.identifier, "stats", {
                 "total-basic-blocks": self.total_basic_blocks,
                 "total-cyclomatic-complexity":
                 self.total_cyclomatic_complexity,
                 "file-target-count": file_target_count,
-            },
-            out_dir,
-        )
+            }, out_dir)
 
     def _set_all_reached_functions(self) -> None:
         """Sets self.functions_reached_by_fuzzer to all functions reached by
@@ -1244,21 +502,20 @@ class FuzzerProfile:
         fuzzer entrypoint function, e.g. LLVMFuzzerTestOneInput in C/C++.
         """
         # Find C/CPP/Rust/Go entry point
-        if (self._target_lang == "c-cpp" or self.target_lang == "rust"
-                or self.target_lang == "go"):
+        if self._target_lang == "c-cpp" or self.target_lang == "rust" or self.target_lang == "go":
             if self.entrypoint_function in self.all_class_functions:
-                self.functions_reached_by_fuzzer = set(
-                    self.all_class_functions[
-                        self.entrypoint_function].functions_reached)
-                self.functions_reached_by_fuzzer.add(self.entrypoint_function)
+                self.functions_reached_by_fuzzer = (self.all_class_functions[
+                    self.entrypoint_function].functions_reached)
+                self.functions_reached_by_fuzzer.append(
+                    self.entrypoint_function)
                 return
 
         # Find Python entrypoint
         elif self._target_lang == "python":
             ep_key = f"{self.entrypoint_mod}.{self.entrypoint_fun}"
             reached = self.all_class_functions[ep_key].functions_reached
-            self.functions_reached_by_fuzzer = set(reached)
-            self.functions_reached_by_fuzzer.add(self.entrypoint_function)
+            self.functions_reached_by_fuzzer = reached
+            self.functions_reached_by_fuzzer.append(self.entrypoint_function)
             return
 
         # Find JVM entrypoint
@@ -1269,9 +526,9 @@ class FuzzerProfile:
                     entrypoint = name
                     break
             if entrypoint:
-                self.functions_reached_by_fuzzer = set(
+                self.functions_reached_by_fuzzer = (
                     self.all_class_functions[entrypoint].functions_reached)
-                self.functions_reached_by_fuzzer.add(entrypoint)
+                self.functions_reached_by_fuzzer.append(entrypoint)
                 return
 
     def _set_all_unreached_functions(self) -> None:
@@ -1279,11 +536,10 @@ class FuzzerProfile:
         statically unreached. This is computed as the set difference between
         self.all_class_functions and self.functions_reached_by_fuzzer.
         """
-        self.functions_unreached_by_fuzzer = {
-            f.function_name
-            for f in self.all_class_functions.values()
+        self.functions_unreached_by_fuzzer = [
+            f.function_name for f in self.all_class_functions.values()
             if f.function_name not in self.functions_reached_by_fuzzer
-        }
+        ]
 
     def _set_all_reached_functions_runtime(self) -> None:
         """Sets self.functions_reached_by_fuzzer_runtime to all functions
@@ -1292,36 +548,20 @@ class FuzzerProfile:
         """
         if not self.coverage:
             logger.warning(
-                "No coverage report for retrieving runtime reached functions.")
+                'No coverage report for retrieving runtime reached functions.')
             return
 
-        function_aliases = self._build_function_name_alias_map()
-        statically_reached_functions = {
-            function_aliases.get(func_name, func_name)
-            for func_name in self.functions_reached_by_fuzzer
-        }
         for func_name in self.coverage.covmap:
-            canonical_func_name = function_aliases.get(func_name, func_name)
-            if (self.coverage.is_func_hit(func_name)
-                    and canonical_func_name in statically_reached_functions):
-                self.functions_reached_by_fuzzer_runtime.add(
-                    canonical_func_name)
-
-    def _build_function_name_alias_map(self) -> Dict[str, str]:
-        function_aliases: Dict[str, str] = {}
-        for function_name, func_profile in self.all_class_functions.items():
-            for alias in function_profile.get_function_name_aliases(
-                    function_name, func_profile.raw_function_name):
-                function_aliases.setdefault(alias, function_name)
-        return function_aliases
+            if self.coverage.is_func_hit(func_name):
+                self.functions_reached_by_fuzzer_runtime.append(func_name)
 
     def _load_coverage(self, target_folder: str) -> None:
         """Load coverage data for this profile"""
         logger.info("Loading coverage of type %s", self.target_lang)
         if self.target_lang == "c-cpp":
-            if os.getenv("FI_KERNEL_COV", ""):
+            if os.getenv('FI_KERNEL_COV', ''):
                 self.coverage = code_coverage.load_kernel_cov(
-                    os.getenv("FI_KERNEL_COV"))
+                    os.getenv('FI_KERNEL_COV'))
             else:
                 self.coverage = code_coverage.load_llvm_coverage(
                     target_folder, self.identifier)
@@ -1332,7 +572,8 @@ class FuzzerProfile:
                 self.coverage.correlate_python_functions_with_coverage(
                     self.all_class_functions)
         elif self.target_lang == "jvm":
-            self.coverage = code_coverage.load_jvm_coverage(target_folder)
+            self.coverage = code_coverage.load_jvm_coverage(
+                target_folder, self.identifier)
         elif self.target_lang == "rust":
             self.coverage = code_coverage.load_llvm_coverage(
                 target_folder, self.identifier, True)
@@ -1342,7 +583,6 @@ class FuzzerProfile:
         else:
             raise DataLoaderError(
                 "The profile target has no coverage loading support")
-        self._invalidate_is_file_covered_cache()
 
     def _get_target_fuzzer_filename(self) -> str:
         return (os.path.basename(self.fuzzer_source_file).replace(
@@ -1364,8 +604,6 @@ class FuzzerProfile:
                     self.file_targets[cs.dst_function_source_file] = set()
                 self.file_targets[cs.dst_function_source_file].add(
                     cs.dst_function_name)
-        self._file_targets_cache_version += 1
-        self._invalidate_is_file_covered_cache()
 
     def _set_total_basic_blocks(self) -> None:
         """Sets self.total_basic_blocks to the sum of basic blocks of all the
@@ -1392,78 +630,25 @@ class FuzzerProfile:
             except Exception as e:
                 logger.debug(e)
 
-    def _matches_exclude_pattern(self, source_file: str) -> bool:
-        """Check if source file matches any exclude pattern."""
-        if not source_file or not self._exclude_file_regexes:
-            return False
-
-        # Check cache first
-        if source_file in self._source_file_exclusion_cache:
-            return self._source_file_exclusion_cache[source_file]
-
-        # Compute and cache
-        result = False
-        for pattern in self._exclude_file_regexes:
-            if pattern.search(source_file):
-                result = True
-                break
-        self._source_file_exclusion_cache[source_file] = result
-        return result
-
-    def _matches_exclude_function_pattern(self, function_name: str) -> bool:
-        """Check if function name matches any function exclusion pattern."""
-        if not function_name or not self._exclude_function_regexes:
-            return False
-        for pattern in self._exclude_function_regexes:
-            if pattern.search(function_name):
-                return True
-        return False
-
-    def _should_exclude_function_profile(
-            self, func: function_profile.FunctionProfile) -> bool:
-        if self._matches_exclude_pattern(func.function_source_file):
-            return True
-        if self._matches_exclude_function_pattern(func.function_name):
-            return True
-        if self._matches_exclude_function_pattern(func.raw_function_name):
-            return True
-        return False
-
-    def _should_exclude_function_name(self, function_name: str) -> bool:
-        if self._matches_exclude_function_pattern(function_name):
-            return True
-        func_profile = self.all_class_functions.get(function_name)
-        if func_profile is None:
-            return False
-        return self._should_exclude_function_profile(func_profile)
-
-    def _set_function_list(
-        self,
-        frontend_yaml: Dict[Any, Any],
-        exclude_patterns: Optional[List[str]] = None,
-    ) -> None:
+    def _set_function_list(self, frontend_yaml: Dict[Any, Any]) -> None:
         """Read all function field from yaml data dictionary into
         instances of FunctionProfile
         """
-        for elem in frontend_yaml["All functions"]["Elements"]:
-            if self._is_func_name_missing_normalisation(elem["functionName"]):
+        for elem in frontend_yaml['All functions']['Elements']:
+            if self._is_func_name_missing_normalisation(elem['functionName']):
                 logger.info("May have non-normalised function: %s",
-                            elem["functionName"])
+                            elem['functionName'])
 
             func_profile = function_profile.FunctionProfile(elem)
             logger.debug("Adding %s", func_profile.function_name)
 
-            # Skip functions matching exclude patterns
-            if self._should_exclude_function_profile(func_profile):
-                continue
-
             # Avoid loading more entrypoints as this will cause issues when
             # propagating reachability. TODO(David): make this more robust.
-            if "LLVMFuzzerTestOneInput" in func_profile.function_name:
+            if 'LLVMFuzzerTestOneInput' in func_profile.function_name:
                 if func_profile.function_source_file not in self.fuzzer_source_file:
                     continue
 
-            if self.target_lang == "jvm" and "<init>" in elem["functionName"]:
+            if self.target_lang == "jvm" and "<init>" in elem['functionName']:
                 # Store JVM constructor separately
                 self.all_class_constructors[
                     func_profile.function_name] = func_profile
@@ -1478,111 +663,3 @@ class FuzzerProfile:
             if split_name[-1].isnumeric():
                 return True
         return False
-
-
-def propagate_reachability_native_batch(
-        profiles: list["FuzzerProfile"]) -> bool:
-    """Call the selected native reachability backend once for all profiles.
-
-    Only activated when ``FI_REACHABILITY_BACKEND`` (or the global
-    ``FI_NATIVE_BACKENDS``) selects ``rust`` or ``go``.
-
-    Returns ``True`` if the binary ran successfully and results were applied to
-    all profiles.  Returns ``False`` on any failure so the caller can fall back
-    to per-profile Python DFS.
-    """
-    backend = backend_loaders.resolve_component_backend(
-        _FI_REACHABILITY_BACKEND_ENV)
-    if backend not in (backend_loaders.BACKEND_RUST,
-                       backend_loaders.BACKEND_GO):
-        return False
-
-    binary_name = _REACHABILITY_BINARY_NAMES[backend]
-    bin_path = _resolve_reachability_binary(backend)
-    if not bin_path:
-        logger.debug(
-            "%s binary not found; falling back to Python",
-            binary_name,
-        )
-        return False
-
-    # Build batch payload: one entry per profile.
-    # At this point fd.functions_reached still holds direct callees (not yet
-    # expanded), which is exactly what the Rust binary expects as
-    # "direct_callees".
-    payload: Dict[str, Any] = {
-        "schema_version":
-        1,
-        "profiles": [{
-            "profile_id":
-            p.get_key(),
-            "functions": [{
-                "name": name,
-                "direct_callees": list(fd.functions_reached),
-            } for name, fd in p.all_class_functions.items()],
-        } for p in profiles],
-    }
-
-    try:
-        result = subprocess.run(
-            [bin_path],
-            input=json.dumps(payload),
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        logger.warning(
-            "%s batch failed (%s); falling back to Python",
-            binary_name,
-            exc,
-        )
-        return False
-
-    if result.returncode != 0:
-        logger.warning(
-            "%s batch exited %d; falling back to Python",
-            binary_name,
-            result.returncode,
-        )
-        return False
-
-    try:
-        output = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        logger.warning(
-            "%s batch produced invalid JSON (%s); falling back to Python",
-            binary_name,
-            exc,
-        )
-        return False
-
-    if output.get("status") != "success":
-        logger.warning(
-            "%s batch returned status=%r reason=%r; falling back to Python",
-            binary_name,
-            output.get("status"),
-            output.get("reason"),
-        )
-        return False
-
-    # Build a lookup: profile_id -> FuzzerProfile
-    profile_map = {p.get_key(): p for p in profiles}
-
-    for prof_result in output.get("profiles", []):
-        pid = prof_result.get("profile_id")
-        fp = profile_map.get(pid)
-        if fp is None:
-            continue
-        acf = fp.all_class_functions
-        for func_result in prof_result.get("results", []):
-            name = func_result.get("name")
-            if name in acf:
-                acf[name].functions_reached = _intern_function_name_list(
-                    list(func_result.get("functions_reached", [])))
-                acf[name].function_depth = func_result.get("function_depth", 0)
-
-    logger.debug(
-        "Batch reachability computed for %d profiles via native binary",
-        len(profiles))
-    return True

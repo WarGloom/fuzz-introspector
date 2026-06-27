@@ -43,6 +43,7 @@ def capture_source_files_in_tree(directory_tree: str,
     language_files = []
     language_extensions = constants.LANGUAGE_EXTENSIONS.get(
         language.lower(), [])
+
     # Performance Optimization: Precompute tuple for fast endswith check
     language_extensions_tuple = tuple(language_extensions)
 
@@ -106,7 +107,7 @@ def analyse_folder(
     project: Project = Project([])
 
     # Process for different language
-    if language in {constants.LANGUAGES.C, constants.LANGUAGES.CPP}:
+    if language in [constants.LANGUAGES.C, constants.LANGUAGES.CPP]:
         logger.info('Going C/C++ route')
         logger.info('Loading tree-sitter trees')
 

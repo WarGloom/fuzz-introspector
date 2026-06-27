@@ -1,3 +1,8 @@
+// TODO AdamKorcz: This is too hacky. It should be handled during code generation.
+//$("h1:first").addClass("no-pseudo");
+//$("h1:first").css("padding-left", "0px")
+
+
 $( document ).ready(function() {
 
   $('.high-level-conclusion').click(function(){
