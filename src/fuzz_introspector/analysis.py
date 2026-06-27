@@ -13,1197 +13,28 @@
 # limitations under the License.
 """Performs analysis on the profiles output from fuzz introspector LLVM pass"""
 
-# pylint: disable=line-too-long,missing-function-docstring,missing-class-docstring
-# pylint: disable=unused-argument,invalid-name,protected-access,subprocess-run-check
-# pylint: disable=chained-comparison,consider-using-f-string,logging-fstring-interpolation
-# pylint: disable=no-else-return,unnecessary-list-index-lookup,too-many-nested-blocks
-# pylint: disable=unnecessary-negation,consider-using-in,no-else-break,no-else-continue
-
 import abc
-import bisect
-import collections
-import concurrent.futures
-import contextlib
-import copy
-import json
 import logging
+import multiprocessing
 import os
-from pathlib import Path
-import re
 import shutil
-import subprocess
-import time
-import weakref
 
-from typing import Any, Dict, List, Optional, Type, Set, Union, cast
+from typing import (Dict, List, Type, Set, Union)
 
-try:
-    import resource
-except ImportError:  # pragma: no cover
-    resource = cast(Any, None)
-
-from fuzz_introspector import (
-    backend_loaders,
-    cfg_load,
-    code_coverage,
-    constants,
-    data_loader,
-    debug_info,
-    html_helpers,
-    json_report,
-    stage_markers,
-    utils,
-)
+from fuzz_introspector import (cfg_load, code_coverage, constants, data_loader,
+                               debug_info, html_helpers, json_report, utils)
 
 from fuzz_introspector.datatypes import (
     project_profile,
     fuzzer_profile,
     function_profile,
 )
-from fuzz_introspector.exceptions import DataLoaderError, FuzzIntrospectorError
+from fuzz_introspector.exceptions import DataLoaderError
 
 logger = logging.getLogger(name=__name__)
-FI_PROFILE_WORKERS_ENV = "FI_PROFILE_WORKERS"
-FI_PROFILE_WORKERS_DEFAULT_CAP = 0
-FI_REACHABILITY_BACKEND_ENV = "FI_REACHABILITY_BACKEND"
-FI_REACHABILITY_BACKEND_RUST = "rust"
-FI_PROFILE_WORKERS_RUST_DEFAULT = 3
-FI_DEBUG_STAGE_RSS_ENV = "FI_DEBUG_STAGE_RSS"
-FI_DEBUG_PERF_WARN_ENV = "FI_DEBUG_PERF_WARN"
-FI_STAGE_WARN_SECONDS_ENV = "FI_STAGE_WARN_SECONDS"
-FI_DEBUG_STAGE_WARN_RSS_MB_ENV = "FI_DEBUG_STAGE_WARN_RSS_MB"
-FI_STAGE_WARN_SECONDS_DEFAULT = 0
-FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT = 0
-FI_IF_DEBUG_CORRELATOR_BACKEND_ENV = "FI_IF_DEBUG_CORRELATOR_BACKEND"
-FI_IF_DEBUG_CORRELATOR_SHADOW_ENV = "FI_IF_DEBUG_CORRELATOR_SHADOW"
-FI_IF_DEBUG_CORRELATOR_STRICT_ENV = "FI_IF_DEBUG_CORRELATOR_STRICT"
-_IF_DEBUG_SIGNATURE_CORRELATION_STAGE = "if_debug_signature_correlation"
-FI_FILTER_BACKEND_ENV = "FI_FILTER_BACKEND"
-FI_FILTER_RUST_BIN_ENV = "FI_FILTER_RUST_BIN"
-FI_FILTER_GO_BIN_ENV = "FI_FILTER_GO_BIN"
-_FILTER_BINARY_NAMES = {
-    backend_loaders.BACKEND_RUST: "native_filter_functions_rust",
-    backend_loaders.BACKEND_GO: "native_filter_functions_go",
-}
-_BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
-_BOOL_FALSE_VALUES = {"0", "false", "no", "off"}
 
-# ── Native function-profile filter ────────────────────────────────────────────
-# When FI_FILTER_BACKEND=rust (or FI_NATIVE_BACKENDS=rust), the filtering of
-# function profiles against exclude patterns is delegated to a native Rust
-# binary for dramatically better throughput on large codebases.
 
-
-def _resolve_filter_binary(backend: str) -> str:
-    """Locate the native filter binary for the selected backend."""
-    command = backend_loaders.resolve_backend_command("FI_FILTER", backend)
-    if command:
-        return command[0]
-
-    binary_name = _FILTER_BINARY_NAMES.get(backend, "")
-    if not binary_name:
-        return ""
-
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
-    repo_candidate = os.path.join(
-        repo_root,
-        "tools",
-        binary_name,
-        "target",
-        "release",
-        binary_name,
-    )
-    if backend == backend_loaders.BACKEND_GO:
-        repo_candidate = os.path.join(repo_root, "tools", binary_name,
-                                      binary_name)
-    if os.path.isfile(repo_candidate) and os.access(repo_candidate, os.X_OK):
-        return repo_candidate
-
-    return shutil.which(binary_name) or ""
-
-
-def _filter_profiles_native(
-    profiles: list[fuzzer_profile.FuzzerProfile],
-    exclude_patterns: list[str],
-    exclude_function_patterns: list[str],
-) -> list[fuzzer_profile.FuzzerProfile] | None:
-    """Filter profiles using the selected native backend.
-
-    Returns the filtered profile list on success, or ``None`` on any
-    failure so the caller can fall back to the Python implementation.
-
-    Only activated when ``FI_FILTER_BACKEND`` (or ``FI_NATIVE_BACKENDS``)
-    selects ``rust`` or ``go``.
-    """
-    backend = backend_loaders.resolve_component_backend(FI_FILTER_BACKEND_ENV)
-    if backend not in (backend_loaders.BACKEND_RUST,
-                       backend_loaders.BACKEND_GO):
-        return None
-
-    binary_name = _FILTER_BINARY_NAMES[backend]
-    bin_path = _resolve_filter_binary(backend)
-    if not bin_path:
-        logger.debug(
-            "%s binary not found; falling back to Python",
-            binary_name,
-        )
-        return None
-
-    # Build the JSON payload.  For each profile we send only the three
-    # string fields per function that the filter needs, plus the dict key.
-    payload: dict[str, Any] = {
-        "schema_version": 1,
-        "file_exclude_patterns": list(exclude_patterns),
-        "function_exclude_patterns": list(exclude_function_patterns),
-        "profiles": [],
-    }
-
-    profile_map: dict[str, fuzzer_profile.FuzzerProfile] = {}
-    for p in profiles:
-        pid = p.get_key()
-        profile_map[pid] = p
-        entry: dict[str, Any] = {
-            "profile_id":
-            pid,
-            "fuzzer_source_file":
-            p.fuzzer_source_file,
-            "all_class_functions": [{
-                "key": name,
-                "function_source_file": fp.function_source_file,
-                "function_name": fp.function_name,
-                "raw_function_name": fp.raw_function_name,
-            } for name, fp in p.all_class_functions.items()],
-            "all_class_constructors": [{
-                "key":
-                name,
-                "function_source_file":
-                fp.function_source_file,
-                "function_name":
-                fp.function_name,
-                "raw_function_name":
-                fp.raw_function_name,
-            } for name, fp in p.all_class_constructors.items()],
-        }
-        payload["profiles"].append(entry)
-
-    logger.info("Invoking %s for %d profiles", binary_name, len(profiles))
-    t0 = time.monotonic()
-
-    try:
-        result = subprocess.run(
-            [bin_path],
-            input=json.dumps(payload),
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        logger.warning(
-            "%s failed (%s); falling back to Python",
-            binary_name,
-            exc,
-        )
-        return None
-
-    if result.returncode != 0:
-        logger.warning(
-            "%s exited %d; falling back to Python",
-            binary_name,
-            result.returncode,
-        )
-        if result.stderr:
-            logger.debug("stderr: %s", result.stderr[:500])
-        return None
-
-    try:
-        output = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        logger.warning(
-            "%s produced invalid JSON (%s); falling back to Python",
-            binary_name,
-            exc,
-        )
-        return None
-
-    if output.get("status") != "success":
-        logger.warning(
-            "%s returned status=%r reason=%r; falling back to Python",
-            binary_name,
-            output.get("status"),
-            output.get("reason"),
-        )
-        return None
-
-    elapsed = time.monotonic() - t0
-
-    # Apply the results.
-    filtered_profiles: list[fuzzer_profile.FuzzerProfile] = []
-    for prof_result in output.get("profiles", []):
-        pid = prof_result.get("profile_id")
-        fp = profile_map.get(pid)
-        if fp is None:
-            continue
-
-        if prof_result.get("excluded", False):
-            logger.info(
-                "Skipping profile for excluded fuzzer source: %s (native)",
-                fp.fuzzer_source_file,
-            )
-            continue
-
-        # Remove excluded functions from the dicts.
-        excluded_funcs = set(prof_result.get("excluded_functions") or [])
-        if excluded_funcs:
-            fp.all_class_functions = {
-                name: func
-                for name, func in fp.all_class_functions.items()
-                if name not in excluded_funcs
-            }
-
-        excluded_ctors = set(prof_result.get("excluded_constructors") or [])
-        if excluded_ctors:
-            fp.all_class_constructors = {
-                name: func
-                for name, func in fp.all_class_constructors.items()
-                if name not in excluded_ctors
-            }
-
-        filtered_profiles.append(fp)
-
-    logger.info(
-        "Native filter completed in %.2fs: %d/%d profiles survived",
-        elapsed,
-        len(filtered_profiles),
-        len(profiles),
-    )
-    return filtered_profiles
-
-
-# ── Native plugin framework ───────────────────────────────────────────────────
-# When the environment variable FI_NATIVE_PLUGINS=rust is set, the analysis
-# orchestration layer will first try to run the native Rust binary for the
-# three CPU-bound plugins.  For any plugin whose native result is empty or on
-# any error, the Python plugin runs normally (non-breaking, additive opt-in).
-
-FI_NATIVE_PLUGINS_ENV = "FI_NATIVE_PLUGINS"
-_NATIVE_PLUGINS_RUST_VALUE = "rust"
-_NATIVE_PLUGINS_GO_VALUE = "go"
-
-# Plugin names handled by the Rust binary.
-_NATIVE_PLUGIN_NAMES: frozenset[str] = frozenset({
-    "OptimalTargets",
-    "RuntimeCoverageAnalysis",
-    "CalltreeAnalysis",
-    "SinkCoverageAnalyser",
-    "FunctionTable",
-    "FarReachLowCoverageAnalyser",
-})
-
-# Mapping from Python plugin class .get_name() → Rust dispatcher key.
-_PYTHON_NAME_TO_NATIVE_KEY: dict[str, str] = {
-    "OptimalTargets": "optimal_targets",
-    "RuntimeCoverageAnalysis": "runtime_coverage_analysis",
-    "CalltreeAnalysis": "calltree_analysis",
-    "SinkCoverageAnalyser": "sink_coverage_analysis",
-    "FunctionTable": "function_table",
-    "FarReachLowCoverageAnalyser": "far_reach_low_coverage_analysis",
-}
-
-_NATIVE_PLUGIN_REQUIRED_FUNCTION_FIELDS: dict[str, frozenset[str]] = {
-    "function_table":
-    frozenset({
-        "name",
-        "total_cyclomatic_complexity",
-    }),
-    "optimal_targets":
-    frozenset({
-        "name",
-        "hitcount",
-        "arg_count",
-        "cyclomatic_complexity",
-        "total_cyclomatic_complexity",
-        "new_unreached_complexity",
-        "bb_count",
-        "functions_reached_count",
-        "source_file",
-    }),
-    "runtime_coverage_analysis":
-    frozenset({
-        "name",
-        "hitcount",
-        "new_unreached_complexity",
-        "total_cyclomatic_complexity",
-        "reached_by_fuzzers",
-    }),
-    "calltree_analysis":
-    frozenset({
-        "hitcount",
-    }),
-    "sink_coverage_analysis":
-    frozenset({
-        "name",
-        "source_file",
-        "incoming_references",
-        "reached_by_fuzzers",
-    }),
-    "far_reach_low_coverage_analysis":
-    frozenset({
-        "name",
-        "cyclomatic_complexity",
-        "runtime_coverage_percent",
-        "is_accessible",
-        "is_jvm_library",
-        "is_enum",
-    }),
-}
-
-_NATIVE_PLUGIN_REQUIRES_TARGET_LANG: frozenset[str] = frozenset({
-    "calltree_analysis",
-    "sink_coverage_analysis",
-})
-
-_NATIVE_PLUGIN_REQUEST_SCOPE: tuple[str, ...] = tuple()
-
-
-def _normalize_plugin_names(
-    plugin_names: tuple[str, ...] | list[str], ) -> tuple[str, ...]:
-    return tuple(sorted(set(plugin_names)))
-
-
-def get_native_plugin_keys_for_analyses(
-    analysis_names: list[str] | tuple[str, ...], ) -> tuple[str, ...]:
-    """Map requested analysis names to native plugin keys."""
-    native_plugin_keys = []
-    for analysis_name in analysis_names:
-        plugin_key = _PYTHON_NAME_TO_NATIVE_KEY.get(analysis_name)
-        if plugin_key is not None:
-            native_plugin_keys.append(plugin_key)
-    return _normalize_plugin_names(native_plugin_keys)
-
-
-def get_native_plugin_request_scope() -> tuple[str, ...]:
-    return _NATIVE_PLUGIN_REQUEST_SCOPE
-
-
-@contextlib.contextmanager
-def native_plugin_request_scope(plugin_names: list[str] | tuple[str, ...]):
-    """Set process-local coalescing scope for native plugin dispatch."""
-    global _NATIVE_PLUGIN_REQUEST_SCOPE
-    previous_scope = _NATIVE_PLUGIN_REQUEST_SCOPE
-    _NATIVE_PLUGIN_REQUEST_SCOPE = _normalize_plugin_names(plugin_names)
-    try:
-        yield
-    finally:
-        _NATIVE_PLUGIN_REQUEST_SCOPE = previous_scope
-
-
-def _serialize_project_for_native_plugins(
-    proj_profile_obj: "project_profile.MergedProjectProfile",
-    plugin_names: tuple[str, ...],
-) -> dict[str, Any]:
-    """Build a plugin-specific JSON payload for Rust native analysis plugins."""
-    required_function_fields: set[str] = set()
-    include_target_lang = False
-    for plugin_name in plugin_names:
-        required_function_fields.update(
-            _NATIVE_PLUGIN_REQUIRED_FUNCTION_FIELDS.get(
-                plugin_name, frozenset()))
-        include_target_lang = (include_target_lang or plugin_name
-                               in _NATIVE_PLUGIN_REQUIRES_TARGET_LANG)
-
-    project_data: dict[str, Any] = {}
-    if include_target_lang:
-        project_data["target_lang"] = proj_profile_obj.target_lang
-
-    functions = []
-    if required_function_fields:
-        for fname, fp in proj_profile_obj.all_functions.items():
-            function_entry: dict[str, Any] = {}
-            if "name" in required_function_fields:
-                function_entry["name"] = fname
-            if "hitcount" in required_function_fields:
-                function_entry["hitcount"] = fp.hitcount
-            if "arg_count" in required_function_fields:
-                function_entry["arg_count"] = fp.arg_count
-            if "cyclomatic_complexity" in required_function_fields:
-                function_entry[
-                    "cyclomatic_complexity"] = fp.cyclomatic_complexity
-            if "total_cyclomatic_complexity" in required_function_fields:
-                function_entry["total_cyclomatic_complexity"] = (
-                    fp.total_cyclomatic_complexity)
-            if "new_unreached_complexity" in required_function_fields:
-                function_entry[
-                    "new_unreached_complexity"] = fp.new_unreached_complexity
-            if "bb_count" in required_function_fields:
-                function_entry["bb_count"] = fp.bb_count
-            if "functions_reached_count" in required_function_fields:
-                function_entry["functions_reached_count"] = len(
-                    fp.functions_reached)
-            if "reached_by_fuzzers" in required_function_fields:
-                function_entry["reached_by_fuzzers"] = list(
-                    fp.reached_by_fuzzers)
-            if "source_file" in required_function_fields:
-                function_entry["source_file"] = (getattr(
-                    fp, "function_source_file", "") or "")
-            if "incoming_references" in required_function_fields:
-                function_entry["incoming_references"] = list(
-                    getattr(fp, "incoming_references", []) or [])
-            if "runtime_coverage_percent" in required_function_fields:
-                function_entry["runtime_coverage_percent"] = (
-                    proj_profile_obj.get_func_hit_percentage(fname))
-            if "is_accessible" in required_function_fields:
-                function_entry["is_accessible"] = bool(
-                    getattr(fp, "is_accessible", True))
-            if "is_jvm_library" in required_function_fields:
-                function_entry["is_jvm_library"] = bool(
-                    getattr(fp, "is_jvm_library", False))
-            if "is_enum" in required_function_fields:
-                function_entry["is_enum"] = bool(getattr(fp, "is_enum", False))
-            functions.append(function_entry)
-
-    project_data["functions"] = functions
-    return project_data
-
-
-class NativePluginProxy:
-    """Invokes the selected native analysis-plugin binary.
-
-    This is an *opt-in* accelerator.  When ``FI_NATIVE_PLUGINS`` (or the
-    global ``FI_NATIVE_BACKENDS``) selects ``rust`` or ``go`` and a matching
-    binary is available, the proxy is tried first.  Any plugin whose native
-    result is empty (or the binary is missing / fails) falls back
-    transparently to the ordinary Python plugin.
-    """
-
-    NATIVE_BINARY = "native_analysis_plugins_rust"
-    NATIVE_BINARY_BY_BACKEND = {
-        backend_loaders.BACKEND_RUST: "native_analysis_plugins_rust",
-        backend_loaders.BACKEND_GO: "native_analysis_plugins_go",
-    }
-    SCHEMA_VERSION = 1
-    TIMEOUT_SECONDS = 300
-
-    def __init__(self) -> None:
-        self._serialized_payload_cache: dict[tuple[int, int, tuple[int, ...],
-                                                   tuple[str, ...]],
-                                             bytes] = {}
-        self._result_cache_by_plugin_set: dict[tuple[int, tuple[int, ...],
-                                                     tuple[str, ...]],
-                                               dict[str, dict[str, Any]]] = {}
-        self._result_cache_by_plugin: dict[tuple[int, tuple[int, ...], str],
-                                           dict[str, Any]] = {}
-        self._prefetch_done_for_project: set[tuple[int, tuple[int,
-                                                              ...]]] = set()
-        self._project_cache_objects: dict[
-            tuple[int, tuple[int, ...]],
-            tuple[weakref.ReferenceType[Any], tuple[weakref.ReferenceType[Any],
-                                                    ...]],
-        ] = {}
-
-    @staticmethod
-    def selected_backend() -> str:
-        """Return the configured native plugin backend, if any."""
-        fi_plugins_raw = os.environ.get(FI_NATIVE_PLUGINS_ENV,
-                                        "").strip().lower()
-        if fi_plugins_raw:
-            if fi_plugins_raw in (_NATIVE_PLUGINS_RUST_VALUE,
-                                  _NATIVE_PLUGINS_GO_VALUE):
-                return fi_plugins_raw
-            return backend_loaders.BACKEND_PYTHON
-
-        global_backend = backend_loaders.parse_native_backends_env()
-        if global_backend in (backend_loaders.BACKEND_RUST,
-                              backend_loaders.BACKEND_GO):
-            return global_backend
-        return backend_loaders.BACKEND_PYTHON
-
-    @staticmethod
-    def is_enabled() -> bool:
-        """Return True when the caller has opted in to native plugin dispatch.
-
-        Priority:
-        1. ``FI_NATIVE_PLUGINS`` (per-component, explicit) — if set to
-           ``'rust'`` or ``'go'``, returns True; if set to any other non-empty
-           value, returns False
-           (explicit opt-out even when FI_NATIVE_BACKENDS=rust).
-        2. ``FI_NATIVE_BACKENDS`` (global) — activates native plugins when set
-           to ``'rust'`` or ``'go'``.
-        """
-        return NativePluginProxy.selected_backend() in (
-            backend_loaders.BACKEND_RUST,
-            backend_loaders.BACKEND_GO,
-        )
-
-    @staticmethod
-    def find_binary() -> Optional[str]:
-        """Return the absolute path to the selected native-plugin binary."""
-        backend = NativePluginProxy.selected_backend()
-        if backend not in NativePluginProxy.NATIVE_BINARY_BY_BACKEND:
-            return None
-
-        command = backend_loaders.resolve_backend_command(
-            FI_NATIVE_PLUGINS_ENV, backend)
-        if command:
-            return command[0]
-
-        binary_name = NativePluginProxy.NATIVE_BINARY_BY_BACKEND[backend]
-        repo_root = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
-        if backend == backend_loaders.BACKEND_RUST:
-            repo_candidate = os.path.join(repo_root, "tools", binary_name,
-                                          "target", "release", binary_name)
-        else:
-            repo_candidate = os.path.join(repo_root, "tools", binary_name,
-                                          binary_name)
-        if os.path.isfile(repo_candidate) and os.access(
-                repo_candidate, os.X_OK):
-            return repo_candidate
-
-        return shutil.which(binary_name)
-
-    def _project_cache_key(
-        self,
-        proj_profile_obj: "project_profile.MergedProjectProfile",
-        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
-    ) -> tuple[int, tuple[int, ...]]:
-        # Use tuple of profile ids for content-based caching, not list object id
-        profiles_key = tuple(id(p) for p in profiles_list)
-        project_key = (id(proj_profile_obj), profiles_key)
-        self._ensure_project_cache_identity(project_key, proj_profile_obj,
-                                            profiles_list)
-        return project_key
-
-    def _ensure_project_cache_identity(
-        self,
-        project_key: tuple[int, tuple[int, ...]],
-        proj_profile_obj: "project_profile.MergedProjectProfile",
-        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
-    ) -> None:
-        cached_objects = self._project_cache_objects.get(project_key)
-        if cached_objects is not None:
-            cached_proj_ref, cached_profile_refs = cached_objects
-            cached_profiles_match = len(cached_profile_refs) == len(
-                profiles_list) and all(profile_ref() is profile
-                                       for profile_ref, profile in zip(
-                                           cached_profile_refs, profiles_list))
-            if (cached_proj_ref() is not proj_profile_obj
-                    or not cached_profiles_match):
-                self._clear_project_cache(project_key)
-
-        try:
-            self._project_cache_objects[project_key] = (
-                weakref.ref(proj_profile_obj),
-                tuple(weakref.ref(profile) for profile in profiles_list),
-            )
-        except TypeError:
-            self._clear_project_cache(project_key)
-
-    def _clear_project_cache(
-        self,
-        project_key: tuple[int, tuple[int, ...]],
-    ) -> None:
-        self._serialized_payload_cache = {
-            key: value
-            for key, value in self._serialized_payload_cache.items()
-            if (key[1], key[2]) != project_key
-        }
-        self._result_cache_by_plugin_set = {
-            key: value
-            for key, value in self._result_cache_by_plugin_set.items()
-            if (key[0], key[1]) != project_key
-        }
-        self._result_cache_by_plugin = {
-            key: value
-            for key, value in self._result_cache_by_plugin.items()
-            if (key[0], key[1]) != project_key
-        }
-        self._prefetch_done_for_project.discard(project_key)
-        self._project_cache_objects.pop(project_key, None)
-
-    def _build_payload_bytes(
-        self,
-        proj_profile_obj: "project_profile.MergedProjectProfile",
-        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
-        plugin_names: tuple[str, ...],
-    ) -> bytes:
-        normalized_plugin_names = _normalize_plugin_names(plugin_names)
-        project_key = self._project_cache_key(proj_profile_obj, profiles_list)
-        payload_key = (
-            self.SCHEMA_VERSION,
-            project_key[0],
-            project_key[1],
-            normalized_plugin_names,
-        )
-        project_data_bytes = self._serialized_payload_cache.get(payload_key)
-        if project_data_bytes is None:
-            project_data = _serialize_project_for_native_plugins(
-                proj_profile_obj,
-                normalized_plugin_names,
-            )
-            project_data_bytes = json.dumps(project_data).encode()
-            self._serialized_payload_cache[payload_key] = project_data_bytes
-
-        payload = b"".join([
-            b'{"schema_version":',
-            str(self.SCHEMA_VERSION).encode(),
-            b',"plugins":',
-            json.dumps(list(normalized_plugin_names)).encode(),
-            b',"project_data":',
-            project_data_bytes,
-            b"}",
-        ])
-        return payload
-
-    def _dispatch_to_native(
-        self,
-        native_bin: str,
-        proj_profile_obj: "project_profile.MergedProjectProfile",
-        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
-        plugin_names: tuple[str, ...],
-    ) -> dict[str, dict[str, Any]]:
-        payload = self._build_payload_bytes(proj_profile_obj, profiles_list,
-                                            plugin_names)
-
-        try:
-            proc = subprocess.run(
-                [native_bin],
-                input=payload,
-                capture_output=True,
-                timeout=self.TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                "[native-plugins] binary timed out after %ds; "
-                "falling back to Python for all plugins",
-                self.TIMEOUT_SECONDS,
-            )
-            return {}
-        except OSError as err:
-            logger.warning(
-                "[native-plugins] failed to launch binary %r: %s; "
-                "falling back to Python for all plugins",
-                native_bin,
-                err,
-            )
-            return {}
-
-        if proc.returncode != 0:
-            logger.warning(
-                "[native-plugins] binary exited rc=%d stderr=%r; "
-                "falling back to Python for all plugins",
-                proc.returncode,
-                proc.stderr[:200] if proc.stderr else b"",
-            )
-            return {}
-
-        try:
-            response = json.loads(proc.stdout)
-        except (json.JSONDecodeError, ValueError) as err:
-            logger.warning(
-                "[native-plugins] could not parse binary stdout: %s; "
-                "falling back to Python for all plugins",
-                err,
-            )
-            return {}
-
-        if response.get("status") != "success":
-            logger.warning(
-                "[native-plugins] binary returned status=%r reason=%r; "
-                "falling back to Python for all plugins",
-                response.get("status"),
-                response.get("reason_code"),
-            )
-            return {}
-
-        raw_results = response.get("results", {})
-        if not isinstance(raw_results, dict):
-            return {}
-
-        results: dict[str, dict[str, Any]] = {}
-        for plugin_name, plugin_result in raw_results.items():
-            if isinstance(plugin_name, str) and isinstance(
-                    plugin_result, dict):
-                results[plugin_name] = plugin_result
-        return results
-
-    def _cache_results(
-        self,
-        proj_profile_obj: "project_profile.MergedProjectProfile",
-        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
-        plugin_names: tuple[str, ...],
-        results: dict[str, dict[str, Any]],
-    ) -> None:
-        project_key = self._project_cache_key(proj_profile_obj, profiles_list)
-        self._result_cache_by_plugin_set[(project_key[0], project_key[1],
-                                          plugin_names)] = results
-        for plugin_name, plugin_result in results.items():
-            self._result_cache_by_plugin[(project_key[0], project_key[1],
-                                          plugin_name)] = plugin_result
-
-    def _get_cached_plugin_results(
-        self,
-        proj_profile_obj: "project_profile.MergedProjectProfile",
-        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
-        plugin_names: tuple[str, ...],
-    ) -> Optional[dict[str, dict[str, Any]]]:
-        project_key = self._project_cache_key(proj_profile_obj, profiles_list)
-        by_set = self._result_cache_by_plugin_set.get(
-            (project_key[0], project_key[1], plugin_names))
-        if by_set is not None:
-            return by_set
-
-        collected: dict[str, dict[str, Any]] = {}
-        for plugin_name in plugin_names:
-            plugin_result = self._result_cache_by_plugin.get(
-                (project_key[0], project_key[1], plugin_name))
-            if plugin_result is None:
-                return None
-            collected[plugin_name] = plugin_result
-        return collected
-
-    def run_analysis(
-        self,
-        proj_profile_obj: "project_profile.MergedProjectProfile",
-        profiles_list: "List[fuzzer_profile.FuzzerProfile]",
-        plugin_names: List[str],
-    ) -> dict:
-        """Run ``plugin_names`` via the native binary.
-
-        :returns: A dict mapping plugin name → raw result dict.  Returns an
-                  empty dict on any error (caller must run Python fallback).
-        """
-        if not plugin_names:
-            return {}
-
-        normalized_plugin_names = _normalize_plugin_names(tuple(plugin_names))
-        cached_results = self._get_cached_plugin_results(
-            proj_profile_obj, profiles_list, normalized_plugin_names)
-        if cached_results is not None:
-            return cached_results
-
-        dispatch_plugin_names = normalized_plugin_names
-        scoped_plugin_names = get_native_plugin_request_scope()
-        if len(scoped_plugin_names) > len(normalized_plugin_names) and set(
-                normalized_plugin_names).issubset(scoped_plugin_names):
-            dispatch_plugin_names = scoped_plugin_names
-
-            cached_results = self._get_cached_plugin_results(
-                proj_profile_obj, profiles_list, dispatch_plugin_names)
-            if cached_results is not None:
-                requested_results = self._get_cached_plugin_results(
-                    proj_profile_obj,
-                    profiles_list,
-                    normalized_plugin_names,
-                )
-                if requested_results is not None:
-                    return requested_results
-
-        native_bin = self.find_binary()
-        if not native_bin:
-            logger.warning(
-                "[native-plugins] binary %r not found on PATH; "
-                "all plugins will use Python path",
-                self.NATIVE_BINARY,
-            )
-            return {}
-
-        results = self._dispatch_to_native(
-            native_bin,
-            proj_profile_obj,
-            profiles_list,
-            dispatch_plugin_names,
-        )
-        if not results:
-            return {}
-
-        self._cache_results(
-            proj_profile_obj,
-            profiles_list,
-            dispatch_plugin_names,
-            results,
-        )
-
-        cached_results = self._get_cached_plugin_results(
-            proj_profile_obj, profiles_list, normalized_plugin_names)
-        if cached_results is not None:
-            return cached_results
-
-        return {}
-
-
-_NATIVE_PLUGIN_PROXY: NativePluginProxy | None = None
-
-
-def get_native_plugin_proxy() -> NativePluginProxy:
-    """Returns a process-level proxy instance used by report generation."""
-    global _NATIVE_PLUGIN_PROXY
-    if _NATIVE_PLUGIN_PROXY is None:
-        _NATIVE_PLUGIN_PROXY = NativePluginProxy()
-    return _NATIVE_PLUGIN_PROXY
-
-
-_SOURCES_SCAN_CACHE: dict[tuple[str, tuple[str, ...], str, str],
-                          frozenset[str]] = {}
-_OVERLAY_AUTHORITATIVE_LANGS = {"c-cpp"}
-
-
-def _overlay_backend_forces_shadow_mode(
-    selected_backend: str,
-    target_lang: str,
-) -> bool:
-    """Return whether the overlay backend must remain shadow-only."""
-    return selected_backend == backend_loaders.BACKEND_GO and target_lang == "c-cpp"
-
-
-def _matches_any_pattern(
-    path: str,
-    compiled_patterns: list[re.Pattern[str]],
-) -> bool:
-    """Return True if *path* matches any of the pre-compiled exclude patterns."""
-    normalized = os.path.normpath(path)
-    return any(p.search(normalized) for p in compiled_patterns)
-
-
-def _parse_profile_worker_count() -> int:
-    """Returns worker count for profile accumulation."""
-    worker_count, _ = _resolve_profile_worker_count()
-    return worker_count
-
-
-def _resolve_profile_worker_count() -> tuple[int, bool]:
-    """Resolve worker count and whether rust default was applied."""
-    cpu_count = os.cpu_count() or 1
-    raw_worker_count = os.environ.get(FI_PROFILE_WORKERS_ENV, "")
-    if raw_worker_count:
-        try:
-            worker_count = int(raw_worker_count)
-        except ValueError:
-            logger.warning(
-                "Invalid %s=%r; defaulting to cpu count",
-                FI_PROFILE_WORKERS_ENV,
-                raw_worker_count,
-            )
-            return cpu_count, False
-
-        if worker_count < 1:
-            logger.warning(
-                "Invalid %s=%r; defaulting to cpu count",
-                FI_PROFILE_WORKERS_ENV,
-                raw_worker_count,
-            )
-            return cpu_count, False
-
-        return min(worker_count, cpu_count), False
-
-    reachability_backend = (os.environ.get(FI_REACHABILITY_BACKEND_ENV,
-                                           "").strip().lower())
-    global_backend = backend_loaders.parse_native_backends_env()
-    if (reachability_backend == FI_REACHABILITY_BACKEND_RUST
-            or global_backend == backend_loaders.BACKEND_RUST):
-        return min(FI_PROFILE_WORKERS_RUST_DEFAULT, cpu_count), True
-
-    if FI_PROFILE_WORKERS_DEFAULT_CAP > 0:
-        return max(1, min(cpu_count, FI_PROFILE_WORKERS_DEFAULT_CAP)), False
-    return cpu_count, False
-
-
-def _parse_bool_env(env_name: str, default: bool) -> bool:
-    raw_value = os.environ.get(env_name, "").strip().lower()
-    if not raw_value:
-        return default
-    if raw_value in _BOOL_TRUE_VALUES:
-        return True
-    if raw_value in _BOOL_FALSE_VALUES:
-        return False
-    logger.warning("Invalid %s=%r; defaulting to %s", env_name, raw_value,
-                   default)
-    return default
-
-
-def _parse_if_debug_correlator_backend_env() -> str:
-    """Parse backend selector for introspection<->debug signature correlation."""
-    raw_value = os.environ.get(FI_IF_DEBUG_CORRELATOR_BACKEND_ENV,
-                               "").strip().lower()
-    if not raw_value:
-        return backend_loaders.BACKEND_RUST
-    if raw_value in (
-            backend_loaders.BACKEND_PYTHON,
-            backend_loaders.BACKEND_RUST,
-            backend_loaders.BACKEND_GO,
-    ):
-        return raw_value
-    logger.warning(
-        "Invalid %s=%r; defaulting to %s",
-        FI_IF_DEBUG_CORRELATOR_BACKEND_ENV,
-        raw_value,
-        backend_loaders.BACKEND_RUST,
-    )
-    return backend_loaders.BACKEND_RUST
-
-
-def _if_debug_correlator_backend_forces_shadow_mode(backend: str,
-                                                    proj_lang: str) -> bool:
-    return backend == backend_loaders.BACKEND_GO and proj_lang == "c-cpp"
-
-
-def _parse_stage_warn_seconds() -> int:
-    raw_value = os.environ.get(FI_STAGE_WARN_SECONDS_ENV, "")
-    if not raw_value:
-        return FI_STAGE_WARN_SECONDS_DEFAULT
-    try:
-        warn_seconds = int(raw_value)
-    except ValueError:
-        logger.warning(
-            "Invalid %s=%r; defaulting to %d",
-            FI_STAGE_WARN_SECONDS_ENV,
-            raw_value,
-            FI_STAGE_WARN_SECONDS_DEFAULT,
-        )
-        return FI_STAGE_WARN_SECONDS_DEFAULT
-    if warn_seconds < 0:
-        logger.warning(
-            "Invalid %s=%r; defaulting to %d",
-            FI_STAGE_WARN_SECONDS_ENV,
-            raw_value,
-            FI_STAGE_WARN_SECONDS_DEFAULT,
-        )
-        return FI_STAGE_WARN_SECONDS_DEFAULT
-    return warn_seconds
-
-
-def _parse_stage_warn_rss_mb() -> int:
-    """Parse the per-stage RSS warning threshold in MiB."""
-    raw_value = os.environ.get(FI_DEBUG_STAGE_WARN_RSS_MB_ENV, "")
-    if not raw_value:
-        return FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT
-    try:
-        warn_rss_mb = int(raw_value)
-    except ValueError:
-        logger.warning(
-            "Invalid %s=%r; defaulting to %d",
-            FI_DEBUG_STAGE_WARN_RSS_MB_ENV,
-            raw_value,
-            FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT,
-        )
-        return FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT
-    if warn_rss_mb < 0:
-        logger.warning(
-            "Invalid %s=%r; defaulting to %d",
-            FI_DEBUG_STAGE_WARN_RSS_MB_ENV,
-            raw_value,
-            FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT,
-        )
-        return FI_DEBUG_STAGE_WARN_RSS_MB_DEFAULT
-    return warn_rss_mb
-
-
-def _get_stage_rss_mb() -> float | None:
-    """Best-effort snapshot of process RSS in MiB."""
-    try:
-        with open("/proc/self/statm", "r", encoding="utf-8") as statm_file:
-            rss_pages = int(statm_file.read().split()[1])
-        page_size = os.sysconf("SC_PAGE_SIZE")
-        return rss_pages * page_size / (1024 * 1024)
-    except (OSError, ValueError, IndexError):
-        pass
-
-    if resource is None:
-        return None
-
-    try:
-        usage = resource.getrusage(resource.RUSAGE_SELF)
-        if usage.ru_maxrss > 10**9:
-            return usage.ru_maxrss / (1024 * 1024)
-        return usage.ru_maxrss / 1024.0
-    except (AttributeError, OSError, ValueError):
-        return None
-
-
-def _get_debug_stage_tuning_hint(stage_name: str) -> str:
-    stage_hints = {
-        "debug_report":
-        "FI_DEBUG_REPORT_PARALLEL and FI_DEBUG_REPORT_WORKERS",
-        "debug_types_yaml": ("FI_DEBUG_MAX_WORKERS, FI_DEBUG_SHARD_FILES, "
-                             "FI_DEBUG_SPILL_MB, and FI_DEBUG_MAX_INMEM_MB"),
-        "debug_functions_yaml":
-        ("FI_DEBUG_MAX_WORKERS, FI_DEBUG_SHARD_FILES, "
-         "FI_DEBUG_SPILL_MB, and FI_DEBUG_MAX_INMEM_MB"),
-        "type_correlation":
-        "FI_DEBUG_CORRELATE_PARALLEL and FI_DEBUG_CORRELATE_WORKERS",
-    }
-    return stage_hints.get(stage_name, "debug loader worker and shard knobs")
-
-
-def _log_debug_load_stage(
-    stage_name: str,
-    elapsed_seconds: float,
-    metrics: dict[str, int],
-    include_rss: bool,
-    perf_warn_enabled: bool,
-    warn_after_seconds: int,
-    warn_rss_mb: int,
-) -> None:
-    stage_fields: list[str] = [
-        f"stage={stage_name}", f"elapsed={elapsed_seconds:.3f}s"
-    ]
-    for metric_name, metric_value in metrics.items():
-        stage_fields.append(f"{metric_name}={metric_value}")
-
-    stage_rss_mb = None
-    should_measure_rss = include_rss or warn_rss_mb > 0
-    if should_measure_rss:
-        stage_rss_mb = _get_stage_rss_mb()
-
-    if include_rss:
-        if stage_rss_mb is None:
-            stage_fields.append("rss_mb=n/a")
-        else:
-            stage_fields.append(f"rss_mb={stage_rss_mb:.2f}")
-
-    logger.info("[debug-load] %s", " ".join(stage_fields))
-
-    if (perf_warn_enabled and warn_after_seconds > 0
-            and elapsed_seconds > warn_after_seconds):
-        logger.warning(
-            ("[debug-load] stage=%s exceeded threshold=%ds with elapsed=%.3fs. "
-             "Tune %s."),
-            stage_name,
-            warn_after_seconds,
-            elapsed_seconds,
-            _get_debug_stage_tuning_hint(stage_name),
-        )
-
-    if (perf_warn_enabled and warn_rss_mb > 0 and stage_rss_mb is not None
-            and stage_rss_mb > warn_rss_mb):
-        logger.warning(
-            ("[debug-load] stage=%s exceeded rss threshold=%dMB with rss=%.2fMB. "
-             "Tune %s."),
-            stage_name,
-            warn_rss_mb,
-            stage_rss_mb,
-            _get_debug_stage_tuning_hint(stage_name),
-        )
-
-
-def _accummulate_single_profile(
-    profile_index: int,
-    profile_payload: Dict[str, Any],
-    base_folder: str,
-    skip_propagation: bool = False,
-) -> tuple[int, Dict[str, Any]]:
-    """Worker entrypoint for profile accumulation."""
-    profile = fuzzer_profile.FuzzerProfile.from_worker_payload(profile_payload)
-    profile.accummulate_profile(base_folder,
-                                None,
-                                None,
-                                None,
-                                skip_propagation=skip_propagation)
-    return profile_index, profile.to_worker_payload()
-
-
-def _accummulate_profiles(
-    profiles: List[fuzzer_profile.FuzzerProfile],
-    base_folder: str,
-    parallelise: bool,
-) -> List[fuzzer_profile.FuzzerProfile]:
-    """Accumulate profile metadata with deterministic output ordering."""
-    configured_workers = 1
-    worker_count = 1
-    rust_default_applied = False
-    if parallelise and len(profiles) > 1:
-        configured_workers, rust_default_applied = _resolve_profile_worker_count(
-        )
-        worker_count = min(configured_workers, len(profiles))
-
-    logger.info(
-        "Profile accumulation workers configured=%d effective=%d rust_default_cap=%s",
-        configured_workers,
-        worker_count,
-        rust_default_applied,
-    )
-
-    native_done = False
-    # In true multi-worker mode, avoid a parent-side transitive-closure pre-pass
-    # to prevent serializing inflated profile payloads over process IPC.
-    if (not parallelise) or worker_count <= 1:
-        native_done = fuzzer_profile.propagate_reachability_native_batch(
-            profiles)
-
-    if not parallelise or len(profiles) <= 1:
-        logger.info("Accummulating profiles serially")
-        for profile in profiles:
-            profile.accummulate_profile(base_folder,
-                                        None,
-                                        None,
-                                        None,
-                                        skip_propagation=native_done)
-        return profiles
-
-    if worker_count <= 1:
-        logger.info("Accummulating profiles serially")
-        for profile in profiles:
-            profile.accummulate_profile(base_folder,
-                                        None,
-                                        None,
-                                        None,
-                                        skip_propagation=native_done)
-        return profiles
-
-    logger.info(
-        "Accummulating profiles using ProcessPoolExecutor (%d workers)",
-        worker_count)
-    indexed_profiles: List[Optional[fuzzer_profile.FuzzerProfile]] = [
-        None for _ in profiles
-    ]
-    try:
-        with concurrent.futures.ProcessPoolExecutor(
-                max_workers=worker_count) as executor:
-            submitted_futures = {}
-            for idx, profile in enumerate(profiles):
-                future = executor.submit(
-                    _accummulate_single_profile,
-                    idx,
-                    profile.to_worker_payload(),
-                    base_folder,
-                    native_done,
-                )
-                submitted_futures[future] = (idx, profile.get_key())
-
-            for future in concurrent.futures.as_completed(submitted_futures):
-                expected_idx, profile_key = submitted_futures[future]
-                try:
-                    profile_idx, updated_profile_payload = future.result()
-                except Exception as err:
-                    raise DataLoaderError(
-                        "Failed accumulating profile %s at index %d: %s" %
-                        (profile_key, expected_idx, err)) from err
-                indexed_profiles[profile_idx] = (
-                    fuzzer_profile.FuzzerProfile.from_worker_payload(
-                        updated_profile_payload))
-    except (OSError, RuntimeError) as err:
-        logger.warning(
-            "Falling back to serial profile accumulation after executor setup failure: %s",
-            err,
-        )
-        for profile in profiles:
-            profile.accummulate_profile(base_folder,
-                                        None,
-                                        None,
-                                        None,
-                                        skip_propagation=native_done)
-        return profiles
-
-    for idx, indexed_profile in enumerate(indexed_profiles):
-        if indexed_profile is None:
-            raise DataLoaderError(
-                f"Profile accumulation failed to return result for index {idx}"
-            )
-
-    return cast(List[fuzzer_profile.FuzzerProfile], indexed_profiles)
-
-
-class IntrospectionProject:
+class IntrospectionProject():
     """Wrapper class for managing Fuzz Introspector analysis.
 
     The most important two elments of this class are
@@ -1219,91 +50,30 @@ class IntrospectionProject:
         self.base_folder = target_folder
         self.coverage_url = coverage_url
         self.optional_analyses = []
-        self.exclude_patterns = []
-        self.exclude_function_patterns = []
 
-    def load_data_files(
-        self,
-        parallelise=True,
-        correlation_file=None,
-        out_dir: str = "",
-        harness_lists=None,
-        exclude_patterns: Optional[List[str]] = None,
-        exclude_function_patterns: Optional[List[str]] = None,
-    ):
+    def load_data_files(self,
+                        parallelise=True,
+                        correlation_file=None,
+                        out_dir: str = '',
+                        harness_lists=None):
         """Generates the `proj_profile` and `profiles` elements of this class
         based on the raw data given as arguments. This function must be called
         before any real use of `IntrospectionProject` can happen.
         """
-        self.exclude_patterns = exclude_patterns if exclude_patterns else []
-        self.exclude_function_patterns = (exclude_function_patterns
-                                          if exclude_function_patterns else [])
 
         if harness_lists:
-            logger.info("Loading profiles using harness list")
+            logger.info('Loading profiles using harness list')
             self.profiles = []
             for report_yaml, calltree_text in harness_lists:
                 self.profiles.append(
-                    fuzzer_profile.FuzzerProfile(
-                        "cfg_file",
-                        report_yaml,
-                        self.language,
-                        cfg_content=calltree_text,
-                        exclude_patterns=self.exclude_patterns,
-                        exclude_function_patterns=self.
-                        exclude_function_patterns,
-                    ))
+                    fuzzer_profile.FuzzerProfile('cfg_file',
+                                                 report_yaml,
+                                                 self.language,
+                                                 cfg_content=calltree_text))
         else:
-            logger.info("Loading profiles using files")
+            logger.info('Loading profiles using files')
             self.profiles = data_loader.load_all_profiles(
                 self.base_folder, self.language, parallelise)
-
-        # Apply exclude patterns to filter out entire profiles and their functions.
-        # Always propagate the (possibly empty) pattern lists so every profile
-        # has a consistent state regardless of whether the guard below fires.
-        for profile in self.profiles:
-            profile.set_exclude_patterns(
-                self.exclude_patterns,
-                self.exclude_function_patterns,
-            )
-
-        if self.exclude_patterns or self.exclude_function_patterns:
-            # Try the native Rust filter first for better performance.
-            native_result = _filter_profiles_native(
-                self.profiles,
-                self.exclude_patterns or [],
-                self.exclude_function_patterns or [],
-            )
-            if native_result is not None:
-                self.profiles = native_result
-            else:
-                # Fall back to the Python implementation.
-                def _filter_func_dict(p, d):
-                    return {
-                        name: func
-                        for name, func in d.items()
-                        if not p._should_exclude_function_profile(func)
-                    }
-
-                filtered_profiles = []
-                for profile in self.profiles:
-                    # Drop the entire profile if the fuzzer itself
-                    # matches an exclude pattern.
-                    if profile._matches_exclude_pattern(
-                            profile.fuzzer_source_file):
-                        logger.info(
-                            "Skipping profile for excluded fuzzer source: %s",
-                            profile.fuzzer_source_file,
-                        )
-                        continue
-
-                    profile.all_class_functions = _filter_func_dict(
-                        profile, profile.all_class_functions)
-                    profile.all_class_constructors = _filter_func_dict(
-                        profile, profile.all_class_constructors)
-                    filtered_profiles.append(profile)
-
-                self.profiles = filtered_profiles
 
         logger.info("Found %d profiles", len(self.profiles))
         if len(self.profiles) == 0:
@@ -1317,8 +87,29 @@ class IntrospectionProject:
                 profile.correlate_executable_name(correlation_dict)
 
         logger.info("[+] Accummulating profiles")
-        self.profiles = _accummulate_profiles(self.profiles, self.base_folder,
-                                              parallelise)
+        logger.info("Accummulating using multiprocessing")
+        manager = multiprocessing.Manager()
+        semaphore = multiprocessing.Semaphore(10)
+
+        return_dict = manager.dict()
+
+        jobs = []
+        idx = 0
+        for profile in self.profiles:
+            p = multiprocessing.Process(
+                target=fuzzer_profile.FuzzerProfile.accummulate_profile,
+                args=(profile, self.base_folder, return_dict, f"uniq-{idx}",
+                      semaphore))
+            jobs.append(p)
+            idx += 1
+            p.start()
+        for proc in jobs:
+            proc.join()
+
+        new_profiles = []
+        for idx in return_dict:
+            new_profiles.append(return_dict[idx])
+        self.profiles = new_profiles
 
         logger.info("[+] Creating project profile")
         self.proj_profile = project_profile.MergedProjectProfile(
@@ -1344,148 +135,43 @@ class IntrospectionProject:
 
     def load_debug_report(self, out_dir, dump_files=True):
         """Load and digest debug information."""
-        include_stage_rss = _parse_bool_env(FI_DEBUG_STAGE_RSS_ENV, False)
-        perf_warn_enabled = _parse_bool_env(FI_DEBUG_PERF_WARN_ENV, True)
-        warn_after_seconds = _parse_stage_warn_seconds()
-
-        load_started = time.perf_counter()
-        warn_rss_mb = _parse_stage_warn_rss_mb()
         self.debug_report = debug_info.load_debug_report(self.debug_files)
-        _log_debug_load_stage(
-            "debug_report",
-            time.perf_counter() - load_started,
-            {"files": len(self.debug_files)},
-            include_stage_rss,
-            perf_warn_enabled,
-            warn_after_seconds,
-            warn_rss_mb,
-        )
 
         # Load the yaml  content of debug files holding type information and
         # function information.
-        _native_correlator_active = debug_info.is_correlator_native_enabled()
-        type_load_started = time.perf_counter()
-        if _native_correlator_active:
-            # Skip loading type records into Python memory; the native binary
-            # will read the original YAML files directly.
-            self.debug_all_types = []
-            _log_debug_load_stage(
-                "debug_types_yaml_skipped_native",
-                time.perf_counter() - type_load_started,
-                {
-                    "files": len(self.debug_type_files),
-                    "types": 0,
-                },
-                include_stage_rss,
-                perf_warn_enabled,
-                warn_after_seconds,
-                warn_rss_mb,
-            )
-        else:
-            self.debug_all_types = debug_info.load_debug_all_yaml_files(
-                self.debug_type_files)
-            _log_debug_load_stage(
-                "debug_types_yaml",
-                time.perf_counter() - type_load_started,
-                {
-                    "files": len(self.debug_type_files),
-                    "types": len(self.debug_all_types),
-                },
-                include_stage_rss,
-                perf_warn_enabled,
-                warn_after_seconds,
-                warn_rss_mb,
-            )
-
-        function_load_started = time.perf_counter()
-        stage_markers.emit(
-            out_dir,
-            "debug_functions_yaml",
-            "start",
-            files=len(self.debug_function_files),
-        )
+        self.debug_all_types = debug_info.load_debug_all_yaml_files(
+            self.debug_type_files)
         self.debug_all_functions = debug_info.load_debug_all_yaml_files(
             self.debug_function_files)
-        stage_markers.emit(
-            out_dir,
-            "debug_functions_yaml",
-            "end",
-            functions=len(self.debug_all_functions),
-        )
-        _log_debug_load_stage(
-            "debug_functions_yaml",
-            time.perf_counter() - function_load_started,
-            {
-                "files": len(self.debug_function_files),
-                "functions": len(self.debug_all_functions),
-            },
-            include_stage_rss,
-            perf_warn_enabled,
-            warn_after_seconds,
-            warn_rss_mb,
-        )
 
         # Index the functions based on file locations. This is useful for
         # quickly looking up debug function details based on their file
         # locations, which we can get from the function data collected by
         # the LLVM module.
-        dedupe_rewrite_started = time.perf_counter()
         tmp_debug_functions = {}
         no_path_debug_funcs = []
-        original_function_count = len(self.debug_all_functions)
         for func in self.debug_all_functions:
-            if func["file_location"].strip() == "":
+            if func['file_location'].strip() == '':
                 no_path_debug_funcs.append(func)
             else:
-                tmp_debug_functions[func["file_location"]] = func
+                tmp_debug_functions[func['file_location']] = func
 
         # Cleanup some debug values that we know have weird names and
         # not the names fro the source.
         for debug_type in self.debug_all_types:
-            if debug_type["name"] == "_Bool":
-                debug_type["name"] = "bool"
+            if debug_type['name'] == '_Bool':
+                debug_type['name'] = 'bool'
 
         self.debug_all_functions = no_path_debug_funcs + list(
             tmp_debug_functions.values())
-        _log_debug_load_stage(
-            "dedupe_rewrite",
-            time.perf_counter() - dedupe_rewrite_started,
-            {
-                "types": len(self.debug_all_types),
-                "functions_before": original_function_count,
-                "functions_after": len(self.debug_all_functions),
-            },
-            include_stage_rss,
-            perf_warn_enabled,
-            warn_after_seconds,
-            warn_rss_mb,
-        )
 
         # Extract the raw function signature. This propagates types into all of
         # the debug functions.
-        type_correlation_started = time.perf_counter()
-        stage_markers.emit(out_dir, "type_correlation", "start")
         debug_info.correlate_debugged_function_to_debug_types(
             self.debug_all_types,
             self.debug_all_functions,
             out_dir,
-            dump_files=dump_files,
-            all_debug_types_files=(self.debug_type_files
-                                   if _native_correlator_active else None),
-        )
-        stage_markers.emit(out_dir, "type_correlation", "end")
-        _log_debug_load_stage(
-            "type_correlation",
-            time.perf_counter() - type_correlation_started,
-            {
-                "types": len(self.debug_all_types),
-                "functions": len(self.debug_all_functions),
-            },
-            include_stage_rss,
-            perf_warn_enabled,
-            warn_after_seconds,
-            warn_rss_mb,
-        )
+            dump_files=dump_files)
 
     def dump_debug_report(self, out_dir):
         if self.debug_report is not None:
@@ -1494,7 +180,6 @@ class IntrospectionProject:
 
 class AnalysisInterface(abc.ABC):
     """Plugin interface class."""
-
     name: str = ""
     json_string_result: str = ""
     display_html: bool = False
@@ -1505,17 +190,14 @@ class AnalysisInterface(abc.ABC):
         self.properties = properties
 
     @abc.abstractmethod
-    def analysis_func(
-        self,
-        table_of_contents: html_helpers.HtmlTableOfContents,
-        tables: List[str],
-        proj_profile: project_profile.MergedProjectProfile,
-        profiles: List[fuzzer_profile.FuzzerProfile],
-        basefolder: str,
-        coverage_url: str,
-        conclusions: List[html_helpers.HTMLConclusion],
-        out_dir: str,
-    ) -> str:
+    def analysis_func(self,
+                      table_of_contents: html_helpers.HtmlTableOfContents,
+                      tables: List[str],
+                      proj_profile: project_profile.MergedProjectProfile,
+                      profiles: List[fuzzer_profile.FuzzerProfile],
+                      basefolder: str, coverage_url: str,
+                      conclusions: List[html_helpers.HTMLConclusion],
+                      out_dir: str) -> str:
         """Entrypoint for analysis instance. This function can have side
         effects on many of the arguments passed to it.
 
@@ -1551,12 +233,10 @@ class AnalysisInterface(abc.ABC):
                    html report.
         """
 
-    def standalone_analysis(
-        self,
-        proj_profile: project_profile.MergedProjectProfile,
-        profiles: List[fuzzer_profile.FuzzerProfile],
-        out_dir: str,
-    ) -> None:
+    def standalone_analysis(self,
+                            proj_profile: project_profile.MergedProjectProfile,
+                            profiles: List[fuzzer_profile.FuzzerProfile],
+                            out_dir: str) -> None:
         """Second entrypoint for analysis instance which are meant to run
         alone without html or json report generation.
         :param proj_profile: project profile involved in the analysis.
@@ -1595,21 +275,9 @@ def instantiate_analysis_interface(cls: Type[AnalysisInterface]):
 
 class FuzzBranchBlocker:
 
-    def __init__(
-        self,
-        side,
-        unique_not_cov_comp,
-        unique_reach_comp,
-        unique_funcs,
-        not_cov_comp,
-        reach_comp,
-        hitcount_diff,
-        filename,
-        b_line,
-        s_line,
-        fname,
-        link,
-    ) -> None:
+    def __init__(self, side, unique_not_cov_comp, unique_reach_comp,
+                 unique_funcs, not_cov_comp, reach_comp, hitcount_diff,
+                 filename, b_line, s_line, fname, link) -> None:
         self.blocked_side = side
         self.blocked_unique_not_covered_complexity = unique_not_cov_comp
         self.blocked_unique_reachable_complexity = unique_reach_comp
@@ -1626,13 +294,11 @@ class FuzzBranchBlocker:
 
 def get_all_analyses() -> List[Type[AnalysisInterface]]:
     from fuzz_introspector import analyses
-
     return analyses.all_analyses
 
 
 def get_all_standalone_analyses() -> List[Type[AnalysisInterface]]:
     from fuzz_introspector import analyses
-
     return analyses.standalone_analyses
 
 
@@ -1651,13 +317,10 @@ def callstack_set_curr_node(n: cfg_load.CalltreeCallsite, name: str,
     c[int(n.depth)] = name
 
 
-def get_node_coverage_hitcount(
-    demangled_name: str,
-    callstack: Dict[int, str],
-    node: cfg_load.CalltreeCallsite,
-    profile: fuzzer_profile.FuzzerProfile,
-    is_first: bool,
-) -> int:
+def get_node_coverage_hitcount(demangled_name: str, callstack: Dict[int, str],
+                               node: cfg_load.CalltreeCallsite,
+                               profile: fuzzer_profile.FuzzerProfile,
+                               is_first: bool) -> int:
     """Extracts the runtime coverage hitcount of a node in the calltree"""
     if profile.coverage is None:
         return -1
@@ -1670,7 +333,7 @@ def get_node_coverage_hitcount(
         if not profile.func_is_entrypoint(demangled_name):
             logger.warning("First node in calltree is non-fuzzer function")
             return 0
-        if profile.coverage.get_type() == "kernel":
+        if profile.coverage.get_type() == 'kernel':
             # For now, assume EP is hit. TODO(David) adjust this.
             return 100
 
@@ -1681,7 +344,7 @@ def get_node_coverage_hitcount(
         node.cov_parent = "EP"
 
         node_hitcount = 0
-        for n_line_number, hit_count_cov in coverage_data:
+        for (n_line_number, hit_count_cov) in coverage_data:
             node_hitcount = max(hit_count_cov, node_hitcount)
         is_first = False
     elif callstack_has_parent(node, callstack):
@@ -1691,13 +354,13 @@ def get_node_coverage_hitcount(
                      f"{node.cov_ct_idx} -- {node.src_linenumber}")
 
         if profile.target_lang == "c-cpp":
-            if profile.coverage.get_type() == "kernel":
+            if profile.coverage.get_type() == 'kernel':
                 # Handle coverage
                 return profile.coverage.get_kernel_hitcount(node)
             else:
                 coverage_data = profile.coverage.get_hit_details(
                     callstack_get_parent(node, callstack))
-                for n_line_number, hit_count_cov in coverage_data:
+                for (n_line_number, hit_count_cov) in coverage_data:
                     logger.debug("  - iterating %d : %d", n_line_number,
                                  hit_count_cov)
                     if n_line_number == node.src_linenumber and hit_count_cov > 0:
@@ -1708,10 +371,26 @@ def get_node_coverage_hitcount(
                 True)
             if ih:
                 node_hitcount = 200
-        elif profile.target_lang in ("jvm", "rust", "go"):
+        elif profile.target_lang == "jvm":
             coverage_data = profile.coverage.get_hit_details(
                 callstack_get_parent(node, callstack))
-            for n_line_number, hit_count_cov in coverage_data:
+            for (n_line_number, hit_count_cov) in coverage_data:
+                logger.debug("  - iterating %d : %d", n_line_number,
+                             hit_count_cov)
+                if n_line_number == node.src_linenumber and hit_count_cov > 0:
+                    node_hitcount = hit_count_cov
+        elif profile.target_lang == "rust":
+            coverage_data = profile.coverage.get_hit_details(
+                callstack_get_parent(node, callstack))
+            for (n_line_number, hit_count_cov) in coverage_data:
+                logger.debug("  - iterating %d : %d", n_line_number,
+                             hit_count_cov)
+                if n_line_number == node.src_linenumber and hit_count_cov > 0:
+                    node_hitcount = hit_count_cov
+        elif profile.target_lang == "go":
+            coverage_data = profile.coverage.get_hit_details(
+                callstack_get_parent(node, callstack))
+            for (n_line_number, hit_count_cov) in coverage_data:
                 logger.debug("  - iterating %d : %d", n_line_number,
                              hit_count_cov)
                 if n_line_number == node.src_linenumber and hit_count_cov > 0:
@@ -1734,34 +413,30 @@ def get_hit_count_color(hit_count: int) -> str:
 
 
 def get_url_to_cov_report(profile, node, target_coverage_url):
-    """Get URL to coverage report for the node."""
+    """ Get URL to coverage report for the node. """
     dst_options = [
         node.dst_function_name,
         utils.demangle_cpp_func(node.dst_function_name),
         utils.demangle_rust_func(node.dst_function_name),
         utils.demangle_jvm_func(node.dst_function_source_file,
-                                node.dst_function_name),
+                                node.dst_function_name)
     ]
     for dst in dst_options:
         try:
             fd = profile.dst_to_fd_cache[dst]
-            return profile.resolve_coverage_link(
-                target_coverage_url,
-                fd.function_source_file,
-                fd.function_linenumber,
-                fd.function_name,
-            )
+            return profile.resolve_coverage_link(target_coverage_url,
+                                                 fd.function_source_file,
+                                                 fd.function_linenumber,
+                                                 fd.function_name)
         except KeyError:
             pass
 
         try:
             fd = profile.dst_to_fd_cache[utils.normalise_str(dst)]
-            return profile.resolve_coverage_link(
-                target_coverage_url,
-                fd.function_source_file,
-                fd.function_linenumber,
-                fd.function_name,
-            )
+            return profile.resolve_coverage_link(target_coverage_url,
+                                                 fd.function_source_file,
+                                                 fd.function_linenumber,
+                                                 fd.function_name)
         except KeyError:
             pass
 
@@ -1782,11 +457,8 @@ def get_parent_callsite_link(node, callstack, profile, target_coverage_url):
             try:
                 fd = profile.dst_to_fd_cache[dst]
                 callsite_link = profile.resolve_coverage_link(
-                    target_coverage_url,
-                    fd.function_source_file,
-                    node.src_linenumber,
-                    fd.function_name,
-                )
+                    target_coverage_url, fd.function_source_file,
+                    node.src_linenumber, fd.function_name)
                 return callsite_link
             except KeyError:
                 pass
@@ -1794,702 +466,18 @@ def get_parent_callsite_link(node, callstack, profile, target_coverage_url):
             try:
                 fd = profile.dst_to_fd_cache[utils.normalise_str(dst)]
                 callsite_link = profile.resolve_coverage_link(
-                    target_coverage_url,
-                    fd.function_source_file,
-                    node.src_linenumber,
-                    fd.function_name,
-                )
+                    target_coverage_url, fd.function_source_file,
+                    node.src_linenumber, fd.function_name)
                 return callsite_link
             except KeyError:
                 pass
     return "#"
 
 
-def _serialize_branch_blockers(
-    blockers: List[FuzzBranchBlocker], ) -> List[Dict[str, Any]]:
-    serialized: List[Dict[str, Any]] = []
-    for blocker in blockers:
-        serialized.append({
-            "blocked_side":
-            repr(blocker.blocked_side),
-            "blocked_unique_not_covered_complexity":
-            (blocker.blocked_unique_not_covered_complexity),
-            "blocked_unique_reachable_complexity":
-            blocker.blocked_unique_reachable_complexity,
-            "blocked_unique_functions":
-            blocker.blocked_unique_funcs,
-            "blocked_not_covered_complexity":
-            blocker.blocked_not_covered_complexity,
-            "blocked_reachable_complexity":
-            blocker.blocked_reachable_complexity,
-            "sides_hitcount_diff":
-            blocker.sides_hitcount_diff,
-            "source_file":
-            blocker.source_file,
-            "branch_line_number":
-            blocker.branch_line_number,
-            "blocked_side_line_numder":
-            blocker.blocked_side_line_numder,
-            "function_name":
-            blocker.function_name,
-        })
-    return serialized
-
-
-def _build_overlay_native_payload(
-    profile: fuzzer_profile.FuzzerProfile,
-    proj_profile: project_profile.MergedProjectProfile,
-    coverage_url: str,
-    output_dir: str,
-) -> Dict[str, Any]:
-    callsites = []
-    target_coverage_url = utils.get_target_coverage_url(
-        coverage_url,
-        profile.identifier,
-        profile.target_lang,
-    )
-    if profile.fuzzer_callsite_calltree is not None:
-        all_callsites = cfg_load.extract_all_callsites(
-            profile.fuzzer_callsite_calltree)
-        callstack: Dict[int, str] = {}
-        for ct_idx, node in enumerate(all_callsites):
-            demangled_name = _get_overlay_coverage_lookup_name(profile, node)
-            python_parent_file_hit = False
-            if (profile.target_lang == "python"
-                    and profile.coverage is not None
-                    and callstack_has_parent(node, callstack)):
-                python_parent_file_hit = profile.coverage.is_file_lineno_hit(
-                    callstack_get_parent(node, callstack), node.src_linenumber,
-                    True)
-            callstack_set_curr_node(node, demangled_name, callstack)
-            callsites.append({
-                "cov_ct_idx":
-                ct_idx,
-                "depth":
-                int(node.depth),
-                "dst_function_name":
-                node.dst_function_name,
-                "coverage_lookup_name":
-                demangled_name,
-                "dst_function_source_file":
-                node.dst_function_source_file,
-                "src_linenumber":
-                node.src_linenumber,
-                "cov_link":
-                get_url_to_cov_report(profile, node, target_coverage_url),
-                "cov_callsite_link":
-                get_parent_callsite_link(
-                    node,
-                    callstack,
-                    profile,
-                    target_coverage_url,
-                ),
-                "python_parent_file_hit":
-                python_parent_file_hit,
-            })
-
-    coverage_payload: Dict[str, Any] = {
-        "type": "",
-        "covmap": {},
-        "file_map": {},
-        "branch_cov_map": {},
-        "kernel_coverage": [],
-    }
-    if profile.coverage is not None:
-        coverage_payload = {
-            "type": profile.coverage.get_type(),
-            "covmap": {
-                func_name: [[line_no, hit_count]
-                            for line_no, hit_count in hits]
-                for func_name, hits in sorted(profile.coverage.covmap.items())
-            },
-            "file_map": {
-                file_name: [[line_no, hit_count]
-                            for line_no, hit_count in hits]
-                for file_name, hits in sorted(
-                    profile.coverage.file_map.items())
-            },
-            "branch_cov_map":
-            dict(sorted(profile.coverage.branch_cov_map.items())),
-            "kernel_coverage": list(profile.coverage.kernel_coverage),
-        }
-
-    function_complexities: Dict[str, Any] = {}
-    for function_name in sorted(proj_profile.all_functions):
-        function_data = proj_profile.all_functions[function_name]
-        branch_profiles = {}
-        for branch_name in sorted(function_data.branch_profiles):
-            branch = function_data.branch_profiles[branch_name]
-            branch_profiles[branch_name] = {
-                "sides": [{
-                    "pos": side.pos,
-                    "funcs": list(side.funcs)
-                } for side in branch.sides]
-            }
-        function_complexities[function_name] = {
-            "function_source_file":
-            function_data.function_source_file,
-            "coverage_lookup_name":
-            _get_overlay_function_coverage_lookup_name(
-                profile.target_lang, function_name,
-                function_data.function_source_file),
-            "total_cyclomatic_complexity":
-            function_data.total_cyclomatic_complexity,
-            "branch_profiles":
-            branch_profiles,
-        }
-
-    return {
-        "profile_id": profile.get_key(),
-        "output_dir": output_dir,
-        "target_lang": profile.target_lang,
-        "target_coverage_url": target_coverage_url,
-        "callsites": callsites,
-        "coverage": coverage_payload,
-        "functions": function_complexities,
-    }
-
-
-def _get_overlay_coverage_lookup_name(
-    profile: fuzzer_profile.FuzzerProfile,
-    node: cfg_load.CalltreeCallsite,
-) -> str:
-    return _get_overlay_function_coverage_lookup_name(
-        profile.target_lang, node.dst_function_name,
-        node.dst_function_source_file)
-
-
-def _get_overlay_function_coverage_lookup_name(
-    target_lang: str,
-    function_name: str,
-    function_source_file: str,
-) -> str:
-    if target_lang == "jvm":
-        return utils.demangle_jvm_func(function_source_file, function_name)
-    if target_lang == "rust":
-        return utils.demangle_rust_func(function_name)
-    return utils.demangle_cpp_func(function_name)
-
-
-def _resolve_overlay_artifact_path(artifacts: Dict[str, Any], key: str,
-                                   out_dir: str) -> Path:
-    artifact_path = artifacts.get(key)
-    if not isinstance(artifact_path, str) or not artifact_path.strip():
-        raise ValueError(f"Missing overlay artifact path for {key}")
-
-    out_dir_path = Path(out_dir).resolve(strict=False)
-    candidate_path = Path(artifact_path.strip())
-    if not candidate_path.is_absolute():
-        candidate_path = out_dir_path / candidate_path
-    resolved_path = candidate_path.resolve(strict=False)
-
-    try:
-        resolved_path.relative_to(out_dir_path)
-    except ValueError as err:
-        raise ValueError(
-            f"Unsafe overlay artifact path for {key}: {artifact_path}"
-        ) from err
-
-    return resolved_path
-
-
-def _load_overlay_artifact_json(artifacts: Dict[str, Any], key: str,
-                                out_dir: str) -> Any:
-    artifact_path = _resolve_overlay_artifact_path(artifacts, key, out_dir)
-    with open(artifact_path, "r", encoding="utf-8") as artifact_fd:
-        return json.load(artifact_fd)
-
-
-def _normalize_overlay_nodes(
-        nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    normalized = []
-    for node in nodes:
-        normalized.append({
-            "cov_ct_idx":
-            int(node.get("cov_ct_idx", -1)),
-            "cov_hitcount":
-            int(node.get("cov_hitcount", -1)),
-            "cov_color":
-            str(node.get("cov_color", "")),
-            "cov_link":
-            str(node.get("cov_link", "")),
-            "cov_callsite_link":
-            str(node.get("cov_callsite_link", "")),
-            "cov_parent":
-            str(node.get("cov_parent", "")),
-            "cov_forward_reds":
-            int(node.get("cov_forward_reds", -1)),
-            "cov_largest_blocked_func":
-            str(node.get("cov_largest_blocked_func", "")),
-        })
-    return sorted(normalized, key=lambda node: node["cov_ct_idx"])
-
-
-def _normalize_branch_complexities(
-    branch_complexities: List[Dict[str, Any]], ) -> List[Dict[str, Any]]:
-    normalized: List[Dict[str, Any]] = []
-    for entry in branch_complexities:
-        normalized.append({
-            "function_name":
-            str(entry.get("function_name", "")),
-            "branch":
-            str(entry.get("branch", "")),
-            "side_idx":
-            int(entry.get("side_idx", -1)),
-            "reachable_complexity":
-            int(entry.get("reachable_complexity", 0)),
-            "not_covered_complexity":
-            int(entry.get("not_covered_complexity", 0)),
-            "unique_reachable_complexity":
-            int(entry.get("unique_reachable_complexity", 0)),
-            "unique_not_covered_complexity":
-            int(entry.get("unique_not_covered_complexity", 0)),
-        })
-    return sorted(
-        normalized,
-        key=lambda entry:
-        (entry["function_name"], entry["branch"], entry["side_idx"]),
-    )
-
-
-def _normalize_branch_blockers(
-    blockers: List[Dict[str, Any]], ) -> List[Dict[str, Any]]:
-    normalized = []
-    for blocker in blockers:
-        normalized.append({
-            "blocked_side":
-            str(blocker.get("blocked_side", "")),
-            "blocked_unique_not_covered_complexity":
-            int(blocker.get("blocked_unique_not_covered_complexity", 0)),
-            "blocked_unique_reachable_complexity":
-            int(blocker.get("blocked_unique_reachable_complexity", 0)),
-            "blocked_unique_functions":
-            sorted([
-                str(func_name)
-                for func_name in blocker.get("blocked_unique_functions", [])
-            ]),
-            "blocked_not_covered_complexity":
-            int(blocker.get("blocked_not_covered_complexity", 0)),
-            "blocked_reachable_complexity":
-            int(blocker.get("blocked_reachable_complexity", 0)),
-            "sides_hitcount_diff":
-            int(blocker.get("sides_hitcount_diff", 0)),
-            "source_file":
-            str(blocker.get("source_file", "")),
-            "branch_line_number":
-            str(blocker.get("branch_line_number", "")),
-            "blocked_side_line_numder":
-            str(blocker.get("blocked_side_line_numder", "")),
-            "function_name":
-            str(blocker.get("function_name", "")),
-        })
-    return sorted(
-        normalized,
-        key=lambda entry: (
-            entry["function_name"],
-            entry["source_file"],
-            entry["branch_line_number"],
-            entry["blocked_side_line_numder"],
-            entry["blocked_side"],
-        ),
-    )
-
-
-def _capture_python_overlay_outputs(
-    profile: fuzzer_profile.FuzzerProfile,
-    proj_profile: project_profile.MergedProjectProfile,
-) -> Dict[str, Any]:
-    all_callsites = []
-    if profile.fuzzer_callsite_calltree is not None:
-        all_callsites = cfg_load.extract_all_callsites(
-            profile.fuzzer_callsite_calltree)
-
-    overlay_nodes = []
-    for node in all_callsites:
-        overlay_nodes.append({
-            "cov_ct_idx":
-            node.cov_ct_idx,
-            "cov_hitcount":
-            node.cov_hitcount,
-            "cov_color":
-            node.cov_color,
-            "cov_link":
-            node.cov_link,
-            "cov_callsite_link":
-            node.cov_callsite_link,
-            "cov_parent":
-            node.cov_parent,
-            "cov_forward_reds":
-            node.cov_forward_reds,
-            "cov_largest_blocked_func":
-            node.cov_largest_blocked_func,
-        })
-
-    branch_complexities = []
-    for function_name in sorted(proj_profile.all_functions):
-        function_data = proj_profile.all_functions[function_name]
-        for branch_name in sorted(function_data.branch_profiles):
-            branch = function_data.branch_profiles[branch_name]
-            for side_idx, side in enumerate(branch.sides):
-                branch_complexities.append({
-                    "function_name":
-                    function_name,
-                    "branch":
-                    branch_name,
-                    "side_idx":
-                    side_idx,
-                    "reachable_complexity":
-                    side.reachable_complexity,
-                    "not_covered_complexity":
-                    side.not_covered_complexity,
-                    "unique_reachable_complexity":
-                    side.unique_reachable_complexity,
-                    "unique_not_covered_complexity":
-                    side.unique_not_covered_complexity,
-                })
-
-    return {
-        "overlay_nodes":
-        _normalize_overlay_nodes(overlay_nodes),
-        "branch_complexities":
-        _normalize_branch_complexities(branch_complexities),
-        "branch_blockers":
-        _normalize_branch_blockers(
-            _serialize_branch_blockers(profile.branch_blockers)),
-    }
-
-
-def _compare_overlay_outputs(
-    native_outputs: Dict[str, Any],
-    python_outputs: Dict[str, Any],
-) -> Dict[str, int]:
-    mismatch_counts = {
-        "overlay_nodes_count": 0,
-        "overlay_nodes_values": 0,
-        "branch_complexities_count": 0,
-        "branch_complexities_values": 0,
-        "branch_blockers_count": 0,
-        "branch_blockers_values": 0,
-    }
-
-    for key in (
-            "overlay_nodes",
-            "branch_complexities",
-            "branch_blockers",
-    ):
-        native_items = native_outputs.get(key, [])
-        python_items = python_outputs.get(key, [])
-        if len(native_items) != len(python_items):
-            mismatch_counts[f"{key}_count"] += abs(
-                len(native_items) - len(python_items))
-            continue
-        for native_item, python_item in zip(native_items, python_items):
-            if native_item != python_item:
-                mismatch_counts[f"{key}_values"] += 1
-
-    return mismatch_counts
-
-
-def _apply_native_branch_complexities(
-    all_functions: Dict[str, function_profile.FunctionProfile],
-    branch_complexities: List[Dict[str, Any]],
-) -> None:
-    for entry in branch_complexities:
-        function_name = entry.get("function_name", "")
-        branch_name = entry.get("branch", "")
-        side_idx = entry.get("side_idx", -1)
-        if (function_name not in all_functions or branch_name
-                not in all_functions[function_name].branch_profiles
-                or not isinstance(side_idx, int)):
-            continue
-
-        branch = all_functions[function_name].branch_profiles[branch_name]
-        if side_idx < 0 or side_idx >= len(branch.sides):
-            continue
-
-        side = branch.sides[side_idx]
-        side.reachable_complexity = int(entry.get("reachable_complexity", 0))
-        side.not_covered_complexity = int(
-            entry.get("not_covered_complexity", 0))
-        side.unique_reachable_complexity = int(
-            entry.get("unique_reachable_complexity", 0))
-        side.unique_not_covered_complexity = int(
-            entry.get("unique_not_covered_complexity", 0))
-
-
-def _apply_native_overlay_outputs(
-    profile: fuzzer_profile.FuzzerProfile,
-    proj_profile: project_profile.MergedProjectProfile,
-    native_outputs: Dict[str, Any],
-    out_dir: str,
-    target_coverage_url: str,
-) -> None:
-    all_callsites = []
-    if profile.fuzzer_callsite_calltree is not None:
-        all_callsites = cfg_load.extract_all_callsites(
-            profile.fuzzer_callsite_calltree)
-    for ct_idx, node in enumerate(all_callsites):
-        node.cov_ct_idx = ct_idx
-
-    updates_by_idx: Dict[int, Dict[str, Any]] = {}
-    for update in native_outputs.get("overlay_nodes", []):
-        ct_idx = int(update.get("cov_ct_idx", -1))
-        updates_by_idx[ct_idx] = update
-
-    for node in all_callsites:
-        node_update = updates_by_idx.get(node.cov_ct_idx)
-        if node_update is None:
-            continue
-        node.cov_hitcount = int(
-            node_update.get("cov_hitcount", node.cov_hitcount))
-        node.cov_color = str(node_update.get("cov_color", node.cov_color))
-        node.cov_link = str(node_update.get("cov_link", node.cov_link))
-        node.cov_callsite_link = str(
-            node_update.get("cov_callsite_link", node.cov_callsite_link))
-        node.cov_parent = str(
-            node_update.get("cov_parent", node.cov_parent))
-        node.cov_forward_reds = int(
-            node_update.get("cov_forward_reds", node.cov_forward_reds))
-        node.cov_largest_blocked_func = str(
-            node_update.get("cov_largest_blocked_func",
-                            node.cov_largest_blocked_func))
-
-    _apply_native_branch_complexities(
-        proj_profile.all_functions,
-        native_outputs.get("branch_complexities", []),
-    )
-
-    branch_blockers: List[FuzzBranchBlocker] = []
-    for blocker in native_outputs.get("branch_blockers", []):
-        try:
-            blocked_side = int(
-                str(blocker.get("blocked_side", "0")).strip("'\""))
-        except ValueError:
-            blocked_side = blocker.get("blocked_side", 0)
-
-        blocked_unique_functions = [
-            str(function_name)
-            for function_name in blocker.get("blocked_unique_functions", [])
-        ]
-        source_file = str(blocker.get("source_file", ""))
-        branch_line_number = str(blocker.get("branch_line_number", "0"))
-        function_name = str(blocker.get("function_name", ""))
-        try:
-            coverage_link = profile.resolve_coverage_link(
-                target_coverage_url,
-                source_file,
-                int(branch_line_number),
-                function_name,
-            )
-        except ValueError:
-            coverage_link = "#"
-
-        branch_blockers.append(
-            FuzzBranchBlocker(
-                blocked_side,
-                int(blocker.get("blocked_unique_not_covered_complexity", 0)),
-                int(blocker.get("blocked_unique_reachable_complexity", 0)),
-                blocked_unique_functions,
-                int(blocker.get("blocked_not_covered_complexity", 0)),
-                int(blocker.get("blocked_reachable_complexity", 0)),
-                int(blocker.get("sides_hitcount_diff", 0)),
-                source_file,
-                branch_line_number,
-                str(blocker.get("blocked_side_line_numder", "0")),
-                function_name,
-                coverage_link,
-            ))
-
-    profile.branch_blockers = branch_blockers
-    json_report.add_branch_blocker_key_value_to_report(
-        profile.identifier,
-        "branch_blockers",
-        _serialize_branch_blockers(profile.branch_blockers),
-        out_dir,
-    )
-
-
 def overlay_calltree_with_coverage(
-    profile: fuzzer_profile.FuzzerProfile,
-    proj_profile: project_profile.MergedProjectProfile,
-    coverage_url: str,
-    basefolder: str,
-    out_dir,
-) -> None:
-    selected_backend = backend_loaders.parse_overlay_backend_env()
-    strict_mode = backend_loaders.parse_overlay_strict_mode()
-    shadow_mode = backend_loaders.parse_overlay_shadow_mode()
-    forced_shadow_mode = _overlay_backend_forces_shadow_mode(
-        selected_backend, profile.target_lang)
-    effective_shadow_mode = shadow_mode or forced_shadow_mode
-    effective_strict_mode = strict_mode and not forced_shadow_mode
-
-    if forced_shadow_mode and not shadow_mode:
-        logger.warning(
-            "Go overlay backend remains shadow-only for language %s; Python "
-            "overlay path stays authoritative",
-            profile.target_lang,
-        )
-
-    language_supports_authoritative = (profile.target_lang
-                                       in _OVERLAY_AUTHORITATIVE_LANGS)
-    if (selected_backend != backend_loaders.BACKEND_PYTHON
-            and not language_supports_authoritative):
-        if not effective_shadow_mode:
-            logger.warning(
-                "Native overlay authoritative mode is disabled for language %s; "
-                "using Python overlay path",
-                profile.target_lang,
-            )
-            _overlay_calltree_with_coverage_python(profile, proj_profile,
-                                                   coverage_url, basefolder,
-                                                   out_dir)
-            return
-        logger.warning(
-            "Native overlay diagnostics running in shadow mode for unsupported "
-            "language %s; Python remains authoritative",
-            profile.target_lang,
-        )
-
-    if selected_backend != backend_loaders.BACKEND_PYTHON:
-        command, missing_command_details = (
-            backend_loaders.resolve_overlay_backend_command_with_details(
-                selected_backend,
-                command_env_prefix="FI_OVERLAY",
-            ))
-        if not command:
-            if strict_mode:
-                logger.warning(
-                    "%s: Native overlay binary not found; falling back to Python "
-                    "(strict mode does not apply to binary absence) | details=%s",
-                    backend_loaders.FI_OVERLAY_COMMAND_MISSING,
-                    json.dumps(missing_command_details,
-                               sort_keys=True,
-                               default=str),
-                )
-            else:
-                logger.warning(
-                    "%s: No overlay command configured; falling back to Python | details=%s",
-                    backend_loaders.FI_OVERLAY_COMMAND_MISSING,
-                    json.dumps(missing_command_details,
-                               sort_keys=True,
-                               default=str),
-                )
-            _overlay_calltree_with_coverage_python(profile, proj_profile,
-                                                   coverage_url, basefolder,
-                                                   out_dir)
-            return
-
-        logger.info("[overlay] using %s backend (%s)", selected_backend,
-                    command[0])
-        request_payload = _build_overlay_native_payload(
-            profile, proj_profile, coverage_url, str(out_dir))
-        backend_result = backend_loaders.run_overlay_backend(
-            payload=request_payload,
-            selected_backend=selected_backend,
-            strict_mode=effective_strict_mode,
-        )
-        if backend_result.response is not None:
-            target_coverage_url = request_payload["target_coverage_url"]
-            artifacts = backend_result.response.get("artifacts", {})
-            try:
-                native_outputs = {
-                    "overlay_nodes":
-                    _normalize_overlay_nodes(
-                        _load_overlay_artifact_json(
-                            artifacts,
-                            "overlay_nodes",
-                            str(out_dir),
-                        ) or []),
-                    "branch_complexities":
-                    _normalize_branch_complexities(
-                        _load_overlay_artifact_json(
-                            artifacts,
-                            "branch_complexities",
-                            str(out_dir),
-                        ) or []),
-                    "branch_blockers":
-                    _normalize_branch_blockers(
-                        _load_overlay_artifact_json(
-                            artifacts,
-                            "branch_blockers",
-                            str(out_dir),
-                        ) or []),
-                }
-            except (OSError, ValueError, json.JSONDecodeError) as err:
-                reason_details = {
-                    "error": str(err),
-                    "error_type": type(err).__name__,
-                    "backend": selected_backend,
-                    "phase": "artifact_load",
-                }
-                if effective_strict_mode:
-                    raise backend_loaders.OverlayBackendError(
-                        backend_loaders.FI_OVERLAY_SCHEMA_ERROR,
-                        "Failed to load overlay backend artifacts",
-                        reason_details,
-                    ) from err
-                logger.warning(
-                    "%s: Failed loading native overlay artifacts; using python path | details=%s",
-                    backend_loaders.FI_OVERLAY_SCHEMA_ERROR,
-                    json.dumps(reason_details),
-                )
-                _overlay_calltree_with_coverage_python(profile, proj_profile,
-                                                       coverage_url,
-                                                       basefolder, out_dir)
-                return
-
-            if effective_shadow_mode:
-                _overlay_calltree_with_coverage_python(profile, proj_profile,
-                                                       coverage_url,
-                                                       basefolder, out_dir)
-                python_outputs = _capture_python_overlay_outputs(
-                    profile, proj_profile)
-                mismatch_counts = _compare_overlay_outputs(
-                    native_outputs, python_outputs)
-                mismatch_total = sum(mismatch_counts.values())
-                logger.info(
-                    "Overlay shadow parity diagnostics: %s",
-                    json.dumps(mismatch_counts, sort_keys=True),
-                )
-                if mismatch_total > 0:
-                    if effective_strict_mode:
-                        raise backend_loaders.OverlayBackendError(
-                            backend_loaders.FI_OVERLAY_PARITY_MISMATCH,
-                            "Overlay native output mismatches Python output",
-                            mismatch_counts,
-                        )
-                    logger.warning(
-                        "%s: Overlay native output mismatches Python output | details=%s",
-                        backend_loaders.FI_OVERLAY_PARITY_MISMATCH,
-                        json.dumps(mismatch_counts, sort_keys=True),
-                    )
-                return
-
-            _apply_native_overlay_outputs(
-                profile,
-                proj_profile,
-                native_outputs,
-                out_dir,
-                target_coverage_url,
-            )
-            logger.info(
-                "[+] found %d branch blockers.",
-                len(profile.branch_blockers),
-            )
-            return
-
-    _overlay_calltree_with_coverage_python(profile, proj_profile, coverage_url,
-                                           basefolder, out_dir)
-
-
-def _overlay_calltree_with_coverage_python(
-    profile: fuzzer_profile.FuzzerProfile,
-    proj_profile: project_profile.MergedProjectProfile,
-    coverage_url: str,
-    basefolder: str,
-    out_dir,
-) -> None:
+        profile: fuzzer_profile.FuzzerProfile,
+        proj_profile: project_profile.MergedProjectProfile, coverage_url: str,
+        basefolder: str, out_dir) -> None:
     # We use the callstack to keep track of all function parents. We need this
     # when looking up if a callsite was hit or not. This is because the coverage
     # information about a callsite is located in coverage data of the function
@@ -2508,13 +496,18 @@ def _overlay_calltree_with_coverage_python(
     target_coverage_url = utils.get_target_coverage_url(
         coverage_url, target_name, profile.target_lang)
     logger.info("Using coverage url: %s", target_coverage_url)
-    all_callsites = cfg_load.extract_all_callsites(
-        profile.fuzzer_callsite_calltree)
-    for node in all_callsites:
+    for node in cfg_load.extract_all_callsites(
+            profile.fuzzer_callsite_calltree):
         node.cov_ct_idx = ct_idx
         ct_idx += 1
 
-        demangled_name = _get_overlay_coverage_lookup_name(profile, node)
+        if profile.target_lang == "jvm":
+            demangled_name = utils.demangle_jvm_func(
+                node.dst_function_source_file, node.dst_function_name)
+        elif profile.target_lang == "rust":
+            demangled_name = utils.demangle_rust_func(node.dst_function_name)
+        else:
+            demangled_name = utils.demangle_cpp_func(node.dst_function_name)
 
         # Add to callstack
         callstack_set_curr_node(node, demangled_name, callstack)
@@ -2535,9 +528,11 @@ def _overlay_calltree_with_coverage_python(
     # For python, do a hack where we check if any node is covered, and, if so,
     # ensure the entrypoint is covered.
     logger.info("Overlaying 2")
-    all_nodes = all_callsites
+    all_nodes = cfg_load.extract_all_callsites(
+        profile.fuzzer_callsite_calltree)
     if len(all_nodes) > 0:
-        for node in all_nodes[1:]:
+        for node in cfg_load.extract_all_callsites(
+                profile.fuzzer_callsite_calltree)[1:]:
             if node.cov_hitcount > 0:
                 all_nodes[0].cov_hitcount = 200
                 all_nodes[0].cov_color = get_hit_count_color(200)
@@ -2545,6 +540,8 @@ def _overlay_calltree_with_coverage_python(
 
     # Extract data about which nodes unlocks data
     logger.info("Overlaying 3")
+    all_callsites = cfg_load.extract_all_callsites(
+        profile.fuzzer_callsite_calltree)
     prev_end = -1
     for idx1, n1 in enumerate(all_callsites):
         n1 = all_callsites[idx1]
@@ -2585,6 +582,7 @@ def _overlay_calltree_with_coverage_python(
             forward_red += 1
             idx2 += 1
         prev_end = idx2 - 1
+        # logger.info("Assigning forward red: %d for index %d"%(forward_red, idx1))
         n1.cov_forward_reds = forward_red
         n1.cov_largest_blocked_func = largest_blocked_name
 
@@ -2593,18 +591,42 @@ def _overlay_calltree_with_coverage_python(
     profile.branch_blockers = detect_branch_level_blockers(
         proj_profile.all_functions, profile, target_coverage_url)
     logger.info("[+] found %d branch blockers.", len(profile.branch_blockers))
-    json_report.add_branch_blocker_key_value_to_report(
-        profile.identifier,
-        "branch_blockers",
-        _serialize_branch_blockers(profile.branch_blockers),
-        out_dir,
-    )
+    branch_blockers_list = []
+    for blk in profile.branch_blockers:
+        branch_blockers_list.append({
+            'blocked_side':
+            repr(blk.blocked_side),
+            'blocked_unique_not_covered_complexity':
+            blk.blocked_unique_not_covered_complexity,
+            'blocked_unique_reachable_complexity':
+            blk.blocked_unique_reachable_complexity,
+            'blocked_unique_functions':
+            blk.blocked_unique_funcs,
+            'blocked_not_covered_complexity':
+            blk.blocked_not_covered_complexity,
+            'blocked_reachable_complexity':
+            blk.blocked_reachable_complexity,
+            'sides_hitcount_diff':
+            blk.sides_hitcount_diff,
+            'source_file':
+            blk.source_file,
+            'branch_line_number':
+            blk.branch_line_number,
+            'blocked_side_line_numder':
+            blk.blocked_side_line_numder,
+            'function_name':
+            blk.function_name
+        })
+
+    json_report.add_branch_blocker_key_value_to_report(profile.identifier,
+                                                       'branch_blockers',
+                                                       branch_blockers_list,
+                                                       out_dir)
 
 
 def update_branch_complexities(
-    all_functions: Dict[str, function_profile.FunctionProfile],
-    coverage: code_coverage.CoverageProfile,
-) -> None:
+        all_functions: Dict[str, function_profile.FunctionProfile],
+        coverage: code_coverage.CoverageProfile) -> None:
     """
     Traverse every branch profile and update the side complexities based on reached funcs
     complexity.
@@ -2639,17 +661,15 @@ def update_branch_complexities(
 
 
 def detect_branch_level_blockers(
-    functions_profile: Dict[str, function_profile.FunctionProfile],
-    fuzz_profile: fuzzer_profile.FuzzerProfile,
-    target_coverage_url: str,
-) -> List[FuzzBranchBlocker]:
+        functions_profile: Dict[str, function_profile.FunctionProfile],
+        fuzz_profile: fuzzer_profile.FuzzerProfile,
+        target_coverage_url: str) -> List[FuzzBranchBlocker]:
     fuzz_blockers = []
 
     if fuzz_profile.coverage is None:
         logger.error(
             "No coverage for fuzzer %s. Skipping branch blocker detection.",
-            fuzz_profile.binary_executable,
-        )
+            fuzz_profile.binary_executable)
         return []
     coverage = fuzz_profile.coverage
 
@@ -2659,7 +679,7 @@ def detect_branch_level_blockers(
         sides_hitcount = coverage.branch_cov_map[branch_string]
         if len(sides_hitcount) > 2:
             logger.debug(
-                f"SPECIAL: switch statement {branch_string} {sides_hitcount}")
+                f'SPECIAL: switch statement {branch_string} {sides_hitcount}')
             # The first two elements are associated with the switch statement
             # line coverage. Here to update sides_hitcount and set branch_hitcount.
             branch_hitcount = max(sides_hitcount[:2])
@@ -2667,8 +687,8 @@ def detect_branch_level_blockers(
 
         # Catch exceptions in case some of the string splitting fails
         try:
-            function_name, rest_string = branch_string.rsplit(":", maxsplit=1)
-            line_number, column_number = rest_string.split(",")
+            function_name, rest_string = branch_string.rsplit(':', maxsplit=1)
+            line_number, column_number = rest_string.split(',')
         except ValueError:
             logger.debug(
                 "branch-profiling: error getting function name from %s",
@@ -2686,7 +706,7 @@ def detect_branch_level_blockers(
             function_name].function_source_file
         # Just extract the file name and skip the path
         source_file_name = os.path.basename(source_file_path)
-        llvm_branch_string = f"{source_file_name}:{line_number},{column_number}"
+        llvm_branch_string = f'{source_file_name}:{line_number},{column_number}'
 
         if llvm_branch_string not in llvm_branch_profile:
             # TODO: there are cases that the column number of the branch is not consistent between
@@ -2714,25 +734,23 @@ def detect_branch_level_blockers(
         if len(sides_hitcount) != len(llvm_branch.sides):
             logger.debug(
                 "Branch-blocker: inconsistent data found between COV vs LLVM:\n%s %s",
-                llvm_branch_string,
-                branch_string,
-            )
+                llvm_branch_string, branch_string)
             logger.debug("llvm_branch.sides: %s", str(llvm_branch.sides))
             logger.debug("blocked_idx: %s", sides_hitcount)
             continue
         # We have some sides taken and some not taken sides => there are blockers.
         for blocked_idx in not_taken_sides:
             blocked_side = blocked_idx
-            blocked_unique_not_covered_com = llvm_branch.sides[
-                blocked_idx].unique_not_covered_complexity
-            blocked_unique_reachable_com = llvm_branch.sides[
-                blocked_idx].unique_reachable_complexity
+            blocked_unique_not_covered_com = (
+                llvm_branch.sides[blocked_idx].unique_not_covered_complexity)
+            blocked_unique_reachable_com = (
+                llvm_branch.sides[blocked_idx].unique_reachable_complexity)
             blocked_reachable_com = llvm_branch.sides[
                 blocked_idx].reachable_complexity
             blocked_not_covered_com = llvm_branch.sides[
                 blocked_idx].not_covered_complexity
             side_line = llvm_branch.sides[blocked_idx].pos
-            side_line_number = side_line.split(":")[1].split(",")[0]
+            side_line_number = side_line.split(':')[1].split(',')[0]
             blocked_unique_funcs = list(
                 llvm_branch.get_side_unique_reachable_funcnames(blocked_idx))
 
@@ -2740,10 +758,7 @@ def detect_branch_level_blockers(
             if int(line_number) > int(side_line_number):
                 logger.debug(
                     "Branch-blocker: Anomalous branch sides line nubmers: %s:%s -> %s",
-                    source_file_path,
-                    line_number,
-                    side_line_number,
-                )
+                    source_file_path, line_number, side_line_number)
                 continue
 
             # Sanity check for fall through cases: checks if the branch side has coverage or not
@@ -2752,16 +767,14 @@ def detect_branch_level_blockers(
                                                int(side_line_number)):
                     logger.debug(
                         "Branch-blocker: fall through branch side is not blocked: %s",
-                        side_line,
-                    )
+                        side_line)
                     continue
             else:
                 if coverage.is_func_lineno_hit(function_name,
                                                int(side_line_number)):
                     logger.debug(
                         "Branch-blocker: fall through branch side is not blocked: %s",
-                        side_line,
-                    )
+                        side_line)
                     continue
 
             hitcount_diff = max(sides_hitcount + [branch_hitcount])
@@ -2770,41 +783,33 @@ def detect_branch_level_blockers(
                                                       int(line_number),
                                                       function_name)
             new_blk = FuzzBranchBlocker(
-                blocked_side,
-                blocked_unique_not_covered_com,
-                blocked_unique_reachable_com,
-                blocked_unique_funcs,
-                blocked_not_covered_com,
-                blocked_reachable_com,
-                hitcount_diff,
-                source_file_path,
-                line_number,
-                side_line_number,
-                function_name,
-                link,
-            )
+                blocked_side, blocked_unique_not_covered_com,
+                blocked_unique_reachable_com, blocked_unique_funcs,
+                blocked_not_covered_com, blocked_reachable_com, hitcount_diff,
+                source_file_path, line_number, side_line_number, function_name,
+                link)
             fuzz_blockers.append(new_blk)
 
     fuzz_blockers.sort(
         reverse=True,
         key=lambda x: [
-            x.blocked_unique_not_covered_complexity,
-            x.blocked_unique_reachable_complexity,
-            x.blocked_not_covered_complexity,
-            x.blocked_reachable_complexity,
-        ],
-    )
+            x.blocked_unique_not_covered_complexity, x.
+            blocked_unique_reachable_complexity, x.
+            blocked_not_covered_complexity, x.blocked_reachable_complexity
+        ])
 
     return fuzz_blockers
 
 
 def extract_namespace(mangled_function_name, return_type=None):
+    # logger.info("Demangling: %s" % (mangled_function_name))
     demangled_func_name = utils.demangle_rust_func(
         utils.demangle_cpp_func(mangled_function_name))
+    # logger.info("Demangled name: %s" % (demangled_func_name))
     if return_type is not None and demangled_func_name.startswith(
             f"{return_type} "):
-        return_type_offset = len(return_type) + 1
-        demangled_func_name = demangled_func_name[return_type_offset:]
+        demangled_func_name = demangled_func_name[len(return_type) + 1:]
+        # logger.info("Removed function type: %s" % (demangled_func_name))
     if "::" not in demangled_func_name:
         return []
 
@@ -2813,9 +818,9 @@ def extract_namespace(mangled_function_name, return_type=None):
     for elem in split_namespace:
         if len(elem) > 0:
             # Check: (anonymous namespace)
-            if elem[0] == "(":
+            if elem[0] == '(':
                 name_spaces.append(elem)
-            elif "(" in elem:
+            elif '(' in elem:
                 name_spaces.append(elem.split("(")[0])
                 break
             else:
@@ -2826,15 +831,15 @@ def extract_namespace(mangled_function_name, return_type=None):
 
 
 def convert_debug_info_to_signature_v2(function, introspector_func):
-    function["return_type"] = "N/A"
-    function["args"] = []
+    function['return_type'] = 'N/A'
+    function['args'] = []
     try:
         return_type = convert_param_list_to_str_v2(
-            function["func_signature_elems"]["return_type"])
-        function["return_type"] = return_type
+            function['func_signature_elems']['return_type'])
+        function['return_type'] = return_type
         func_signature = return_type + " "
     except KeyError:
-        return "N/A"
+        return 'N/A'
 
     # Assess if there is a namespace and if we have more args than what there
     # should be, e.g. if this is a method on an object. We need to identify
@@ -2846,34 +851,34 @@ def convert_debug_info_to_signature_v2(function, introspector_func):
     # 2) identify namespace
     # 3) identify if namespace last part matches first argument
     # 4) assemble
-    namespace = extract_namespace(introspector_func["raw-function-name"],
+    namespace = extract_namespace(introspector_func['raw-function-name'],
                                   return_type)
 
-    func_name = ""
+    func_name = ''
     param_idx = 0
     # Is this a class function?
-    if len(function["func_signature_elems"]["params"]) > 0:
+    if len(function['func_signature_elems']['params']) > 0:
         if len(namespace) > 1:
             # Constructor handling
             if namespace[-1] == convert_param_list_to_str_v2(
-                    function["func_signature_elems"]["params"][0]).replace(
+                    function['func_signature_elems']['params'][0]).replace(
                         " *", ""):
                 func_name = "::".join(namespace[0:-1]) + "::"
                 param_idx += 1
             # Destructor handling
             elif "~" in namespace[-1] and namespace[-1].replace(
                     "~", "") == convert_param_list_to_str_v2(
-                        function["func_signature_elems"]["params"][0]).replace(
+                        function['func_signature_elems']['params'][0]).replace(
                             " *", ""):
                 func_name = "::".join(namespace[0:-1]) + "::"
 
-                if (not convert_param_list_to_str_v2(
-                        function["func_signature_elems"]["params"][0]) == "~"):
-                    function["name"] = "~" + function["name"]
+                if not convert_param_list_to_str_v2(
+                        function['func_signature_elems']['params'][0]) == '~':
+                    function['name'] = '~' + function['name']
                 param_idx += 1
             # Class object handling
             elif namespace[-2] == convert_param_list_to_str_v2(
-                    function["func_signature_elems"]["params"][0]).replace(
+                    function['func_signature_elems']['params'][0]).replace(
                         " *", "").replace("const ", ""):
                 func_name = "::".join(namespace[0:-1]) + "::"
                 param_idx += 1
@@ -2882,19 +887,19 @@ def convert_debug_info_to_signature_v2(function, introspector_func):
                 # No increasae in param_idx, since we don't eat the object
                 # instance pointer.
                 func_name = "::".join(namespace[0:-1]) + "::"
-    func_name += function["name"]
+    func_name += function['name']
 
     func_signature += func_name
-    func_signature += "("
+    func_signature += '('
     for idx in range(param_idx,
-                     len(function["func_signature_elems"]["params"])):
+                     len(function['func_signature_elems']['params'])):
         param_string = convert_param_list_to_str_v2(
-            function["func_signature_elems"]["params"][idx])
-        function["args"].append(param_string)
+            function['func_signature_elems']['params'][idx])
+        function['args'].append(param_string)
         func_signature += param_string
-        if idx < len(function["func_signature_elems"]["params"]) - 1:
-            func_signature += ", "
-    func_signature += ")"
+        if idx < len(function['func_signature_elems']['params']) - 1:
+            func_signature += ', '
+    func_signature += ')'
     return func_signature
 
 
@@ -2906,186 +911,73 @@ def convert_param_list_to_str_v2(param_list):
     for param in param_list:
         if param == "DW_TAG_pointer_type":
             post += "*"
-        elif param == "DW_TAG_reference_type":
-            post += "&"
-        elif param == "DW_TAG_structure_type":
+        elif param == 'DW_TAG_reference_type':
+            post += '&'
+        elif param == 'DW_TAG_structure_type':
             is_struct = True
         elif param == "DW_TAG_base_type":
             continue
         elif param == "DW_TAG_typedef":
             continue
-        elif param == "DW_TAG_class_type":
+        elif param == 'DW_TAG_class_type':
             continue
         elif param == "DW_TAG_const_type":
             pre += "const "
         else:
             med += param
             if is_struct:
-                med = "struct " + med
+                med = 'struct ' + med
 
     raw_sig = pre.strip() + " " + med + " " + post
     return raw_sig.strip()
 
 
-def _safe_int(value, default=None):
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _build_debug_function_indexes(debug_all_functions,
-                                  header_index_by_name=None):
-    debug_dict_by_name = collections.defaultdict(list)
-    debug_dict_by_filename = collections.defaultdict(list)
-    debug_lines_by_filename = collections.defaultdict(list)
-    if header_index_by_name is None:
-        header_index_by_name = {}
-
-    for debug_function in debug_all_functions:
-        source_dict = debug_function.get("source", {})
-        normalized_source_file = os.path.normpath(
-            source_dict.get("source_file", ""))
-        source_dict["source_file"] = normalized_source_file
-        debug_function["possible-header-files"] = sorted(
-            header_index_by_name.get(debug_function.get("name", ""), set()))
-
-        parsed_line_number = _safe_int(source_dict.get("source_line", "-1"),
-                                       default=None)
-
-        debug_dict_by_name[debug_function.get("name",
-                                              "")].append(debug_function)
-        debug_dict_by_filename[normalized_source_file].append(debug_function)
-        if parsed_line_number is None:
-            continue
-        debug_lines_by_filename[normalized_source_file].append(
-            (parsed_line_number, debug_function))
-
-    # Convert debug_lines_by_filename elements to desired dictionary structure
-    # while converting it back to a standard dictionary to match the previous type
-    final_debug_lines_by_filename = {}
-    for source_file, line_debug_pairs in debug_lines_by_filename.items():
-        line_debug_pairs.sort(key=lambda item: item[0])
-        final_debug_lines_by_filename[source_file] = {
-            "lines": [line for line, _ in line_debug_pairs],
-            "functions": [func for _, func in line_debug_pairs],
-        }
-
-    return (
-        dict(debug_dict_by_name),
-        dict(debug_dict_by_filename),
-        final_debug_lines_by_filename,
-    )
-
-
-def _get_introspector_debug_name_candidates(if_func):
-    candidates = set()
-
-    for raw_name in (
-            if_func.get("Func name", ""),
-            utils.demangle_rust_func(
-                utils.demangle_cpp_func(if_func.get("raw-function-name", ""))),
-    ):
-        if not isinstance(raw_name, str):
-            continue
-        candidate = raw_name.split("(", maxsplit=1)[0].strip()
-        if not candidate:
-            continue
-        candidates.add(candidate)
-        if "::" in candidate:
-            candidates.add(candidate.rsplit("::", maxsplit=1)[-1])
-
-    return candidates
-
-
-def _debug_function_name_matches(if_func, debug_function):
-    debug_name = debug_function.get("name", "")
-    if not isinstance(debug_name, str) or not debug_name:
-        return False
-    return debug_name in _get_introspector_debug_name_candidates(if_func)
-
-
-def correlate_introspector_func_to_debug_information(
-    if_func,
-    all_debug_functions,
-    debug_dict_by_name,
-    debug_dict_by_filename,
-    debug_lines_by_filename=None,
-):
+def correlate_introspector_func_to_debug_information(if_func,
+                                                     all_debug_functions,
+                                                     debug_dict_by_name,
+                                                     debug_dict_by_filename):
     """Correlate a single LLVM-based function to a given function in the
     collected debug information."""
     # Check if name matches. If so, this one is easy.
-    seen_debug_functions = set()
-    for candidate_name in _get_introspector_debug_name_candidates(if_func):
-        same_name_dfs = debug_dict_by_name.get(candidate_name, [])
-        for debug_function in same_name_dfs:
-            debug_function_id = id(debug_function)
-            if debug_function_id in seen_debug_functions:
-                continue
-            seen_debug_functions.add(debug_function_id)
+    same_name_dfs = debug_dict_by_name.get(if_func['Func name'], [])
+
+    for debug_function in same_name_dfs:
+        if debug_function.get('name', '') == if_func['Func name']:
             func_signature = convert_debug_info_to_signature_v2(
                 debug_function, if_func)
             return func_signature, debug_function
 
     # We could not find the right one, let's search more broadly for it.
-    source_file = os.path.normpath(if_func.get("Functions filename", ""))
-    source_line_begin = _safe_int(if_func.get("source_line_begin"),
-                                  default=None)
-    if source_line_begin is None:
-        return None, None
-
-    indexed_debug_lines = None
-    if debug_lines_by_filename is not None:
-        indexed_debug_lines = debug_lines_by_filename.get(source_file)
-    if indexed_debug_lines is not None:
-        line_values = indexed_debug_lines["lines"]
-        matching_debug_functions = indexed_debug_lines["functions"]
-        exact_line_idx = bisect.bisect_left(line_values, source_line_begin)
-        if (exact_line_idx < len(line_values)
-                and line_values[exact_line_idx] == source_line_begin
-                and source_line_begin != 0):
-            matched_debug_func = matching_debug_functions[exact_line_idx]
-            if _debug_function_name_matches(if_func, matched_debug_func):
-                func_signature = convert_debug_info_to_signature_v2(
-                    matched_debug_func, if_func)
-                return func_signature, matched_debug_func
-
-        preceding_line_idx = exact_line_idx - 1
-        if preceding_line_idx >= 0:
-            matched_debug_func = matching_debug_functions[preceding_line_idx]
-            if _debug_function_name_matches(if_func, matched_debug_func):
-                func_signature = convert_debug_info_to_signature_v2(
-                    matched_debug_func, if_func)
-                return func_signature, matched_debug_func
-
     target_minimum = 999999
     tfunc_signature = None
     most_likely_func = None
 
-    for dfunction in debug_dict_by_filename.get(source_file, []):
-        dline = _safe_int(dfunction["source"].get("source_line", "-1"),
-                          default=None)
-        if dline is None:
+    for dfunction in debug_dict_by_filename.get(
+            os.path.normpath(if_func['Functions filename']), []):
+        try:
+            dline = int(dfunction['source'].get('source_line', '-1'))
+        except ValueError:
             continue
-        if not _debug_function_name_matches(if_func, dfunction):
-            continue
 
-        # Match based on containment, as there can be discrepancies between function
-        # signatur start (as from frunc_to_match) and the lines of code of the first
-        # instruction.
-        distance_between_beginnings = source_line_begin - dline
+        if dfunction['source'].get('source_file', '') == os.path.normpath(
+                if_func['Functions filename']):
 
-        if distance_between_beginnings == 0 and dline != 0:
-            func_signature = convert_debug_info_to_signature_v2(
-                dfunction, if_func)
-            return func_signature, dfunction
+            # Match based on containment, as there can be discrepancies between function
+            # signatur start (as from frunc_to_match) and the lines of code of the first
+            # instruction.
+            distance_between_beginnings = int(
+                if_func['source_line_begin']) - dline
 
-        if (distance_between_beginnings > 0
-                and distance_between_beginnings < target_minimum):
-            tfunc_signature = convert_debug_info_to_signature_v2(
-                dfunction, if_func)
-            most_likely_func = dfunction
-            target_minimum = distance_between_beginnings
+            if distance_between_beginnings == 0 and dline != 0:
+                func_signature = convert_debug_info_to_signature_v2(
+                    dfunction, if_func)
+                return func_signature, dfunction
+
+            elif distance_between_beginnings > 0 and distance_between_beginnings < target_minimum:
+                tfunc_signature = convert_debug_info_to_signature_v2(
+                    dfunction, if_func)
+                most_likely_func = dfunction
+                target_minimum = distance_between_beginnings
 
     if most_likely_func is not None:
         return tfunc_signature, most_likely_func
@@ -3094,678 +986,275 @@ def correlate_introspector_func_to_debug_information(
     return None, None
 
 
-def _correlate_introspection_functions_to_debug_info_python(
-    all_functions_json_report,
-    debug_all_functions,
-    proj_lang,
-    report_dict=None,
-):
+def correlate_introspection_functions_to_debug_info(all_functions_json_report,
+                                                    debug_all_functions,
+                                                    proj_lang,
+                                                    report_dict=None):
     """Correlates function data collected by debug information to function
     data collected by LLVMs module, and uses the correlated data to generate
     function signatures for each function based on debug information."""
     if not report_dict:
         report_dict = {}
 
+    # Find header files
     normalized_paths = set()
-    for header_file in report_dict.get("all_files_in_project", []):
-        if not isinstance(header_file, dict):
-            continue
-        source_file = header_file.get("source_file")
-        if not isinstance(source_file, str) or not source_file:
-            continue
-        normalized_paths.add(os.path.normpath(source_file))
-
-    # Load and index header content once to avoid repeated per-function scans.
-    header_index_by_name = {}
-    header_name_pattern = re.compile(r"([A-Za-z_~][A-Za-z0-9_:~]*)\s*\(")
-    for header_src_file in normalized_paths:
-        if not (header_src_file.endswith(".h")
-                or header_src_file.endswith(".hpp")):
-            continue
-        if not os.path.isfile(header_src_file):
-            continue
-        try:
-            with open(header_src_file, "r") as header_file_fd:
-                for line in header_file_fd:
-                    for match in header_name_pattern.findall(line):
-                        entry = header_index_by_name.get(match, set())
-                        entry.add(header_src_file)
-                        header_index_by_name[match] = entry
-                        if "::" in match:
-                            short_match = match.rsplit("::", maxsplit=1)[-1]
-                            entry = header_index_by_name.get(
-                                short_match, set())
-                            entry.add(header_src_file)
-                            header_index_by_name[short_match] = entry
-        except UnicodeDecodeError:
-            continue
+    for header_file in report_dict.get('all_files_in_project', []):
+        normalized_paths.add(os.path.normpath(header_file['source_file']))
 
     # A lot of look-ups are needed when matching LLVM functions to debug
     # functions. Start with creating two indexes to make these look-ups
     # faster.
-    (debug_dict_by_name, debug_dict_by_filename,
-     debug_lines_by_filename) = (_build_debug_function_indexes(
-         debug_all_functions, header_index_by_name))
+    debug_dict_by_name = {}
+    debug_dict_by_filename = {}
+    for df in debug_all_functions:
+        # Normalize the source file
+        df['source']['source_file'] = os.path.normpath(df['source'].get(
+            'source_file', ''))
 
-    logger.debug("Indexed debug functions by file: %d entries",
-                 len(debug_dict_by_filename))
+        # Find the header file of this debug function.
+        possible_header_files = set()
+        for header_src_file in normalized_paths:
+            if not (header_src_file.endswith(".h")
+                    or header_src_file.endswith(".hpp")):
+                continue
+            if not os.path.isfile(header_src_file):
+                continue
+            try:
+                with open(header_src_file, 'r') as header_file_fd:
+                    content = header_file_fd.read()
+            except UnicodeDecodeError:
+                content = ""
+
+            name = df.get('name', 'TOTALLYRANDOMNOTFUNCNAME123')
+            for line_idx, line in enumerate(content.split("\n")):
+                if f'{name}(' in line:
+                    possible_header_files.add(header_src_file)
+        df['possible-header-files'] = list(possible_header_files)
+
+        # Append debug function to name-index.
+        entry_list1 = debug_dict_by_name.get(df.get('name', ''), [])
+        entry_list1.append(df)
+        debug_dict_by_name[df.get('name', '')] = entry_list1
+
+        # Append debug function to file-index.
+        entry_list2 = debug_dict_by_filename.get(
+            df['source'].get('source_file', ''), [])
+        entry_list2.append(df)
+        debug_dict_by_filename[df['source'].get('source_file',
+                                                '')] = entry_list2
+
+    for dl3 in debug_dict_by_filename:
+        print("%s ------- %d" % (dl3, len(debug_dict_by_filename[dl3])))
 
     # Now correlate signatures
     for if_func in all_functions_json_report:
-        func_sig, correlated_debug_function = (
-            correlate_introspector_func_to_debug_information(
-                if_func,
-                debug_all_functions,
-                debug_dict_by_name,
-                debug_dict_by_filename,
-                debug_lines_by_filename,
-            ))
+        func_sig, correlated_debug_function = correlate_introspector_func_to_debug_information(
+            if_func, debug_all_functions, debug_dict_by_name,
+            debug_dict_by_filename)
 
         if func_sig is not None:
-            if_func["function_signature"] = func_sig
-            if_func["debug_function_info"] = correlated_debug_function
+            if_func['function_signature'] = func_sig
+            if_func['debug_function_info'] = correlated_debug_function
         else:
-            if proj_lang == "jvm":
-                if_func["function_signature"] = if_func["Func name"]
-            elif not if_func.get("function_signature"):
-                if_func["function_signature"] = "N/A"
-            if_func["debug_function_info"] = {}
+            if proj_lang == 'jvm':
+                if_func['function_signature'] = if_func['Func name']
+            elif not if_func.get('function_signature'):
+                if_func['function_signature'] = 'N/A'
+            if_func['debug_function_info'] = {}
 
 
-def _build_if_debug_correlator_native_payload(
-    all_functions_json_report,
-    debug_all_functions,
-    proj_lang,
-    report_dict,
-):
-    payload = {
-        "stage": _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
-        "introspection_functions": all_functions_json_report,
-        "debug_functions": debug_all_functions,
-        "project_language": proj_lang,
-    }
-    if isinstance(report_dict, dict):
-        all_files_in_project = report_dict.get("all_files_in_project")
-        if isinstance(all_files_in_project, list):
-            payload["all_files_in_project"] = all_files_in_project
-    return payload
-
-
-def _apply_if_debug_correlator_native_updates(
-    all_functions_json_report,
-    native_response,
-) -> int:
-    artifacts = native_response.get("artifacts")
-    if not isinstance(artifacts, dict):
-        raise ValueError(
-            "native correlator response artifacts must be a dictionary")
-
-    function_updates = artifacts.get("function_updates")
-    if not isinstance(function_updates, list):
-        raise ValueError(
-            "native correlator artifacts.function_updates must be a list")
-
-    expected_row_indexes = set(range(len(all_functions_json_report)))
-    seen_row_indexes = set()
-    for raw_update in function_updates:
-        if not isinstance(raw_update, dict):
-            raise ValueError(
-                "native correlator update item must be a dictionary")
-
-        row_idx = _safe_int(raw_update.get("row_idx"), default=None)
-        if row_idx is None or row_idx not in expected_row_indexes:
-            raise ValueError(
-                f"native correlator returned invalid row_idx={row_idx!r}")
-
-        function_signature = raw_update.get("function_signature")
-        if not isinstance(function_signature, str):
-            raise ValueError(
-                "native correlator update function_signature must be a string")
-
-        debug_function_info = raw_update.get("debug_function_info", {})
-        if not isinstance(debug_function_info, dict):
-            raise ValueError(
-                "native correlator update debug_function_info must be a dict")
-
-        all_functions_json_report[row_idx][
-            "function_signature"] = function_signature
-        all_functions_json_report[row_idx][
-            "debug_function_info"] = debug_function_info
-        seen_row_indexes.add(row_idx)
-
-    if seen_row_indexes != expected_row_indexes:
-        missing_row_indexes = sorted(expected_row_indexes - seen_row_indexes)
-        raise ValueError("native correlator updates do not cover all rows "
-                         f"(missing={missing_row_indexes[:5]})")
-
-    return len(function_updates)
-
-
-def _run_if_debug_correlator_native(
-    all_functions_json_report,
-    debug_all_functions,
-    proj_lang,
-    report_dict,
-    selected_backend: str,
-) -> tuple[bool, str]:
-    payload = _build_if_debug_correlator_native_payload(
-        all_functions_json_report,
-        debug_all_functions,
-        proj_lang,
-        report_dict,
-    )
-    native_result = backend_loaders.run_correlator_backend(
-        payload=payload,
-        command_env_prefix="FI_IF_DEBUG_CORRELATOR",
-        timeout_env="FI_IF_DEBUG_CORRELATOR_TIMEOUT_SEC",
-        selected_backend=selected_backend,
-        strict_mode=False,
-    )
-
-    if native_result.response is None:
-        return False, native_result.reason_code or "native_execution_failed"
-
-    if native_result.selected_backend != selected_backend:
-        return False, native_result.reason_code or "native_unavailable"
-
-    _apply_if_debug_correlator_native_updates(
-        all_functions_json_report,
-        native_result.response,
-    )
-    return True, ""
-
-
-def correlate_introspection_functions_to_debug_info(
-    all_functions_json_report,
-    debug_all_functions,
-    proj_lang,
-    report_dict=None,
-    out_dir: Optional[str] = None,
-):
-    """Correlate introspection functions to debug metadata/signatures."""
-    configured_backend = _parse_if_debug_correlator_backend_env()
-    shadow_mode = _parse_bool_env(FI_IF_DEBUG_CORRELATOR_SHADOW_ENV, False)
-    strict_mode = _parse_bool_env(FI_IF_DEBUG_CORRELATOR_STRICT_ENV, False)
-    forced_shadow_mode = _if_debug_correlator_backend_forces_shadow_mode(
-        configured_backend, proj_lang)
-    effective_shadow_mode = shadow_mode or forced_shadow_mode
-    effective_strict_mode = strict_mode and not forced_shadow_mode
-
-    effective_backend = backend_loaders.BACKEND_PYTHON
-    status = "success"
-    error_message = ""
-    fallback_reason = ""
-
-    native_shadow_result = None
-
-    if out_dir is not None:
-        stage_markers.emit(
-            out_dir,
-            _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
-            "start",
-            configured_backend=configured_backend,
-            effective_backend=effective_backend,
-            shadow_mode=effective_shadow_mode,
-            strict_mode=effective_strict_mode,
-            fallback_reason=fallback_reason,
-        )
-
-    try:
-        if forced_shadow_mode and not shadow_mode:
-            logger.info(
-                ("%s backend forced shadow mode for %s with proj_lang=%s; "
-                 "Python remains authoritative"),
-                configured_backend,
-                _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
-                proj_lang,
-            )
-
-        if configured_backend in (
-                backend_loaders.BACKEND_RUST,
-                backend_loaders.BACKEND_GO,
-        ):
-            native_target = all_functions_json_report
-            if effective_shadow_mode:
-                native_target = copy.deepcopy(all_functions_json_report)
-
-            try:
-                native_success, native_reason = _run_if_debug_correlator_native(
-                    native_target,
-                    debug_all_functions,
-                    proj_lang,
-                    report_dict,
-                    configured_backend,
-                )
-            except Exception as native_err:
-                native_success = False
-                native_reason = f"native_schema_mismatch:{native_err}"
-
-            if native_success:
-                if effective_shadow_mode:
-                    native_shadow_result = [(
-                        func.get("function_signature"),
-                        func.get("debug_function_info", {}),
-                    ) for func in native_target]
-                    logger.info(
-                        ("%s enabled for %s; native backend executed and "
-                         "Python authoritative path will run for comparison"),
-                        FI_IF_DEBUG_CORRELATOR_SHADOW_ENV,
-                        _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
-                    )
-                else:
-                    effective_backend = configured_backend
-                    return
-            else:
-                fallback_reason = native_reason
-                if effective_strict_mode:
-                    status = "error"
-                    effective_backend = "unavailable"
-                    error_message = (
-                        "FI_IF_DEBUG_CORRELATOR strict mode requires native success "
-                        f"for {_IF_DEBUG_SIGNATURE_CORRELATION_STAGE}; "
-                        f"reason={native_reason}")
-                else:
-                    logger.warning(
-                        "Native backend failed for %s (%s); falling back to Python "
-                        "authoritative path",
-                        _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
-                        native_reason,
-                    )
-
-        if status == "error":
-            raise FuzzIntrospectorError(error_message)
-
-        _correlate_introspection_functions_to_debug_info_python(
-            all_functions_json_report,
-            debug_all_functions,
-            proj_lang,
-            report_dict=report_dict,
-        )
-        if native_shadow_result is not None:
-            mismatch_count = 0
-            for idx, if_func in enumerate(all_functions_json_report):
-                native_sig, _ = native_shadow_result[idx]
-                python_sig = if_func.get("function_signature")
-                if native_sig != python_sig:
-                    mismatch_count += 1
-            logger.info(
-                "Shadow comparison for %s completed with %d signature mismatches",
-                _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
-                mismatch_count,
-            )
-    except Exception:
-        status = "error"
-        raise
-    finally:
-        if out_dir is not None:
-            stage_markers.emit(
-                out_dir,
-                _IF_DEBUG_SIGNATURE_CORRELATION_STAGE,
-                "end",
-                configured_backend=configured_backend,
-                effective_backend=effective_backend,
-                shadow_mode=effective_shadow_mode,
-                strict_mode=effective_strict_mode,
-                fallback_reason=fallback_reason,
-                status=status,
-            )
-
-
-def extract_all_sources(
-    language: str,
-    exclude_patterns: list[str] | None = None,
-) -> set[str]:
-    """List all source files in /src with project language filters."""
-    scan_root = os.path.abspath("/src")
-    cache_key = (
-        language,
-        tuple(sorted(exclude_patterns or [])),
-        os.path.abspath(os.getcwd()),
-        scan_root,
-    )
-    cached_paths = _SOURCES_SCAN_CACHE.get(cache_key)
-    if cached_paths is not None:
-        return set(cached_paths)
-
-    # Compile regex patterns once and ignore invalid entries consistently.
-    compiled_exclude_patterns = []
-    for pattern in exclude_patterns or []:
-        try:
-            compiled_exclude_patterns.append(re.compile(pattern))
-        except re.error as err:
-            logger.warning("Invalid exclude pattern %s: %s", pattern, err)
-
-    scanned_source_files = _scan_source_tree(
-        language,
-        compiled_exclude_patterns,
-        scan_root=scan_root,
-    )
-    _SOURCES_SCAN_CACHE[cache_key] = frozenset(scanned_source_files)
-    return set(scanned_source_files)
-
-
-def _scan_source_tree(
-    language: str,
-    compiled_exclude_patterns: list[re.Pattern[str]],
-    scan_root: str = "/src/",
-) -> set[str]:
-    interesting_source_files: set[str] = set()
-
-    source_extensions: tuple[str, ...]
-    if language == "jvm":
-        source_extensions = (".java", ".scala", ".sc", ".groovy", ".kt",
-                             ".kts")
-    elif language == "python":
-        source_extensions = (".py", )
-    elif language == "rust":
-        source_extensions = (".rs", )
-    elif language == "go":
-        source_extensions = (".go", ".cgo")
-    else:
-        source_extensions = (".cc", ".cpp", ".cxx", ".c++", ".c", ".h", ".hpp")
-
-    to_avoid = (
-        "fuzztest",
-        "aflplusplus",
-        "libfuzzer",
-        "googletest",
-        "thirdparty",
-        "third_party",
-        "/build/",
-        "/usr/local/",
-        "/fuzz-introspector/",
-        "/root/.cache/",
-        "honggfuzz",
-        "/src/inspector/",
-        "/src/.venv",
-        "/src/source-code/",
-    )
-
-    def _contains_avoided_path(path: str) -> bool:
-        for avoid in to_avoid:
-            if avoid in path:
-                return True
-        return False
-
-    def is_interesting_source_file(path):
-        if not path.endswith(source_extensions):
-            return False
-        if _matches_any_pattern(path, compiled_exclude_patterns):
-            return False
-        if _contains_avoided_path(path):
-            return False
-        if path.startswith("/src/source-code"):
-            return False
-        if path.startswith("/src/inspector/"):
-            return False
-        return True
-
-    for root, dirs, files in os.walk(scan_root):
-        dirs[:] = [
-            d for d in dirs if not _matches_any_pattern(
-                os.path.join(root, d), compiled_exclude_patterns)
-            and not _contains_avoided_path(os.path.join(root, d))
-        ]
+def extract_all_sources(language):
+    all_files = set()
+    for root, dirs, files in os.walk('/src/'):
         for f in files:
-            path = os.path.join(root, f)
-            if not is_interesting_source_file(path):
-                continue
+            all_files.add(os.path.join(root, f))
+    interesting_source_files = set()
 
-            interesting_source_files.add(path)
+    if language == 'jvm':
+        test_extensions = ['.java', '.scala', '.sc', '.groovy', '.kt', '.kts']
+    elif language == 'python':
+        test_extensions = ['.py']
+    elif language == 'rust':
+        test_extensions = ['.rs']
+    elif language == 'go':
+        test_extensions = ['.go', '.cgo']
+    else:
+        test_extensions = ['.cc', '.cpp', '.cxx', '.c++', '.c', '.h', '.hpp']
 
+    to_avoid = [
+        'fuzztest', 'aflplusplus', 'libfuzzer', 'googletest', 'thirdparty',
+        'third_party', '/build/', '/usr/local/', '/fuzz-introspector/',
+        '/root/.cache/', 'honggfuzz', '/src/inspector/', '/src/.venv',
+        '/src/source-code/'
+    ]
+
+    for file in all_files:
+        if not any(file.endswith(ext) for ext in test_extensions):
+            continue
+
+        # Absolute path
+        if any([avoid in file for avoid in to_avoid]):
+            continue
+        if file.startswith('/src/source-code'):
+            continue
+        if file.startswith('/src/inspector/'):
+            continue
+
+        interesting_source_files.add(file)
     return interesting_source_files
 
 
-def extract_test_information(
-    report_dict=None,
-    language="c-cpp",
-    out_dir="/",
-    exclude_patterns=None,
-    source_files: set[str] | None = None,
-):
+def extract_test_information(report_dict=None, language='c-cpp', out_dir='/'):
     """Extract test information for different project language."""
     if not report_dict:
         report_dict = {}
-    if language == "c-cpp":
-        return _extract_test_information_cpp(
-            report_dict,
-            out_dir,
-            exclude_patterns=exclude_patterns,
-            source_files=source_files,
-        )
-    elif language == "jvm":
+    if language == 'c-cpp':
+        return _extract_test_information_cpp(report_dict, out_dir)
+    elif language == 'jvm':
         return _extract_test_information_jvm()
     else:
         # Currently only support c-cpp or jvm project
         return set()
 
 
-def _extract_test_information_cpp(
-    report_dict,
-    out_dir,
-    exclude_patterns=None,
-    source_files: set[str] | None = None,
-):
+def _extract_test_information_cpp(report_dict, out_dir):
     """Correlates function data collected by debug information to function
     data collected by LLVMs module, and uses the correlated data to generate
     function signatures for each function based on debug information."""
 
     # Find header files
     normalized_paths = set()
-    for header_file in report_dict.get("all_files_in_project", []):
-        if not isinstance(header_file, dict):
-            continue
-        source_file = header_file.get("source_file")
-        if not isinstance(source_file, str) or not source_file:
-            continue
-        normalized_paths.add(os.path.normpath(source_file))
+    for header_file in report_dict.get('all_files_in_project', []):
+        normalized_paths.add(os.path.normpath(header_file['source_file']))
 
     directories = set()
 
+    # If this is run locally and not in OSS-Fuzz, let's skip for now.
+    if not os.path.isdir('/src/'):
+        return directories
+
     # All directories added
     for path in normalized_paths:
-        if path.startswith("/usr/"):
+        if path.startswith('/usr/'):
             continue
-        if path.startswith("/tmp/inspector-saved/"):
+        if path.startswith('/tmp/inspector-saved/'):
             continue
-        directories.add("/".join(path.split("/")[:-1]))
-    return extract_tests_from_directories(
-        directories,
-        "c-cpp",
-        out_dir,
-        pre_scanned_files=source_files,
-        exclude_patterns=exclude_patterns,
-    )
+        directories.add('/'.join(path.split('/')[:-1]))
+    return extract_tests_from_directories(directories, 'c-cpp', out_dir)
 
 
-def extract_tests_from_directories(
-    directories,
-    language,
-    out_dir,
-    need_copy=True,
-    exclude_patterns=None,
-    pre_scanned_files: set[str] | None = None,
-) -> Set[str]:
+def extract_tests_from_directories(directories,
+                                   language,
+                                   out_dir,
+                                   need_copy=True) -> Set[str]:
     """Extracts test files from a given collection of directory paths and also
     copies them to the `constants.SAVED_SOURCE_FOLDER` folder with the same
     absolute path appended."""
-    file_count = 0
-
-    inspirations = ("sample", "test", "example")
-
-    normalized_directories = set()
+    all_directories = set()
+    all_files_in_subtree = set()
     for directory in directories:
-        normalized_directories.add(os.path.normpath(directory))
+        for root, _, files in os.walk(directory):
+            for f in files:
+                file_path = os.path.join(root, f)
+                all_files_in_subtree.add(file_path)
 
-    seed_directories: list[str] = []
-    for directory in sorted(normalized_directories, key=len):
-        is_sub_directory = False
-        for seed_directory in seed_directories:
-            if directory == seed_directory or directory.startswith(
-                    seed_directory + os.sep):
-                is_sub_directory = True
-                break
-        if not is_sub_directory:
-            seed_directories.append(directory)
+                assembled_dir = '/'
+                for dd2 in file_path.split('/'):
+                    # Skip empty dd2
+                    if not dd2:
+                        continue
 
-    test_extensions: tuple[str, ...]
-    if language == "jvm":
+                    # Skip hidden directories
+                    if dd2.startswith('.'):
+                        break
+
+                    assembled_dir += dd2
+                    if os.path.isdir(assembled_dir
+                                     ) and assembled_dir.startswith(directory):
+                        all_directories.add(assembled_dir)
+                    assembled_dir += '/'
+
+    inspirations = ["sample", "test", "example"]
+    all_inspiration_dirs = set()
+    for directory in all_directories:
+        if any(ins in directory for ins in inspirations):
+            all_inspiration_dirs.add(directory)
+
+    if language == 'jvm':
         # Get all jvm source files
-        test_extensions = (".java", ".scala", ".sc", ".groovy", ".kt", ".kts")
-    elif language == "python":
+        test_extensions = ['.java', '.scala', '.sc', '.groovy', '.kt', '.kts']
+    elif language == 'python':
         # Get all python source files
-        test_extensions = (".py", )
-    elif language == "rust":
+        test_extensions = ['.py']
+    elif language == 'rust':
         # Get all rust source files
-        test_extensions = (".rs", )
-    elif language == "go":
-        test_extensions = (".go", ".cgo")
+        test_extensions = ['.rs']
+    elif language == 'go':
+        test_extensions = ['.go', '.cgo']
     else:
         # Get all c/cpp source files
-        test_extensions = (".cc", ".cpp", ".cxx", ".c++", ".c")
+        test_extensions = ['.cc', '.cpp', '.cxx', '.c++', '.c']
 
     all_test_files = set()
-    compiled_exclude_patterns = []
-    for pattern in exclude_patterns or []:
-        try:
-            compiled_exclude_patterns.append(re.compile(pattern))
-        except re.error as err:
-            logger.warning("Invalid exclude pattern %s: %s", pattern, err)
+    to_avoid = [
+        'fuzztest', 'aflplusplus', 'libfuzzer', 'googletest', 'thirdparty',
+        'third_party', '/build/', '/usr/local/', '/fuzz-introspector/',
+        '/root/.cache/', '/usr/', '/tmp/', '/src/inspector'
+    ]
+    for directory in all_inspiration_dirs:
+        for root, dirs, files in os.walk(directory):
+            for f in files:
+                if not any(f.endswith(ext) for ext in test_extensions):
+                    continue
+                # Absolute path
+                absolute_path = os.path.join(root, f)
+                if any([avoid in absolute_path for avoid in to_avoid]):
+                    continue
+                if absolute_path.startswith('/out/'):
+                    continue
+                if absolute_path.startswith('/src/inspector/'):
+                    continue
+                try:
+                    with open(absolute_path, 'r') as file_fp:
+                        if 'LLVMFuzzerTestOneInput' in file_fp.read():
+                            continue
+                        # For rust projects
+                        if 'fuzz_target' in file_fp.read():
+                            continue
+                        # For python projects
+                        if '.Fuzz()' in file_fp.read():
+                            continue
+                        # For jvm projects
+                        if 'fuzzerTestOneInput' in file_fp.read():
+                            continue
+                        # For go projects
+                        if 'Fuzz' in file_fp.read():
+                            continue
+                except UnicodeDecodeError:
+                    continue
+                all_test_files.add(absolute_path)
 
-    to_avoid = (
-        "fuzztest",
-        "aflplusplus",
-        "libfuzzer",
-        "googletest",
-        "thirdparty",
-        "third_party",
-        "/build/",
-        "/usr/local/",
-        "/fuzz-introspector/",
-        "/root/.cache/",
-        "/usr/",
-        "/tmp/",
-        "/src/inspector",
-    )
-
-    def _contains_avoided_path(path: str) -> bool:
-        for avoid in to_avoid:
-            if avoid in path:
-                return True
-        return False
-
-    def _contains_inspiration(path: str) -> bool:
-        for inspiration in inspirations:
-            if inspiration in path:
-                return True
-        return False
-
-    def is_candidate_source(absolute_path):
-        if _matches_any_pattern(absolute_path, compiled_exclude_patterns):
-            return False
-        if _contains_avoided_path(absolute_path):
-            return False
-        if absolute_path.startswith("/out/"):
-            return False
-        if absolute_path.startswith("/src/inspector/"):
-            return False
-        if absolute_path.startswith("/usr/"):
-            return False
-        return True
-
-    def is_non_fuzz_harness(absolute_path):
-        max_read_bytes = 64 * 1024
-        try:
-            with open(absolute_path, "r") as file_fp:
-                content = file_fp.read(max_read_bytes)
-                if "LLVMFuzzerTestOneInput" in content:
-                    return False
-                # For rust projects
-                if "fuzz_target" in content:
-                    return False
-                # For python projects
-                if ".Fuzz()" in content:
-                    return False
-                # For jvm projects
-                if "fuzzerTestOneInput" in content:
-                    return False
-                # For go projects
-                if "Fuzz" in content:
-                    return False
-        except UnicodeDecodeError:
-            return False
-        return True
-
-    file_extensions = tuple(test_extensions)
-
-    def _is_in_seed_directory(path: str) -> bool:
-        if not path:
-            return False
-        for directory in seed_directories:
-            normalized_directory = os.path.normpath(directory)
-            directory_prefix = (normalized_directory
-                                if normalized_directory.endswith(os.sep) else
-                                normalized_directory + os.sep)
-            if path == normalized_directory or path.startswith(
-                    directory_prefix):
-                return True
-        return False
-
-    if pre_scanned_files is not None:
-        for absolute_path in pre_scanned_files:
-            normalized_path = os.path.normpath(absolute_path)
-            if not _is_in_seed_directory(normalized_path):
-                continue
-            if not normalized_path.endswith(file_extensions):
-                continue
-            if not is_candidate_source(normalized_path):
-                continue
-
-            file_name = os.path.basename(normalized_path)
-            if "test" in file_name:
-                all_test_files.add(normalized_path)
-                continue
-
-            root = os.path.dirname(normalized_path)
-            if _contains_inspiration(root) and is_non_fuzz_harness(
-                    normalized_path):
-                all_test_files.add(normalized_path)
-    else:
-        # Traverse each seed directory once and apply both matching heuristics.
-        for directory in seed_directories:
-            for root, dirs, files in os.walk(directory):
-                dirs[:] = [
-                    d for d in dirs if not d.startswith(".")
-                    and is_candidate_source(os.path.join(root, d))
-                ]
-
-                # Progress logging for long scans
-                file_count += len(files)
-                if file_count % 5000 == 0:
-                    logger.info(
-                        "extract_tests_from_directories: scanned %d files...",
-                        file_count,
-                    )
-
-                is_inspiration_root = _contains_inspiration(root)
-                for f in files:
-                    if not f.endswith(file_extensions):
-                        continue
-                    # Absolute path
-                    absolute_path = os.path.join(root, f)
-                    if not is_candidate_source(absolute_path):
-                        continue
-
-                    if "test" in f:
-                        all_test_files.add(absolute_path)
-                        continue
-
-                    if is_inspiration_root and is_non_fuzz_harness(
-                            absolute_path):
-                        all_test_files.add(absolute_path)
+    # Iterate through all directories and search for files with test in them.
+    for directory in all_directories:
+        for root, dirs, files in os.walk(directory):
+            for f in files:
+                if not any(f.endswith(ext) for ext in test_extensions):
+                    continue
+                # Absolute path
+                absolute_path = os.path.join(root, f)
+                if any([avoid in absolute_path for avoid in to_avoid]):
+                    continue
+                if absolute_path.startswith('/out/'):
+                    continue
+                if absolute_path.startswith('/src/inspector/'):
+                    continue
+                if absolute_path.startswith('/usr/'):
+                    continue
+                if "test" in f:
+                    all_test_files.add(absolute_path)
     new_test_files = set()
     for test_file in all_test_files:
-        if test_file.startswith("//"):
+        if test_file.startswith('//'):
             test_file = test_file[1:]
         new_test_files.add(test_file)
     all_test_files = new_test_files
@@ -3775,7 +1264,7 @@ def extract_tests_from_directories(
         logger.info(test_file)
         if need_copy:
             dst = os.path.join(out_dir,
-                               constants.SAVED_SOURCE_FOLDER + "/" + test_file)
+                               constants.SAVED_SOURCE_FOLDER + '/' + test_file)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy(test_file, dst)
 
@@ -3790,18 +1279,12 @@ def _extract_test_information_jvm():
     code to locate extra example source files."""
 
     all_test_files = set()
-    source_code_extensions = (".java", ".scala", ".sc", ".kt", ".kts",
-                              ".groovy")
-    inspirations = ("sample", "example", "documentation", "demo")
-
-    def _contains_inspiration(path: str) -> bool:
-        for inspiration in inspirations:
-            if inspiration in path:
-                return True
-        return False
+    source_code_extensions = ('.java', '.scala', '.sc', '.kt', '.kts',
+                              '.groovy')
+    inspirations = ['sample', 'example', 'documentation', 'demo']
 
     # Java project source code is meant to exist in the $SRC directory
-    base_dir = os.path.abspath(os.environ.get("SRC", "/src"))
+    base_dir = os.path.abspath(os.environ.get('SRC', '/src'))
 
     # Walk through all directories under $SRC and locate all standard directories
     # of /src/main/java and /src/test/java for Java source and test files. Also
@@ -3810,11 +1293,11 @@ def _extract_test_information_jvm():
     test_paths = set()
     sample_paths = set()
     for root, _, _ in os.walk(base_dir):
-        if root.endswith("src/main/java"):
+        if root.endswith('src/main/java'):
             source_paths.add(root)
-        if root.endswith("src/test/java"):
+        if root.endswith('src/test/java'):
             test_paths.add(root)
-        if _contains_inspiration(root):
+        if any(inspiration in root for inspiration in inspirations):
             sample_paths.add(root)
 
     # Walk through all the packages under test paths and include the test files
@@ -3822,17 +1305,18 @@ def _extract_test_information_jvm():
         for root, _, files in os.walk(test_path):
             for file in files:
                 if file.endswith(source_code_extensions):
-                    path = os.path.relpath(os.path.join(root, file), test_path)
+                    path = os.path.join(root,
+                                        file).replace(f'{test_path}/', '')
                     all_test_files.add(path)
 
     # Walk through all the packages under source paths and locate example sources
     for source_path in source_paths:
         for root, _, files in os.walk(source_path):
             for file in files:
-                if file.endswith(source_code_extensions
-                                 ) and _contains_inspiration(file):
-                    path = os.path.relpath(os.path.join(root, file),
-                                           source_path)
+                if file.endswith(source_code_extensions) and any(
+                        inspiration in file for inspiration in inspirations):
+                    path = os.path.join(root,
+                                        file).replace(f'{source_path}/', '')
                     all_test_files.add(path)
 
     # Walk through all the files under possible sample path and locate example sources
@@ -3840,33 +1324,33 @@ def _extract_test_information_jvm():
         for root, _, files in os.walk(sample_path):
             for file in files:
                 if file.endswith(source_code_extensions):
-                    path = os.path.relpath(os.path.join(root, file),
-                                           sample_path)
+                    path = os.path.join(root,
+                                        file).replace(f'{sample_path}/', '')
                     all_test_files.add(path)
 
     return all_test_files
 
 
-def light_correlate_source_to_executable(language, exclude_patterns=None):
+def light_correlate_source_to_executable(language):
     """Extracts pairs of harness source/executable"""
-    if language == "jvm" or language == "python":
+    if language == 'jvm' or language == 'python':
         # Skip this step for jvm or python projects
         return []
 
-    out_dir = os.getenv("OUT", "/out/")
-    textcov_dir = os.path.join(out_dir, "textcov_reports")
+    out_dir = os.getenv('OUT', '/out/')
+    textcov_dir = os.path.join(out_dir, 'textcov_reports')
 
     if not os.path.isdir(textcov_dir):
         return []
 
     cov_reports = []
     for cov_report in os.listdir(textcov_dir):
-        if cov_report.endswith(".covreport"):
+        if cov_report.endswith('.covreport'):
             cov_reports.append(os.path.join(textcov_dir, cov_report))
     for cov_report in cov_reports:
-        logger.info("- cov report: %s", cov_report)
+        print('- cov report: %s' % (cov_report))
 
-    all_source_files = extract_all_sources(language, exclude_patterns)
+    all_source_files = extract_all_sources(language)
     pairs = []
     # Match based on file names. This should be the most primitive but
     # will catch a large number of targets
@@ -3880,8 +1364,8 @@ def light_correlate_source_to_executable(language, exclude_patterns=None):
                 matches.add(cov_report_base)
         if len(matches) == 1:
             pairs.append({
-                "harness_source": source_file,
-                "harness_executable": matches.pop()
+                'harness_source': source_file,
+                'harness_executable': matches.pop()
             })
 
     return pairs

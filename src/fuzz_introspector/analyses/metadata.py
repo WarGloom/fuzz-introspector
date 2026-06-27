@@ -13,8 +13,6 @@
 # limitations under the License.
 """Analysis for showing metadata"""
 
-# pylint: disable=line-too-long
-
 import os
 import logging
 
@@ -34,7 +32,6 @@ logger = logging.getLogger(name=__name__)
 
 class MetadataAnalysis(analysis.AnalysisInterface):
     """Creates HTML logic for saving metadata files used."""
-
     name: str = "MetadataAnalysis"
 
     def __init__(self) -> None:
@@ -50,43 +47,31 @@ class MetadataAnalysis(analysis.AnalysisInterface):
     def set_json_string_result(self, json_string):
         self.json_string_result = json_string
 
-    def analysis_func(
-        self,
-        table_of_contents: html_helpers.HtmlTableOfContents,
-        tables: List[str],
-        proj_profile: project_profile.MergedProjectProfile,
-        profiles: List[fuzzer_profile.FuzzerProfile],
-        basefolder: str,
-        coverage_url: str,
-        conclusions: List[html_helpers.HTMLConclusion],
-        out_dir,
-    ) -> str:
-        logger.info("- Running analysis %s", self.get_name())
+    def analysis_func(self,
+                      table_of_contents: html_helpers.HtmlTableOfContents,
+                      tables: List[str],
+                      proj_profile: project_profile.MergedProjectProfile,
+                      profiles: List[fuzzer_profile.FuzzerProfile],
+                      basefolder: str, coverage_url: str,
+                      conclusions: List[html_helpers.HTMLConclusion],
+                      out_dir) -> str:
+        logger.info('- Running analysis %s', self.get_name())
 
-        # Performance Optimization: Use list appending to avoid O(N^2) string concatenation
-        html_string = []
-        html_string.append('<div class="report-box">')
-        html_string.append(
-            html_helpers.html_add_header_with_link(
-                "Metadata section", html_helpers.HTML_HEADING.H1,
-                table_of_contents))
-        html_string.append('<div class="collapsible">')
-        html_string.append("""<p>This sections shows the raw data that is used
+        html_string = ""
+        html_string += "<div class=\"report-box\">"
+        html_string += html_helpers.html_add_header_with_link(
+            "Metadata section", html_helpers.HTML_HEADING.H1,
+            table_of_contents)
+        html_string += "<div class=\"collapsible\">"
+        html_string += """<p>This sections shows the raw data that is used
         to produce this report. This is mainly used for further processing
         and developer debugging.</p>
-        """)
-        html_string.append("<p>")
+        """
+        html_string += "<p>"
         tables.append(f"myTable{len(tables)}")
-        html_string.append(
-            html_helpers.html_create_table_head(
-                tables[-1],
-                [
-                    ("Fuzzer", ""),
-                    ("Calltree file", ""),
-                    ("Program data file", ""),
-                    ("Coverage file", ""),
-                ],
-            ))
+        html_string += html_helpers.html_create_table_head(
+            tables[-1], [("Fuzzer", ""), ("Calltree file", ""),
+                         ("Program data file", ""), ("Coverage file", "")])
         for profile in profiles:
             if profile.coverage is None:
                 continue
@@ -99,33 +84,28 @@ class MetadataAnalysis(analysis.AnalysisInterface):
                 cov_prof = profile.coverage.coverage_files[idx]
                 cov_prof = os.path.basename(cov_prof)
                 cov_prof_files.append(cov_prof)
-                coverage_file_link_str += f'<a href="{cov_prof}">{cov_prof}</a>'
+                coverage_file_link_str += f"<a href=\"{cov_prof}\">{cov_prof}</a>"
                 if idx < len(profile.coverage.coverage_files) - 1:
                     coverage_file_link_str += ","
 
             json_report.add_fuzzer_key_value_to_report(
-                profile.identifier,
-                "metadata-files",
-                {
+                profile.identifier, "metadata-files", {
                     "calltree": base_datafile,
                     "program-data": base_yamlfile,
-                    "coverage": cov_prof_files,
-                },
-                out_dir,
-            )
-            html_string.append(
-                html_helpers.html_table_add_row([
-                    profile.identifier,
-                    f'<a href="{base_datafile}">{base_datafile}</a>',
-                    f'<a href="{base_yamlfile}">{base_yamlfile}</a>',
-                    f"{coverage_file_link_str}",
-                ]))
+                    "coverage": cov_prof_files
+                }, out_dir)
+            html_string += html_helpers.html_table_add_row([
+                profile.identifier,
+                f"<a href=\"{base_datafile}\">{base_datafile}</a>",
+                f"<a href=\"{base_yamlfile}\">{base_yamlfile}</a>",
+                f"{coverage_file_link_str}"
+            ])
 
-        html_string.append("</p>")
+        html_string += "</p>"
 
-        html_string.append("</div>")  # .collapsible
-        html_string.append("</div>")  # report-box
+        html_string += "</div>"  # .collapsible
+        html_string += "</div>"  # report-box
 
-        logger.info("- Completed analysis %s", self.get_name())
+        logger.info('- Completed analysis %s', self.get_name())
 
-        return "".join(html_string)
+        return html_string

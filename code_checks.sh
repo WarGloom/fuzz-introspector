@@ -27,7 +27,7 @@ echo "flake8 check post process"
 (cd src/ && flake8 --ignore E125,W503,W504,W605 --max-line-length 100)
 
 echo "flake8 check python frontend"
-flake8 --ignore E125,W503,W504,W605 --max-line-length 100 ./frontends/python/*.py
+(cd frontends/python/ && flake8 --ignore E125,W503,W504,W605 --max-line-length 100)
 
 echo "yapf code formatting"
 (yapf -d -r ./src/fuzz_introspector/)
@@ -35,10 +35,9 @@ echo "yapf code formatting"
 (yapf -d -r ./tools/web-fuzzing-introspection/app/webapp/)
 (yapf -d ./tools/web-fuzzing-introspection/app/*.py)
 # Ignore directories created when running launch_*_oss_fuzz.
-(
-	yapf -d -r ./tools/web-fuzzing-introspection/app/static/assets/db \
-		-e tools/web-fuzzing-introspection/app/static/assets/db/oss-fuzz-clone \
-		-e tools/web-fuzzing-introspection/app/static/assets/db/db-projects
+(yapf -d -r ./tools/web-fuzzing-introspection/app/static/assets/db \
+  -e tools/web-fuzzing-introspection/app/static/assets/db/oss-fuzz-clone \
+  -e tools/web-fuzzing-introspection/app/static/assets/db/db-projects \
 )
 
 echo "pylint"

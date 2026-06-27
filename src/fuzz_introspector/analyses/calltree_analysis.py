@@ -13,9 +13,6 @@
 # limitations under the License.
 """Logic related to calltree analysis"""
 
-# pylint: disable=line-too-long,missing-class-docstring,missing-function-docstring
-# pylint: disable=consider-using-f-string,unused-argument
-
 import os
 import logging
 import html
@@ -30,7 +27,6 @@ from typing import (
 )
 
 from fuzz_introspector import analysis
-from fuzz_introspector import json_report
 from fuzz_introspector import utils
 from fuzz_introspector import cfg_load
 from fuzz_introspector import html_helpers
@@ -62,42 +58,17 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         """Helper for setting json string"""
         self.json_string_result = json_string
 
-    def analysis_func(
-        self,
-        table_of_contents: html_helpers.HtmlTableOfContents,
-        tables: List[str],
-        proj_profile: project_profile.MergedProjectProfile,
-        profiles: List[fuzzer_profile.FuzzerProfile],
-        basefolder: str,
-        coverage_url: str,
-        conclusions: List[html_helpers.HTMLConclusion],
-        out_dir,
-    ) -> str:
+    def analysis_func(self,
+                      table_of_contents: html_helpers.HtmlTableOfContents,
+                      tables: List[str],
+                      proj_profile: project_profile.MergedProjectProfile,
+                      profiles: List[fuzzer_profile.FuzzerProfile],
+                      basefolder: str, coverage_url: str,
+                      conclusions: List[html_helpers.HTMLConclusion],
+                      out_dir) -> str:
         """
         Creates the HTML of the calltree. Returns the HTML as a string.
         """
-        if analysis.NativePluginProxy.is_enabled():
-            try:
-                native_result = analysis.get_native_plugin_proxy(
-                ).run_analysis(proj_profile, profiles, ["calltree_analysis"])
-                rows = native_result["calltree_analysis"]["tables"][
-                    "calltree_nodes"]
-                if rows:
-                    row = rows[0]
-                    self.json_string_result = json.dumps([row])
-                    json_report.add_analysis_json_str_as_dict_to_report(
-                        self.get_name(), self.get_json_string_result(),
-                        out_dir)
-                    logger.info(
-                        "[native] CalltreeAnalysis: coverage %.1f%% (%d/%d functions)",
-                        row.get("reach_percentage", 0),
-                        row.get("reached_functions", 0),
-                        row.get("total_functions", 0),
-                    )
-                    return ""
-            except (KeyError, IndexError, TypeError):
-                pass
-
         logger.info("Not implemented")
 
         return ""
@@ -125,11 +96,9 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         logger.info("In calltree")
         # Generate HTML for the calltree
         calltree_html_string = "<h1>Fuzzer calltree</h1>"
-        calltree_html_string += '<div id="calltree-wrapper">'
+        calltree_html_string += "<div id=\"calltree-wrapper\">"
 
-        calltree_html_section_list = [
-            "<div class='call-tree-section-wrapper'>"
-        ]
+        calltree_html_section_string = "<div class='call-tree-section-wrapper'>"
         nodes = cfg_load.extract_all_callsites(
             profile.fuzzer_callsite_calltree)
 
@@ -164,7 +133,7 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
             if i > 0:
                 previous_node = nodes[i - 1]
                 if previous_node.depth == node.depth:
-                    calltree_html_section_list.append("</div>")
+                    calltree_html_section_string += "</div>"
                 elif previous_node.depth > node.depth:
                     # We need to close one coverage-line and one
                     # calltree-line-wrapper for each depth, as well as the
@@ -173,14 +142,14 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                     divs_to_close = node_difference * 2 + 1
                     closing_divs = "</div>" * divs_to_close
 
-                    calltree_html_section_list.append(closing_divs)
+                    calltree_html_section_string += closing_divs
 
             # Add div for line itself.
-            calltree_html_section_list.append(
-                f'<div class="{color_to_be}-background coverage-line">')
-            calltree_html_section_list.append(
-                self._get_span_row(ct_idx_str, indentation, node,
-                                   demangled_name, func_href, callsite_link))
+            calltree_html_section_string += (
+                f"<div class=\"{color_to_be}-background coverage-line\">")
+            calltree_html_section_string += self._get_span_row(
+                ct_idx_str, indentation, node, demangled_name, func_href,
+                callsite_link)
 
             # If we are not at end
             if i < len(nodes) - 1:
@@ -189,9 +158,9 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                 # If depth is increasing then we should open a new div for
                 # folding the calltree.
                 if next_node.depth > node.depth:
-                    calltree_html_section_list.append(f"""<div
+                    calltree_html_section_string += f"""<div
         class="calltree-line-wrapper open level-{int(node.depth)}"
-         data-paddingleft="{indentation}" >""")
+         data-paddingleft="{indentation}" >"""
 
             # If we are at end, then we should close the remainding divs:
             # - the depth
@@ -202,32 +171,24 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                 # calltree-line-wrapper for each depth. Minus one line-wrapper
                 # for the level we did not take.
                 if node.depth == 1:
-                    calltree_html_section_list.append("</div></div>")
+                    calltree_html_section_string += "</div></div>"
                 elif node.depth > 1:
-                    calltree_html_section_list.append("</div>" *
-                                                      int(node.depth - 1) * 2 +
-                                                      "</div></div>")
+                    calltree_html_section_string += (
+                        "</div>" * int(node.depth - 1) * 2 + "</div></div>")
 
         # Close the opening two divs
-        calltree_html_section_list.append("</div>")  # opening node
-        calltree_html_section_list.append(
-            "</div>")  # call-tree-section-wrapper
+        calltree_html_section_string += "</div>"  # opening node
+        calltree_html_section_string += "</div>"  # call-tree-section-wrapper
 
         # Side overview wrapper holds the vertical bitmap image. The actual
         # visualisation happens in javascript rather than here.
-        calltree_html_section_list.append(
-            '<div id="side-overview-wrapper"></div>')
+        calltree_html_section_string += "<div id=\"side-overview-wrapper\"></div>"
 
-        calltree_html_section_string = "".join(calltree_html_section_list)
+        logger.info('calltree_html_section_string: <divs>: %d -- </divs>: %d',
+                    calltree_html_section_string.count("<div"),
+                    calltree_html_section_string.count("</div>"))
 
-        logger.info(
-            "calltree_html_section_string: <divs>: %d -- </divs>: %d",
-            calltree_html_section_string.count("<div"),
-            calltree_html_section_string.count("</div>"),
-        )
-
-        calltree_html_string += (calltree_html_section_string + "</div>"
-                                 )  # calltree-wrapper
+        calltree_html_string += calltree_html_section_string + "</div>"  # calltree-wrapper
         logger.info("Calltree created")
 
         # Write the HTML to a file called calltree_view_XX.html where XX is a counter.
@@ -247,9 +208,8 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         return calltree_html_file
 
     def collect_calltree_nodes(
-        self,
-        branch_blockers: List[analysis.FuzzBranchBlocker],
-        func_call_depth: Optional[cfg_load.CalltreeCallsite],
+        self, branch_blockers: List[analysis.FuzzBranchBlocker],
+        func_call_depth: Optional[cfg_load.CalltreeCallsite]
     ) -> Dict[analysis.FuzzBranchBlocker, cfg_load.CalltreeCallsite]:
         """Map branch blockers to the calltree nodes"""
 
@@ -275,8 +235,8 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                         new_node = all_callsites[i]
                         if depth > new_node.depth:
                             break  # Reached the caller of the node
-                        if (depth == new_node.depth and branch_linenumber
-                                >= new_node.src_linenumber):
+                        if (depth == new_node.depth and
+                                branch_linenumber >= new_node.src_linenumber):
                             found_node = new_node
                     blocker_node_map[blocker] = found_node
                     break
@@ -284,11 +244,8 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         return blocker_node_map
 
     def html_create_dedicated_calltree_file(
-        self,
-        calltree_html_string: str,
-        filename: str,
-        profile: fuzzer_profile.FuzzerProfile,
-    ) -> None:
+            self, calltree_html_string: str, filename: str,
+            profile: fuzzer_profile.FuzzerProfile) -> None:
         """
         Write a wrapped HTML file with the tags needed from fuzz-introspector
         We use this only for wrapping calltrees at the moment, however, down
@@ -299,7 +256,7 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         blocker_infos = {}
         # HTML start
         html_header = html_helpers.html_get_header(
-            title=f"Fuzz introspector: {profile.identifier}")
+            title=f"Fuzz introspector: { profile.identifier }")
         html_header += "<div class='content-wrapper calltree-page'>"
         html_header += '<div class="content-section calltree-content-section">'
         complete_html_string += html_header
@@ -328,7 +285,7 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                     node.cov_ct_idx))] = ""
 
         if fuzz_blocker_table is not None:
-            complete_html_string += '<div class="report-box">'
+            complete_html_string += "<div class=\"report-box\">"
             complete_html_string += "<h1>Fuzz blockers</h1>"
             complete_html_string += fuzz_blocker_table
             complete_html_string += "</div>"
@@ -337,14 +294,14 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
 
         # HTML end
         # close html header and content-section calltree-content-section
-        html_end = "</div></div>"
+        html_end = '</div></div>'
 
         if len(blocker_infos) > 0:
             html_end += "<script>"
-            html_end += f"var fuzz_blocker_infos = '{json.dumps(blocker_infos)}';"
+            html_end += f'var fuzz_blocker_infos = \'{json.dumps(blocker_infos)}\';'
             html_end += "</script>"
 
-        html_end += '<script src="calltree.js"></script>'
+        html_end += "<script src=\"calltree.js\"></script>"
         complete_html_string += html_end
 
         complete_html_string += "</body></html>"
@@ -380,20 +337,19 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                                            key=lambda x: x.cov_forward_reds,
                                            reverse=True)
         for node in nodes_sorted_by_red_ahead:
-            if (node.cov_forward_reds == 0
-                    or len(blocker_list) >= max_blockers_to_extract):
+            if node.cov_forward_reds == 0 or len(
+                    blocker_list) >= max_blockers_to_extract:
                 break
             blocker_list.append(node)
         return blocker_list
 
     def create_fuzz_blocker_table(
-        self,
-        profile: fuzzer_profile.FuzzerProfile,
-        tables: List[str],
-        calltree_file_name: str,
-        fuzz_blockers: Optional[List[cfg_load.CalltreeCallsite]] = None,
-        file_link: Optional[str] = None,
-    ) -> Optional[str]:
+            self,
+            profile: fuzzer_profile.FuzzerProfile,
+            tables: List[str],
+            calltree_file_name: str,
+            fuzz_blockers: Optional[List[cfg_load.CalltreeCallsite]] = None,
+            file_link: Optional[str] = None) -> Optional[str]:
         """
         Creates HTML string for table showing fuzz blockers.
         """
@@ -462,12 +418,8 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         return "".join(html_parts)
 
     def create_branch_blocker_table(
-        self,
-        profile: fuzzer_profile.FuzzerProfile,
-        tables: List[str],
-        file_link: str,
-        max_number_of_blockers: int,
-    ) -> Optional[str]:
+            self, profile: fuzzer_profile.FuzzerProfile, tables: List[str],
+            file_link: str, max_number_of_blockers: int) -> Optional[str]:
         """
         Creates HTML string for table showing branch blockers.
         """
@@ -477,18 +429,17 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         if len(branch_blockers) == 0:
             return None
 
-        random_suffix = "_" + "".join(
+        random_suffix = '_' + ''.join(
             random.choices(string.ascii_lowercase + string.ascii_uppercase,
                            k=7))
 
         blockers_node_map = self.collect_calltree_nodes(
             branch_blockers, profile.fuzzer_callsite_calltree)
 
-        tables.append(f"myTable{len(tables)}")
-
         html_parts = []
         html_parts.append("<p class='no-top-margin'>The followings are "
                           "the branches where fuzzer fails to bypass.</p>")
+        tables.append(f"myTable{len(tables)}")
         branch_table_rows = [
             (
                 "Unique non-covered Complexity",
