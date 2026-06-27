@@ -1,22 +1,11 @@
 name: Mypy
 
 on:
-  workflow_dispatch:
   pull_request:
     paths:
       - 'src/**'
       - 'frontends/python/**'
       - 'oss_fuzz_integration/**'
-      - 'tools/**'
-      - '.github/workflows/mypy.yml'
-  push:
-    branches:
-      - memory-improvements
-    paths:
-      - 'src/**'
-      - 'frontends/python/**'
-      - 'oss_fuzz_integration/**'
-      - 'tools/**'
       - '.github/workflows/mypy.yml'
 permissions: read-all
 jobs:
@@ -25,14 +14,10 @@ jobs:
     name: Mypy
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v2.4.0
-    - name: Set up Python 3.11
+    - name: Set up Python 3.10
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v3.0.0
       with:
-        python-version: "3.11"
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libxml2-dev libxslt-dev
+        python-version: "3.10"
     - name: Install Dependencies
       run: |
         pip install mypy types-PyYAML

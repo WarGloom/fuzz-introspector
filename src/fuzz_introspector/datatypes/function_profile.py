@@ -13,9 +13,6 @@
 # limitations under the License.
 """Function profile"""
 
-# pylint: disable=line-too-long,missing-function-docstring,consider-using-f-string
-# pylint: disable=consider-iterating-dictionary,use-dict-literal
-
 import logging
 
 from typing import (
@@ -30,19 +27,6 @@ from fuzz_introspector import utils
 logger = logging.getLogger(name=__name__)
 
 
-def get_function_name_aliases(function_name: str,
-                              raw_function_name: str = "") -> set[str]:
-    aliases = {function_name, raw_function_name}
-    for alias in list(aliases):
-        if not alias:
-            continue
-        aliases.add(utils.demangle_cpp_func(alias))
-        aliases.add(utils.demangle_rust_func(alias))
-        aliases.add(utils.normalise_str(alias))
-        aliases.add(utils.remove_jvm_generics(alias))
-    return {alias for alias in aliases if alias}
-
-
 class FunctionProfile:
     """
     Class for storing information about a given Function
@@ -50,34 +34,34 @@ class FunctionProfile:
 
     def __init__(self, elem: Dict[Any, Any]) -> None:
         self.function_name = utils.demangle_rust_func(
-            utils.demangle_cpp_func(elem["functionName"]))
-        self.raw_function_name = elem["functionName"]
-        self.function_source_file = elem["functionSourceFile"]
-        self.linkage_type = elem["linkageType"]
-        self.function_linenumber = elem["functionLinenumber"]
-        self.function_line_number_end = elem.get("functionLinenumberEnd", -1)
-        self.return_type = elem["returnType"]
-        self.arg_count = elem["argCount"]
-        self.arg_types = elem["argTypes"]
-        self.arg_names = elem["argNames"]
-        self.bb_count = elem["BBCount"]
-        self.i_count = elem["ICount"]
-        self.edge_count = elem["EdgeCount"]
-        self.cyclomatic_complexity = elem["CyclomaticComplexity"]
+            utils.demangle_cpp_func(elem['functionName']))
+        self.raw_function_name = elem['functionName']
+        self.function_source_file = elem['functionSourceFile']
+        self.linkage_type = elem['linkageType']
+        self.function_linenumber = elem['functionLinenumber']
+        self.function_line_number_end = elem.get('functionLinenumberEnd', -1)
+        self.return_type = elem['returnType']
+        self.arg_count = elem['argCount']
+        self.arg_types = elem['argTypes']
+        self.arg_names = elem['argNames']
+        self.bb_count = elem['BBCount']
+        self.i_count = elem['ICount']
+        self.edge_count = elem['EdgeCount']
+        self.cyclomatic_complexity = elem['CyclomaticComplexity']
         self.functions_reached = utils.load_func_names(
-            elem["functionsReached"], False)
-        self.function_uses = elem["functionUses"]
-        self.function_depth = elem["functionDepth"]
-        self.constants_touched = elem["constantsTouched"]
+            elem['functionsReached'], False)
+        self.function_uses = elem['functionUses']
+        self.function_depth = elem['functionDepth']
+        self.constants_touched = elem['constantsTouched']
         self.branch_profiles = self.load_func_branch_profiles(
-            elem["BranchProfiles"])
-        self.signature = elem.get("signature", "")
+            elem['BranchProfiles'])
+        self.signature = elem.get('signature', '')
 
         # Duplication of functions_reached to keep the original sets
         # of call trees for further processing and analysis. This
         # could avoid loss of call tree information when functions_reached
         # is further propagated by later operations.
-        self.functions_called = utils.load_func_names(elem["functionsReached"],
+        self.functions_called = utils.load_func_names(elem['functionsReached'],
                                                       False)
 
         # Check if this function is accessible or contains special properties and data
@@ -97,34 +81,30 @@ class FunctionProfile:
 
         # Saving callsites for this function
         try:
-            self.callsite = self.load_func_callsites(elem["Callsites"])
+            self.callsite = self.load_func_callsites(elem['Callsites'])
             # Add missed function called for this function
-            functions_called_set = set(self.functions_called)
-            functions_reached_set = set(self.functions_reached)
             for func_name in self.callsite.keys():
-                if func_name not in functions_called_set:
+                if func_name not in self.functions_called:
                     self.functions_called.append(func_name)
-                    functions_called_set.add(func_name)
-                if func_name not in functions_reached_set:
+                if func_name not in self.functions_reached:
                     self.functions_reached.append(func_name)
-                    functions_reached_set.add(func_name)
         except Exception:
             self.callsite = dict()
 
         # Set assert statement handling if exist
-        assert_stmts = elem.get("assertStmts", [])
+        assert_stmts = elem.get('assertStmts', [])
         self.assert_list = []
         for stmt in assert_stmts:
-            condition = stmt.get("condition", "")
-            location = stmt.get("pos", {})
+            condition = stmt.get('condition', '')
+            location = stmt.get('pos', {})
             if location and condition:
                 self.assert_list.append({
-                    "condition":
+                    'condition':
                     condition,
-                    "start_line":
-                    location.get("line_start", -1),
-                    "end_line":
-                    location.get("line_end", -1),
+                    'start_line':
+                    location.get('line_start', -1),
+                    'end_line':
+                    location.get('line_end', -1),
                 })
 
         # These are set later.
@@ -140,26 +120,26 @@ class FunctionProfile:
 
     def to_dict(self, coverage: float = 0.0) -> Dict[str, Any]:
         return {
-            "project": "UnknownProject",
-            "function_name": self.function_name,
-            "function_filename": self.function_source_file,
-            "raw_function_name": self.raw_function_name,
-            "is_reached": bool(self.reached_by_fuzzers),
-            "is_enum_class": self.is_enum,
-            "cyclomatic_complexity": self.cyclomatic_complexity,
-            "function_argument_names": self.arg_names,
-            "function_arguments": self.arg_types,
-            "function_signature": self.signature,
-            "reached_by_fuzzers": self.reached_by_fuzzers,
-            "reached_by_fuzzers_runtime": self.reached_by_fuzzers_runtime,
-            "reached_by_fuzzers_combined": self.reached_by_fuzzers_combined,
-            "return_type": self.return_type,
-            "runtime_coverage_percent": coverage,
-            "source_line_begin": self.function_linenumber,
-            "source_line_end": self.function_line_number_end,
-            "debug_summary": "",  # No debug summary from new frontend yet
-            "total_cyclomatic_complexity": self.total_cyclomatic_complexity,
-            "assert_stmts": self.assert_list,
+            'project': 'UnknownProject',
+            'function_name': self.function_name,
+            'function_filename': self.function_source_file,
+            'raw_function_name': self.raw_function_name,
+            'is_reached': bool(self.reached_by_fuzzers),
+            'is_enum_class': self.is_enum,
+            'cyclomatic_complexity': self.cyclomatic_complexity,
+            'function_argument_names': self.arg_names,
+            'function_arguments': self.arg_types,
+            'function_signature': self.signature,
+            'reached_by_fuzzers': self.reached_by_fuzzers,
+            'reached_by_fuzzers_runtime': self.reached_by_fuzzers_runtime,
+            'reached_by_fuzzers_combined': self.reached_by_fuzzers_combined,
+            'return_type': self.return_type,
+            'runtime_coverage_percent': coverage,
+            'source_line_begin': self.function_linenumber,
+            'source_line_end': self.function_line_number_end,
+            'debug_summary': '',  # No debug summary from new frontend yet
+            'total_cyclomatic_complexity': self.total_cyclomatic_complexity,
+            'assert_stmts': self.assert_list,
         }
 
     @property
@@ -180,55 +160,55 @@ class FunctionProfile:
     def load_func_callsites(self, yaml_callsites: Any) -> Dict[str, List[str]]:
         cs_loaded: Dict[str, List[str]] = {}
         for callsite in yaml_callsites:
-            if callsite["Dst"] not in cs_loaded:
-                callsite_list: List[str] = []
-                cs_loaded[callsite["Dst"]] = callsite_list
+            if callsite['Dst'] not in cs_loaded.keys():
+                callsite_list = []
             else:
-                callsite_list = cs_loaded[callsite["Dst"]]
+                callsite_list = cs_loaded[callsite['Dst']]
 
-            callsite_src = (callsite["Src"].split(",")[0].replace(
-                ":", "#%s:" % self.function_name))
+            callsite_src = callsite['Src'].split(',')[0].replace(
+                ':', '#%s:' % self.function_name)
             callsite_list.append(callsite_src)
+            cs_loaded.update({callsite['Dst']: callsite_list})
 
         return cs_loaded
 
     # Special functions for discovering accessibility, status and data for JVM methods.
 
     def _is_function_acccessible(self, elem: Dict[Any, Any]) -> bool:
-        if "JavaMethodInfo" in elem and elem["JavaMethodInfo"]:
-            return (bool(elem["JavaMethodInfo"]["public"])
-                    and bool(elem["JavaMethodInfo"]["classPublic"])
-                    and bool(elem["JavaMethodInfo"]["concrete"])
-                    and bool(elem["JavaMethodInfo"]["classConcrete"]))
+        if "JavaMethodInfo" in elem and elem['JavaMethodInfo']:
+            return (bool(elem['JavaMethodInfo']['public'])
+                    and bool(elem['JavaMethodInfo']['classPublic'])
+                    and bool(elem['JavaMethodInfo']['concrete'])
+                    and bool(elem['JavaMethodInfo']['classConcrete']))
 
         return True
 
     def _is_jvm_library(self, elem: Dict[Any, Any]) -> bool:
-        if "JavaMethodInfo" in elem and elem["JavaMethodInfo"]:
-            return bool(elem["JavaMethodInfo"]["javaLibraryMethod"])
+        if "JavaMethodInfo" in elem and elem['JavaMethodInfo']:
+            return bool(elem['JavaMethodInfo']['javaLibraryMethod'])
 
         return False
 
     def _is_enum_class(self, elem: Dict[Any, Any]) -> bool:
-        if "JavaMethodInfo" in elem and elem["JavaMethodInfo"]:
-            return bool(elem["JavaMethodInfo"]["classEnum"])
+        if "JavaMethodInfo" in elem and elem['JavaMethodInfo']:
+            return bool(elem['JavaMethodInfo']['classEnum'])
 
         return False
 
     def _is_static(self, elem: Dict[Any, Any]) -> bool:
-        if "JavaMethodInfo" in elem and elem["JavaMethodInfo"]:
-            return bool(elem["JavaMethodInfo"]["static"])
+        if "JavaMethodInfo" in elem and elem['JavaMethodInfo']:
+            return bool(elem['JavaMethodInfo']['static'])
 
         return False
 
     def _need_close(self, elem: Dict[Any, Any]) -> bool:
-        if "JavaMethodInfo" in elem and elem["JavaMethodInfo"]:
-            return bool(elem["JavaMethodInfo"]["needClose"])
+        if "JavaMethodInfo" in elem and elem['JavaMethodInfo']:
+            return bool(elem['JavaMethodInfo']['needClose'])
 
         return False
 
     def _get_exceptions(self, elem: Dict[Any, Any]) -> List[str]:
-        if "JavaMethodInfo" in elem and elem["JavaMethodInfo"]:
-            return elem["JavaMethodInfo"]["exceptions"]
+        if "JavaMethodInfo" in elem and elem['JavaMethodInfo']:
+            return elem['JavaMethodInfo']['exceptions']
 
         return []

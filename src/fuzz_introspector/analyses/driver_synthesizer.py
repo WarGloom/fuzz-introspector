@@ -13,11 +13,6 @@
 # limitations under the License.
 """Analysis for synthesizing fuzz drivers."""
 
-# pylint: disable=line-too-long,missing-class-docstring,invalid-name,consider-using-f-string
-# pylint: disable=logging-fstring-interpolation,logging-not-lazy,use-dict-literal
-# pylint: disable=use-list-literal,consider-using-enumerate,consider-using-dict-items
-# pylint: disable=too-many-nested-blocks
-
 import logging
 
 from typing import (
@@ -60,25 +55,23 @@ class DriverSynthesizer(analysis.AnalysisInterface):
     def set_json_string_result(self, json_string):
         self.json_string_result = json_string
 
-    def analysis_func(
-        self,
-        table_of_contents: html_helpers.HtmlTableOfContents,
-        tables: List[str],
-        proj_profile: project_profile.MergedProjectProfile,
-        profiles: List[fuzzer_profile.FuzzerProfile],
-        basefolder: str,
-        coverage_url: str,
-        conclusions: List[html_helpers.HTMLConclusion],
-        out_dir,
-        fuzz_targets=None,
-    ) -> str:
+    def analysis_func(self,
+                      table_of_contents: html_helpers.HtmlTableOfContents,
+                      tables: List[str],
+                      proj_profile: project_profile.MergedProjectProfile,
+                      profiles: List[fuzzer_profile.FuzzerProfile],
+                      basefolder: str,
+                      coverage_url: str,
+                      conclusions: List[html_helpers.HTMLConclusion],
+                      out_dir,
+                      fuzz_targets=None) -> str:
         logger.info(f" - Running analysis {self.get_name()}")
         html_string = ""
-        html_string += '<div class="report-box">'
+        html_string += "<div class=\"report-box\">"
         html_string += html_helpers.html_add_header_with_link(
             "Fuzz driver synthesis", html_helpers.HTML_HEADING.H1,
             table_of_contents)
-        html_string += '<div class="collapsible">'
+        html_string += "<div class=\"collapsible\">"
 
         if fuzz_targets is None or len(fuzz_targets) == 0:
             A1 = optimal_targets.OptimalTargets()
@@ -89,10 +82,9 @@ class DriverSynthesizer(analysis.AnalysisInterface):
 
         target_codes: Dict[str, DriverContents] = dict()
 
-        fuzzer_code = '#include "ada_fuzz_header.h"\n'
+        fuzzer_code = "#include \"ada_fuzz_header.h\"\n"
         fuzzer_code += "\n"
-        fuzzer_code += (
-            "int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {\n")
+        fuzzer_code += "int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {\n"
         fuzzer_code += "  af_safe_gb_init(data, size);\n\n"
 
         var_idx = 0
@@ -103,17 +95,13 @@ class DriverSynthesizer(analysis.AnalysisInterface):
             for arg_type in tfd.arg_types:
                 arg_type = arg_type.replace(" ", "")
                 if arg_type == "char**":
-                    code_var_decl += (
-                        "  char **new_var%d = af_get_double_char_p();\n" %
-                        var_idx)
+                    code_var_decl += "  char **new_var%d = af_get_double_char_p();\n" % var_idx
                     # We dont want the below line but instead we want to ensure
                     # we always return something valid.
                     var_order.append("new_var%d" % var_idx)
                     var_idx += 1
                 elif arg_type == "char*":
-                    code_var_decl += (
-                        "  char *new_var%d = ada_safe_get_char_p();\n" %
-                        var_idx)
+                    code_var_decl += "  char *new_var%d = ada_safe_get_char_p();\n" % var_idx
                     var_order.append("new_var%d" % var_idx)
                     var_idx += 1
                 elif arg_type == "int":
@@ -126,10 +114,8 @@ class DriverSynthesizer(analysis.AnalysisInterface):
                     var_idx += 1
                 elif "struct" in arg_type and "*" in arg_type and "**" not in arg_type:
                     code_var_decl += "  %s new_var%d = calloc(sizeof(%s), 1);\n" % (
-                        arg_type.replace(".", " "),
-                        var_idx,
-                        arg_type.replace(".", " ").replace("*", ""),
-                    )
+                        arg_type.replace(".", " "), var_idx,
+                        arg_type.replace(".", " ").replace("*", ""))
                     var_order.append("new_var%d" % var_idx)
                     var_idx += 1
                 else:
@@ -174,16 +160,13 @@ class DriverSynthesizer(analysis.AnalysisInterface):
         # Create the necessary HTML code for displaying the fuzz drivers
         html_string += html_helpers.html_add_header_with_link(
             "New fuzzers", html_helpers.HTML_HEADING.H3, table_of_contents)
-        html_string += (
-            "<p>The below fuzzers are templates and suggestions for how "
-            "to target the set of optimal functions above</p>")
+        html_string += "<p>The below fuzzers are templates and suggestions for how " \
+                       "to target the set of optimal functions above</p>"
 
         for filename in final_fuzzers:
             html_string += html_helpers.html_add_header_with_link(
-                str(filename.split("/")[-1]),
-                html_helpers.HTML_HEADING.H4,
-                table_of_contents,
-            )
+                str(filename.split("/")[-1]), html_helpers.HTML_HEADING.H4,
+                table_of_contents)
             html_string += f"<b>Target file:</b>{filename}<br>"
             all_functions = ", ".join(
                 [f.function_name for f in final_fuzzers[filename].target_fds])

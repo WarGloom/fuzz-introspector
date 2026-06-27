@@ -1,3 +1,8 @@
+// TODO AdamKorcz: This is too hacky. It should be handled during code generation.
+//$("h1:first").addClass("no-pseudo");
+//$("h1:first").css("padding-left", "0px")
+
+
 $( document ).ready(function() {
 
   $('.high-level-conclusion').click(function(){
@@ -178,9 +183,9 @@ function populateFunctionsHitTable() {
   // Add rows for "Functions hit" table for each fuzzer
   for (const [key, value] of Object.entries(fuzzer_table_data)) {
     var table = $('#'+key).DataTable();
-    table.rows.add(value);
-    table.draw();
+    table.rows.add(fuzzer_table_data[key]);
   }
+  table.draw();
 }
 function populateFuzzersOverviewTable(value) {
   console.log(value)

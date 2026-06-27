@@ -8,13 +8,6 @@ on:
       - 'tools/web-fuzzing-introspection/**'
       - '.github/helper/**'
       - '.github/workflows/webapp-api-test.yml'
-  push:
-    branches:
-      - memory-improvements
-    paths:
-      - 'tools/web-fuzzing-introspection/**'
-      - '.github/helper/**'
-      - '.github/workflows/webapp-api-test.yml'
 permissions: read-all
 jobs:
   build:
@@ -22,14 +15,12 @@ jobs:
     name: webapp-api-test
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v2.4.0
-    - name: Set up Python 3.14
+    - name: Set up Python 3.10
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v3.0.0
       with:
-        python-version: "3.14"
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libxml2-dev libxslt-dev python3-venv
+        python-version: "3.10"
+    - name: Install venv
+      run: sudo apt-get install python3-venv
     - name: Set up venv
       run: python3 -m venv tools/web-fuzzing-introspection/.venv
     - name: Active venv dependencies
