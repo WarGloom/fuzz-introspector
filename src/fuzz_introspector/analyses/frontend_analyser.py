@@ -26,6 +26,7 @@ from fuzz_introspector.datatypes import (
     fuzzer_profile,
     function_profile,
 )
+from fuzz_introspector.exceptions import DataLoaderError, FuzzIntrospectorError
 
 from fuzz_introspector.frontends import oss_fuzz, tree_sitter_utils
 
@@ -164,6 +165,20 @@ class FrontendAnalyser(analysis.AnalysisInterface):
         self.directory.add(os.path.abspath(directory))
         self.language = language
 
+    def _resolve_source_directory(self, basefolder: str) -> str:
+        """Resolve a concrete source root for the second frontend run."""
+        source_candidates = [os.environ.get("SRC", ""), basefolder]
+        root_dir = os.path.abspath(os.sep)
+        for source_candidate in source_candidates:
+            if not source_candidate:
+                continue
+            abs_candidate = os.path.abspath(source_candidate)
+            if abs_candidate == root_dir:
+                continue
+            if os.path.isdir(abs_candidate):
+                return abs_candidate
+        return ""
+
     def analysis_func(
         self,
         table_of_contents: html_helpers.HtmlTableOfContents,
@@ -178,8 +193,19 @@ class FrontendAnalyser(analysis.AnalysisInterface):
         """Analysis function. Perform another frontend run and extract all
         test files in the project for additional analysis."""
         # Configure base directory and detect language
-        basefolder = os.environ.get("SRC", "/src")
-        language = utils.detect_language(basefolder)
+        source_directory = self._resolve_source_directory(basefolder)
+        if not source_directory:
+            logger.warning(
+                "Skipping FrontendAnalyser: no source directory is available")
+            return ""
+
+        detected_language = utils.detect_language(source_directory)
+        language = detected_language or proj_profile.language
+        if not language:
+            logger.warning(
+                "Skipping FrontendAnalyser: could not detect language")
+            return ""
+        self.set_base_information(source_directory, language)
 
         # Prepare separate out directory
         temp_dir = os.path.join(out_dir, "second-frontend-run")
@@ -188,15 +214,18 @@ class FrontendAnalyser(analysis.AnalysisInterface):
         # Perform a second run of the frontend on the target project. This
         # ensure non-compiled source codes ignored by LTO are also included
         # in the analysis.
-        oss_fuzz.analyse_folder(language=language,
-                                directory=basefolder,
-                                out=temp_dir,
-                                module_only=True)
+        try:
+            oss_fuzz.analyse_folder(language=language,
+                                    directory=source_directory,
+                                    out=temp_dir,
+                                    module_only=True)
 
-        # Generate FI backend analysis report from second frontend run result
-        introspection_proj = analysis.IntrospectionProject(
-            proj_profile.language, temp_dir, "")
-        introspection_proj.load_data_files(True, "", temp_dir)
+            introspection_proj = analysis.IntrospectionProject(
+                proj_profile.language, temp_dir, "")
+            introspection_proj.load_data_files(True, "", temp_dir)
+        except (DataLoaderError, FuzzIntrospectorError) as err:
+            logger.warning("Skipping FrontendAnalyser second run: %s", err)
+            return ""
 
         # Calls standalone analysis
         self.standalone_analysis(introspection_proj.proj_profile,

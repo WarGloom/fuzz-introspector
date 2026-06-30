@@ -58,7 +58,9 @@ def test_frontend_analyser_uses_second_run_artifacts_for_introspection_project(
     monkeypatch.setattr(frontend_analyser.analysis, "IntrospectionProject",
                         FakeIntrospectionProject)
     monkeypatch.setattr(analyser, "standalone_analysis", lambda *args: None)
-    monkeypatch.setenv("SRC", "/src/project")
+    source_dir = tmp_path / "src" / "project"
+    source_dir.mkdir(parents=True)
+    monkeypatch.setenv("SRC", str(source_dir))
 
     proj_profile = SimpleNamespace(language="c-cpp")
     analyser.analysis_func(
@@ -73,9 +75,37 @@ def test_frontend_analyser_uses_second_run_artifacts_for_introspection_project(
     )
 
     expected_temp_dir = str(tmp_path / "second-frontend-run")
-    assert captured["detected_path"] == "/src/project"
+    assert captured["detected_path"] == str(source_dir)
     assert captured["analyse_folder"]["out"] == expected_temp_dir
     assert captured["project_ctor"]["target_folder"] == expected_temp_dir
     assert captured["project_ctor"]["coverage_url"] == ""
     assert captured["load_data_files"]["correlation_file"] == ""
     assert captured["load_data_files"]["out_dir"] == expected_temp_dir
+
+
+def test_frontend_analyser_skips_when_source_directory_is_unavailable(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    analyser = frontend_analyser.FrontendAnalyser()
+    analyser.directory = set()
+
+    def fail_analyse_folder(**_kwargs):
+        raise AssertionError("second frontend run should be skipped")
+
+    monkeypatch.delenv("SRC", raising=False)
+    monkeypatch.setattr(frontend_analyser.oss_fuzz, "analyse_folder",
+                        fail_analyse_folder)
+
+    result = analyser.analysis_func(
+        table_of_contents=SimpleNamespace(),
+        tables=[],
+        proj_profile=SimpleNamespace(language="c-cpp"),
+        profiles=[],
+        basefolder=str(tmp_path / "missing-src"),
+        coverage_url="",
+        conclusions=[],
+        out_dir=str(tmp_path),
+    )
+
+    assert result == ""
