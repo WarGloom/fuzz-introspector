@@ -143,6 +143,44 @@ def test_run_analysis_on_dir_skip_html_report_skips_renderer(
     assert "introspector-project" in return_values
 
 
+def test_run_analysis_on_dir_uses_target_local_correlation_file(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    correlation_file = tmp_path / "exe_to_fuzz_introspector_logs.yaml"
+    correlation_file.write_text("pairings: []\n", encoding="utf-8")
+    captured_load_args: dict[str, Any] = {}
+
+    class FakeIntrospectionProject:
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            del args, kwargs
+
+        def load_data_files(self, *args: Any) -> None:
+            captured_load_args["args"] = args
+
+    monkeypatch.setattr(commands.analysis, "IntrospectionProject",
+                        FakeIntrospectionProject)
+
+    exit_code, _ = commands.run_analysis_on_dir(
+        target_folder=str(tmp_path),
+        coverage_url="",
+        analyses_to_run=[],
+        correlation_file="",
+        enable_all_analyses=False,
+        report_name="correlation-test",
+        language="c-cpp",
+        output_json=[],
+        parallelise=False,
+        dump_files=False,
+        out_dir=str(tmp_path),
+        skip_html_report=True,
+    )
+
+    assert exit_code == 0
+    assert captured_load_args["args"][1] == str(correlation_file)
+
+
 def test_cli_main_report_forwards_skip_html_report(monkeypatch) -> None:
     captured_kwargs = {}
 

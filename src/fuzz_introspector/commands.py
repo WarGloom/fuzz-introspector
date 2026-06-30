@@ -36,6 +36,19 @@ from fuzz_introspector.frontends import oss_fuzz
 
 logger = logging.getLogger(name=__name__)
 
+_DEFAULT_CORRELATION_FILENAME = "exe_to_fuzz_introspector_logs.yaml"
+
+
+def _resolve_correlation_file(target_folder: str,
+                              correlation_file: str) -> str:
+    if correlation_file:
+        return correlation_file
+
+    candidate = os.path.join(target_folder, _DEFAULT_CORRELATION_FILENAME)
+    if os.path.isfile(candidate):
+        return candidate
+    return correlation_file
+
 
 def _resolve_report_exclusion_config_path(config_path: str | None) -> str:
     """Resolve report exclusion config path from explicit or default locations."""
@@ -298,6 +311,8 @@ def run_analysis_on_dir(
             if analysis_interface.get_name() not in analyses_to_run:
                 analyses_to_run.append(analysis_interface.get_name())
 
+    correlation_file = _resolve_correlation_file(target_folder,
+                                                 correlation_file)
     introspection_proj = analysis.IntrospectionProject(language, target_folder,
                                                        coverage_url)
     introspection_proj.load_data_files(
