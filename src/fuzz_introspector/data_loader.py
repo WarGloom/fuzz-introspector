@@ -39,6 +39,18 @@ FI_PROFILE_WORKERS_ENV = "FI_PROFILE_WORKERS"
 FI_REACHABILITY_BACKEND_ENV = "FI_REACHABILITY_BACKEND"
 FI_REACHABILITY_BACKEND_RUST = "rust"
 FI_PROFILE_WORKERS_RUST_DEFAULT = 3
+_GENERATED_PROFILE_DIR_NAMES = {"second-frontend-run"}
+
+
+def _filter_generated_profile_data_files(data_files: List[str]) -> List[str]:
+    filtered_files = []
+    for data_file in data_files:
+        path_parts = os.path.normpath(data_file).split(os.sep)
+        if any(part in _GENERATED_PROFILE_DIR_NAMES for part in path_parts):
+            logger.debug("Skipping generated profile data file: %s", data_file)
+            continue
+        filtered_files.append(data_file)
+    return filtered_files
 
 
 def _get_profile_executor_backend() -> tuple[
@@ -333,6 +345,7 @@ def load_all_profiles(
         target_folder, "targetCalltree.txt$")
     logger.info(target_calltrees)
     data_files.extend(target_calltrees)
+    data_files = _filter_generated_profile_data_files(data_files)
 
     logger.info(" - found %d profiles to load", len(data_files))
     preloaded_profile_yaml = _load_profiles_yaml_batch(data_files)

@@ -69,6 +69,40 @@ def _fake_profile_data_files(_root: str, pattern: str):
     return []
 
 
+def test_load_all_profiles_skips_generated_second_frontend_run(monkeypatch):
+
+    def fake_files(root: str, pattern: str):
+        if "fuzzerLogFile" not in pattern:
+            return []
+        return [
+            os.path.join(root, "fuzzerLogFile-primary.data"),
+            os.path.join(root, "second-frontend-run",
+                         "fuzzerLogFile-generated.data"),
+        ]
+
+    loaded = []
+
+    def fake_load_profile(data_file: str, _language: str,
+                          _preloaded_yaml=None):
+        loaded.append(data_file)
+        return data_file, _ProfileStub(os.path.basename(data_file))
+
+    monkeypatch.setattr(data_loader.utils, "get_all_files_in_tree_with_regex",
+                        fake_files)
+    monkeypatch.setattr(data_loader, "_load_profile_with_preloaded_yaml",
+                        fake_load_profile)
+    monkeypatch.setattr(data_loader, "_load_profiles_yaml_batch", lambda _x: {})
+
+    profiles = data_loader.load_all_profiles("/tmp/project",
+                                             "c-cpp",
+                                             parallelise=False)
+
+    assert [profile.name for profile in profiles] == [
+        "fuzzerLogFile-primary.data"
+    ]
+    assert loaded == [os.path.join("/tmp/project", "fuzzerLogFile-primary.data")]
+
+
 def test_resolve_profile_worker_count_default_uses_cpu_count(monkeypatch):
     monkeypatch.delenv(data_loader.FI_PROFILE_WORKERS_ENV, raising=False)
     monkeypatch.delenv(data_loader.FI_REACHABILITY_BACKEND_ENV, raising=False)
