@@ -137,6 +137,7 @@ def test_create_fuzzer_detailed_section_skips_bitmap_for_large_calltree(
     class DummyProfile:
         identifier = "my/fuzzer"
         branch_blockers = []
+        wrote_stats = False
 
         def get_callsites(self):
             return [
@@ -144,6 +145,9 @@ def test_create_fuzzer_detailed_section_skips_bitmap_for_large_calltree(
                 SimpleNamespace(cov_color="green"),
                 SimpleNamespace(cov_color="yellow"),
             ]
+
+        def write_stats_to_summary_file(self, _out_dir):
+            self.wrote_stats = True
 
     monkeypatch.setenv("FI_CALLTREE_BITMAP_MAX_NODES", "2")
     monkeypatch.setattr(
@@ -159,9 +163,10 @@ def test_create_fuzzer_detailed_section_skips_bitmap_for_large_calltree(
     )
 
     with caplog.at_level("INFO"):
+        profile = DummyProfile()
         html = html_report.create_fuzzer_detailed_section(
             proj_profile=SimpleNamespace(has_coverage_data=lambda: False),
-            profile=DummyProfile(),
+            profile=profile,
             table_of_contents=html_report.html_helpers.HtmlTableOfContents(),
             tables=[],
             profile_idx=0,
@@ -174,6 +179,7 @@ def test_create_fuzzer_detailed_section_skips_bitmap_for_large_calltree(
 
     assert "Call tree overview bitmap omitted" in html
     assert '<img class="colormap"' not in html
+    assert profile.wrote_stats is True
     assert any("Skipping calltree overview bitmap" in record.message
                for record in caplog.records)
 
@@ -199,6 +205,9 @@ def test_create_fuzzer_detailed_section_does_not_embed_stale_bitmap_when_skipped
                 SimpleNamespace(cov_color="green"),
                 SimpleNamespace(cov_color="yellow"),
             ]
+
+        def write_stats_to_summary_file(self, _out_dir):
+            return None
 
     stale_colormap = tmp_path / "my_fuzzer_colormap.png"
     stale_colormap.write_bytes(b"stale")

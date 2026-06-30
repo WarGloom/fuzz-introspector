@@ -1277,6 +1277,8 @@ def create_fuzzer_detailed_section(
         if not color_list:
             color_list = [cs.cov_color for cs in callsites]
 
+    profile.write_stats_to_summary_file(out_dir)
+
     # At this point we want to ensure there is coverage in order to proceed.
     # If there is no code coverage then the remaining will be quite bloat
     # in that it's all dependent on code coverage. As such we exit early
@@ -1301,8 +1303,6 @@ def create_fuzzer_detailed_section(
             table_of_contents,
             calltree_analysis,
         ))
-
-    profile.write_stats_to_summary_file(out_dir)
 
     # Runtime code coverage section
     html_parts.append(
