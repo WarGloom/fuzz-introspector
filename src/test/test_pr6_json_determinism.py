@@ -420,6 +420,12 @@ def test_json_report_summary_update_batch_coalesces_updates(
         json_report.add_fuzzer_key_value_to_report("fuzzer", "metadata",
                                                    {"value": "present"},
                                                    str(tmp_path))
+        json_report.add_fuzzer_key_value_to_report(
+            "/usr/lib/gcc/../../include/c++/9/bits/stl_vector.h", "stats",
+            {"value": "path-like"}, str(tmp_path))
+        json_report.add_fuzzer_key_value_to_report("analyses", "stats",
+                                                   {"value": "reserved"},
+                                                   str(tmp_path))
         json_report.add_project_key_value_to_report("stats", {"coverage": 12},
                                                     str(tmp_path))
 
@@ -432,7 +438,15 @@ def test_json_report_summary_update_batch_coalesces_updates(
             "value": 2
         },
     }
+    path_like_fuzzer_name = "/usr/lib/gcc/../../include/c++/9/bits/stl_vector.h"
     assert captured["fuzzers"]["fuzzer"]["metadata"] == {"value": "present"}
+    assert captured["fuzzer"]["metadata"] == {"value": "present"}
+    assert captured["fuzzers"][path_like_fuzzer_name]["stats"] == {
+        "value": "path-like"
+    }
+    assert path_like_fuzzer_name not in captured
+    assert captured["fuzzers"]["analyses"]["stats"] == {"value": "reserved"}
+    assert "stats" not in captured["analyses"]
     assert captured[constants.JSON_REPORT_KEY_PROJECT]["stats"] == {
         "coverage": 12
     }

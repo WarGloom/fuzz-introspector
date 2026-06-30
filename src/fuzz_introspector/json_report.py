@@ -26,6 +26,22 @@ logger = logging.getLogger(name=__name__)
 
 _SUMMARY_BATCHES: Dict[str, Dict[Any, Any]] = {}
 _SUMMARY_BATCH_DEPTH: Dict[str, int] = {}
+_LEGACY_FUZZER_TOP_LEVEL_RESERVED_KEYS = {
+    constants.JSON_REPORT_KEY_PROJECT,
+    "analyses",
+    "fuzzers",
+    "project",
+}
+
+
+def should_mirror_legacy_fuzzer_key(fuzzer_name: str) -> bool:
+    if not fuzzer_name:
+        return False
+    if fuzzer_name in _LEGACY_FUZZER_TOP_LEVEL_RESERVED_KEYS:
+        return False
+    if "/" in fuzzer_name or "\\" in fuzzer_name:
+        return False
+    return ".." not in fuzzer_name
 
 
 def _load_or_init_summary_buffer(out_dir: str) -> Dict[Any, Any]:
@@ -143,6 +159,11 @@ def add_fuzzer_key_value_to_report(fuzzer_name: str, key: str, value: Any,
         if fuzzer_name not in fuzzers_target["fuzzers"]:
             fuzzers_target["fuzzers"][fuzzer_name] = {}
         fuzzers_target["fuzzers"][fuzzer_name][key] = value
+        if not should_mirror_legacy_fuzzer_key(fuzzer_name):
+            return
+        if fuzzer_name not in fuzzers_target:
+            fuzzers_target[fuzzer_name] = {}
+        fuzzers_target[fuzzer_name][key] = value
 
     _update_summary(out_dir, _mutate)
 

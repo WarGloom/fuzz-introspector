@@ -952,10 +952,13 @@ class TestPR6RetryConflictPathSafety:
         monkeypatch.setattr(constants, "should_dump_files", True)
 
         coordinator = merge_coordinator.MergeCoordinator(out_dir)
+        path_like_fuzzer_name = (
+            "/usr/lib/gcc/x86_64-linux-gnu/9/../../../../include/c++/9/"
+            "bits/stl_vector.h")
         intent = merge_intents.create_json_upsert_intent_from_parts(
             [
                 "fuzzers",
-                "/usr/lib/gcc/x86_64-linux-gnu/9/../../../../include/c++/9/bits/stl_vector.h",
+                path_like_fuzzer_name,
                 "stats",
             ],
             {
@@ -980,20 +983,59 @@ class TestPR6RetryConflictPathSafety:
 
         summary_contents = coordinator.merged_json_report
         fuzzers = summary_contents.get("fuzzers", {})
-        assert (
-            "/usr/lib/gcc/x86_64-linux-gnu/9/../../../../include/c++/9/"
-            "bits/stl_vector.h"
-        ) in fuzzers
+        assert path_like_fuzzer_name in fuzzers
 
         summary_path = os.path.join(out_dir, constants.SUMMARY_FILE)
         with open(summary_path, "r", encoding="utf-8") as summary_file:
             summary_json = json.load(summary_file)
         assert "/usr/lib/gcc/x86_64-linux-gnu/9/" not in summary_json
+        assert path_like_fuzzer_name not in summary_json
         assert "fuzzers" in summary_json
-        assert (
-            "/usr/lib/gcc/x86_64-linux-gnu/9/../../../../include/c++/9/"
-            "bits/stl_vector.h"
-        ) in summary_json["fuzzers"]
+        assert path_like_fuzzer_name in summary_json["fuzzers"]
+
+    def test_json_upsert_mirrors_simple_fuzzer_key_for_legacy_summary(
+        self, conflict_test_data: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out_dir = conflict_test_data["out_dir"]
+        os.makedirs(out_dir, exist_ok=True)
+        monkeypatch.setattr(constants, "should_dump_files", True)
+
+        coordinator = merge_coordinator.MergeCoordinator(out_dir)
+        intent = merge_intents.create_json_upsert_intent_from_parts(
+            ["fuzzers", "fuzz_test", "stats"],
+            {
+                "total-basic-blocks": 1,
+                "total-cyclomatic-complexity": 2,
+                "file-target-count": 3,
+            },
+        )
+        coordinator.add_analysis_result(
+            "FuzzEngineInputAnalysis",
+            merge_coordinator.AnalysisWorkerResult(
+                analysis_name="FuzzEngineInputAnalysis",
+                status="success",
+                display_html=False,
+                merge_intents=[intent],
+            ).to_envelope(),
+        )
+
+        success, merged = coordinator.merge_results()
+        assert success
+        assert not merged.get("errors")
+
+        summary_path = os.path.join(out_dir, constants.SUMMARY_FILE)
+        with open(summary_path, "r", encoding="utf-8") as summary_file:
+            summary_json = json.load(summary_file)
+        assert summary_json["fuzzers"]["fuzz_test"]["stats"] == {
+            "total-basic-blocks": 1,
+            "total-cyclomatic-complexity": 2,
+            "file-target-count": 3,
+        }
+        assert summary_json["fuzz_test"]["stats"] == {
+            "total-basic-blocks": 1,
+            "total-cyclomatic-complexity": 2,
+            "file-target-count": 3,
+        }
 
     def _make_artifact_intent(
         self, relative_path: str, content: bytes

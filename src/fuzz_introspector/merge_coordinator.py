@@ -19,7 +19,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
-from fuzz_introspector import constants
+from fuzz_introspector import constants, json_report
 from fuzz_introspector.merge_intents import (
     MergeIntentValidationError,
     PathSafetyError,
@@ -299,6 +299,12 @@ class MergeCoordinator:
                     summary_contents["fuzzers"][fuzzer_name] = {}
                 self._merge_nested_dict(
                     summary_contents["fuzzers"][fuzzer_name], updates)
+                if not json_report.should_mirror_legacy_fuzzer_key(
+                        fuzzer_name):
+                    continue
+                if fuzzer_name not in summary_contents:
+                    summary_contents[fuzzer_name] = {}
+                self._merge_nested_dict(summary_contents[fuzzer_name], updates)
 
         try:
             with open(summary_path, "w") as summary_fd:
