@@ -141,6 +141,18 @@ def _filter_profiles_native(
                        backend_loaders.BACKEND_GO):
         return None
 
+    for profile in profiles:
+        binary_executable = getattr(profile, "binary_executable", "")
+        if (binary_executable and profile._matches_exclude_pattern(
+                profile.fuzzer_source_file)):
+            logger.info(
+                "Falling back to Python profile filter for correlated "
+                "executable with excluded fuzzer source: %s -> %s",
+                profile.fuzzer_source_file,
+                binary_executable,
+            )
+            return None
+
     binary_name = _FILTER_BINARY_NAMES[backend]
     bin_path = _resolve_filter_binary(backend)
     if not bin_path:
@@ -1258,6 +1270,11 @@ class IntrospectionProject:
             self.profiles = data_loader.load_all_profiles(
                 self.base_folder, self.language, parallelise)
 
+        correlation_dict = utils.data_file_read_yaml(correlation_file)
+        if correlation_dict is not None and "pairings" in correlation_dict:
+            for profile in self.profiles:
+                profile.correlate_executable_name(correlation_dict)
+
         # Apply exclude patterns to filter out entire profiles and their functions.
         # Always propagate the (possibly empty) pattern lists so every profile
         # has a consistent state regardless of whether the guard below fires.
@@ -1291,11 +1308,19 @@ class IntrospectionProject:
                     # matches an exclude pattern.
                     if profile._matches_exclude_pattern(
                             profile.fuzzer_source_file):
-                        logger.info(
-                            "Skipping profile for excluded fuzzer source: %s",
-                            profile.fuzzer_source_file,
-                        )
-                        continue
+                        if profile.binary_executable:
+                            logger.info(
+                                "Keeping profile for correlated executable "
+                                "despite excluded fuzzer source: %s -> %s",
+                                profile.fuzzer_source_file,
+                                profile.binary_executable,
+                            )
+                        else:
+                            logger.info(
+                                "Skipping profile for excluded fuzzer source: %s",
+                                profile.fuzzer_source_file,
+                            )
+                            continue
 
                     profile.all_class_functions = _filter_func_dict(
                         profile, profile.all_class_functions)
@@ -1311,11 +1336,6 @@ class IntrospectionProject:
             raise DataLoaderError("No fuzzer profiles")
 
         self.input_bugs = data_loader.try_load_input_bugs()
-        correlation_dict = utils.data_file_read_yaml(correlation_file)
-        if correlation_dict is not None and "pairings" in correlation_dict:
-            for profile in self.profiles:
-                profile.correlate_executable_name(correlation_dict)
-
         logger.info("[+] Accummulating profiles")
         self.profiles = _accummulate_profiles(self.profiles, self.base_folder,
                                               parallelise)
