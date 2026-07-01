@@ -82,7 +82,8 @@ def test_load_all_profiles_skips_generated_second_frontend_run(monkeypatch):
 
     loaded = []
 
-    def fake_load_profile(data_file: str, _language: str,
+    def fake_load_profile(data_file: str,
+                          _language: str,
                           _preloaded_yaml=None):
         loaded.append(data_file)
         return data_file, _ProfileStub(os.path.basename(data_file))
@@ -91,16 +92,18 @@ def test_load_all_profiles_skips_generated_second_frontend_run(monkeypatch):
                         fake_files)
     monkeypatch.setattr(data_loader, "_load_profile_with_preloaded_yaml",
                         fake_load_profile)
-    monkeypatch.setattr(data_loader, "_load_profiles_yaml_batch", lambda _x: {})
+    monkeypatch.setattr(data_loader, "_load_profiles_yaml_batch",
+                        lambda _x: {})
 
     profiles = data_loader.load_all_profiles("/tmp/project",
                                              "c-cpp",
                                              parallelise=False)
 
-    assert [profile.name for profile in profiles] == [
-        "fuzzerLogFile-primary.data"
+    assert [profile.name
+            for profile in profiles] == ["fuzzerLogFile-primary.data"]
+    assert loaded == [
+        os.path.join("/tmp/project", "fuzzerLogFile-primary.data")
     ]
-    assert loaded == [os.path.join("/tmp/project", "fuzzerLogFile-primary.data")]
 
 
 def test_resolve_profile_worker_count_default_uses_cpu_count(monkeypatch):
@@ -649,3 +652,49 @@ def test_read_fuzzer_data_file_to_profile_retries_with_file_yaml_when_preloaded_
     assert constructor_yaml[1]["Fuzzer filename"] == "recovered.cc"
     assert backend_calls == [{"path": str(yaml_file)}]
     assert yaml_reads == [str(yaml_file)]
+
+
+def test_read_fuzzer_data_file_to_profile_repairs_entrypoint_from_debug_functions(
+        tmp_path):
+    cfg_file = tmp_path / "fuzzerLogFile-sample.data"
+    cfg_file.write_text(
+        "Call tree\n"
+        "LLVMFuzzerTestOneInput /usr/include/c++/bits/stl_vector.h linenumber=-1\n"
+        "  target /src/project/target.cc linenumber=20\n"
+        "====================================\n",
+        encoding="utf-8",
+    )
+    yaml_file = tmp_path / "fuzzerLogFile-sample.data.yaml"
+    yaml_file.write_text(
+        "Fuzzer filename: /usr/include/c++/bits/stl_vector.h\n"
+        "All functions:\n"
+        "  Elements: []\n",
+        encoding="utf-8",
+    )
+    debug_functions = tmp_path / "fuzzerLogFile-sample.data.debug_all_functions"
+    debug_functions.write_text(
+        "- name: LLVMFuzzerTestOneInput\n"
+        "  file_location: '/src/project/fuzzer.cc:13'\n"
+        "  raw_name: LLVMFuzzerTestOneInput\n",
+        encoding="utf-8",
+    )
+
+    profile = data_loader.read_fuzzer_data_file_to_profile(
+        str(cfg_file), "c-cpp")
+
+    assert profile is not None
+    assert profile.fuzzer_source_file == "/src/project/fuzzer.cc"
+    assert profile.has_entry_point()
+    assert "LLVMFuzzerTestOneInput" in profile.all_class_functions
+    assert profile.all_class_functions[
+        "LLVMFuzzerTestOneInput"].function_linenumber == 13
+    assert profile.all_class_functions[
+        "LLVMFuzzerTestOneInput"].functions_reached == ["target"]
+    assert profile.fuzzer_callsite_calltree.dst_function_source_file == (
+        "/src/project/fuzzer.cc")
+    assert profile.fuzzer_callsite_calltree.src_linenumber == 13
+    profile._set_all_reached_functions()
+    assert profile.functions_reached_by_fuzzer == {
+        "LLVMFuzzerTestOneInput",
+        "target",
+    }

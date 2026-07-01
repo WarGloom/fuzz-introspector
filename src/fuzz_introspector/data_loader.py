@@ -28,6 +28,7 @@ from typing import (
 
 from fuzz_introspector import backend_loaders
 from fuzz_introspector import constants
+from fuzz_introspector import cfg_load
 from fuzz_introspector import utils
 from fuzz_introspector.datatypes import fuzzer_profile, bug
 
@@ -40,6 +41,133 @@ FI_REACHABILITY_BACKEND_ENV = "FI_REACHABILITY_BACKEND"
 FI_REACHABILITY_BACKEND_RUST = "rust"
 FI_PROFILE_WORKERS_RUST_DEFAULT = 3
 _GENERATED_PROFILE_DIR_NAMES = {"second-frontend-run"}
+
+
+def _split_debug_file_location(file_location: str) -> tuple[str, int]:
+    if not file_location:
+        return "", -1
+    source_file, _, line_number = file_location.rpartition(":")
+    if not source_file:
+        return "", -1
+    try:
+        return source_file, int(line_number)
+    except ValueError:
+        return source_file, -1
+
+
+def _load_entrypoint_debug_function(cfg_file: str) -> Optional[dict[Any, Any]]:
+    debug_functions_path = cfg_file + ".debug_all_functions"
+    if not os.path.isfile(debug_functions_path):
+        return None
+
+    debug_functions = utils.data_file_read_yaml(debug_functions_path)
+    if not isinstance(debug_functions, list):
+        return None
+
+    for debug_function in debug_functions:
+        if not isinstance(debug_function, dict):
+            continue
+        if debug_function.get("name") == "LLVMFuzzerTestOneInput":
+            return debug_function
+    return None
+
+
+def _entrypoint_functions_reached(cfg_content: str) -> List[str]:
+    calltree = cfg_load.data_file_read_calltree(cfg_content)
+    if calltree is None:
+        return []
+    return [
+        node.dst_function_name
+        for node in cfg_load.extract_all_callsites(calltree)
+        if node.dst_function_name != "LLVMFuzzerTestOneInput"
+    ]
+
+
+def _entrypoint_yaml_function(debug_function: dict[Any, Any],
+                              cfg_content: str) -> Optional[dict[str, Any]]:
+    source_file, line_number = _split_debug_file_location(
+        str(debug_function.get("file_location", "")))
+    if not source_file:
+        return None
+
+    function_name = str(
+        debug_function.get("raw_name") or debug_function.get("name")
+        or "LLVMFuzzerTestOneInput")
+    return {
+        "functionName": function_name,
+        "functionSourceFile": source_file,
+        "linkageType": "externalLinkage",
+        "functionLinenumber": line_number,
+        "functionLinenumberEnd": -1,
+        "returnType": "int",
+        "argCount": 0,
+        "argTypes": [],
+        "argNames": [],
+        "BBCount": 0,
+        "ICount": 0,
+        "EdgeCount": 0,
+        "CyclomaticComplexity": 0,
+        "functionsReached": _entrypoint_functions_reached(cfg_content),
+        "functionUses": 0,
+        "functionDepth": 0,
+        "constantsTouched": [],
+        "BranchProfiles": [],
+        "Callsites": [],
+    }
+
+
+def _replace_calltree_root_metadata(cfg_content: str, source_file: str,
+                                    line_number: int) -> str:
+    if not cfg_content or not source_file:
+        return cfg_content
+
+    lines = cfg_content.splitlines()
+    in_calltree = False
+    for idx, line in enumerate(lines):
+        stripped_line = line.strip()
+        if stripped_line == "Call tree":
+            in_calltree = True
+            continue
+        if not in_calltree:
+            continue
+        if "====================================" in stripped_line:
+            break
+        if stripped_line:
+            lines[idx] = ("LLVMFuzzerTestOneInput "
+                          f"{source_file} linenumber={line_number}")
+            return "\n".join(lines) + ("\n"
+                                       if cfg_content.endswith("\n") else "")
+    return cfg_content
+
+
+def _repair_profile_entrypoint_metadata(
+        cfg_file: str, data_dict_yaml: dict[Any, Any],
+        cfg_content: str) -> tuple[dict[Any, Any], str]:
+    debug_function = _load_entrypoint_debug_function(cfg_file)
+    if debug_function is None:
+        return data_dict_yaml, cfg_content
+
+    entrypoint_function = _entrypoint_yaml_function(debug_function,
+                                                    cfg_content)
+    if entrypoint_function is None:
+        return data_dict_yaml, cfg_content
+
+    source_file = entrypoint_function["functionSourceFile"]
+    line_number = entrypoint_function["functionLinenumber"]
+    data_dict_yaml = dict(data_dict_yaml)
+    data_dict_yaml["Fuzzer filename"] = source_file
+
+    all_functions = data_dict_yaml.setdefault("All functions", {})
+    elements = all_functions.setdefault("Elements", [])
+    if isinstance(elements, list) and not any(
+            isinstance(elem, dict)
+            and elem.get("functionName") == "LLVMFuzzerTestOneInput"
+            for elem in elements):
+        elements.insert(0, entrypoint_function)
+
+    cfg_content = _replace_calltree_root_metadata(cfg_content, source_file,
+                                                  line_number)
+    return data_dict_yaml, cfg_content
 
 
 def _filter_generated_profile_data_files(data_files: List[str]) -> List[str]:
@@ -157,6 +285,10 @@ def read_fuzzer_data_file_to_profile(
     except UnicodeDecodeError:
         logger.info("CFG file not valid.")
         return None
+
+    if language == "c-cpp":
+        data_dict_yaml, cfg_content = _repair_profile_entrypoint_metadata(
+            cfg_file, data_dict_yaml, cfg_content)
 
     try:
         profile = fuzzer_profile.FuzzerProfile(cfg_file,

@@ -1101,6 +1101,12 @@ StringRef FuzzIntrospector::removeDecSuffixFromName(StringRef FuncName) {
 }
 
 int FuzzIntrospector::getFunctionLinenumberBeginning(Function *F) {
+  if (DISubprogram *Subprogram = F->getSubprogram()) {
+    if (Subprogram->getLine() > 0) {
+      return Subprogram->getLine();
+    }
+  }
+
   for (auto &I : instructions(*F)) {
     const llvm::DebugLoc &DebugInfo = I.getDebugLoc();
     if (DebugInfo) {
@@ -1130,16 +1136,23 @@ std::string FuzzIntrospector::getFunctionFilename(Function *F) {
   StringRef Dir;
   StringRef Res;
 
-  for (auto &I : instructions(*F)) {
-    const llvm::DebugLoc &DebugInfo = I.getDebugLoc();
-    if (DebugInfo) {
-      auto *Scope = cast<DIScope>(DebugInfo.getScope());
-      // errs() << "Filename: " << Scope->getFilename() << "\n";
-      // errs() << "Directory: " << Scope->getDirectory() << "\n";
-      // errs() << "Line number: " << debugInfo.getLine() << "\n";
-      Dir = Scope->getDirectory();
-      Res = Scope->getFilename();
-      break;
+  if (DISubprogram *Subprogram = F->getSubprogram()) {
+    Dir = Subprogram->getDirectory();
+    Res = Subprogram->getFilename();
+  }
+
+  if (Res.empty()) {
+    for (auto &I : instructions(*F)) {
+      const llvm::DebugLoc &DebugInfo = I.getDebugLoc();
+      if (DebugInfo) {
+        auto *Scope = cast<DIScope>(DebugInfo.getScope());
+        // errs() << "Filename: " << Scope->getFilename() << "\n";
+        // errs() << "Directory: " << Scope->getDirectory() << "\n";
+        // errs() << "Line number: " << debugInfo.getLine() << "\n";
+        Dir = Scope->getDirectory();
+        Res = Scope->getFilename();
+        break;
+      }
     }
   }
 
@@ -1968,7 +1981,7 @@ void FuzzIntrospector::extractFuzzerReachabilityGraph(Module &M, std::string Tar
 
   FuzzerCalltree.FunctionName = FuzzEntryFunc->getName();
   FuzzerCalltree.FileName = getFunctionFilename(FuzzEntryFunc);
-  FuzzerCalltree.LineNumber = -1;
+  FuzzerCalltree.LineNumber = getFunctionLinenumberBeginning(FuzzEntryFunc);
 
   std::vector<CalltreeNode *> Nodes;
   extractCalltree(FuzzEntryFunc, &FuzzerCalltree, &Nodes, 1);
