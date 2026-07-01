@@ -89,6 +89,7 @@ class CoverageProfile:
     def __init__(self) -> None:
         self.covmap: Dict[str, List[Tuple[int, int]]] = dict()
         self.file_map: Dict[str, List[Tuple[int, int]]] = dict()
+        self.function_file_map: Dict[str, str] = dict()
         self.branch_cov_map: Dict[str, List[int]] = dict()
         self._func_cov_key_cache: Dict[str, str] = dict()
         self._func_cov_key_miss_cache: Dict[str, int] = dict()
@@ -105,6 +106,7 @@ class CoverageProfile:
         profile = CoverageProfile()
         profile.covmap = self.covmap
         profile.file_map = self.file_map
+        profile.function_file_map = self.function_file_map
         profile.branch_cov_map = self.branch_cov_map
         profile._cov_type = self._cov_type
         profile.coverage_files = list(self.coverage_files)
@@ -574,6 +576,14 @@ def _coverage_profile_from_external_payload(
     cp = CoverageProfile()
     cp.set_type("function")
     cp.covmap = _coerce_external_covmap(payload.get("covmap", {}), is_rust)
+    raw_function_files = payload.get("function_file_map", {})
+    if isinstance(raw_function_files, dict):
+        cp.function_file_map = {
+            _normalise_external_cov_function_name(str(func_name), is_rust):
+            str(filename)
+            for func_name, filename in raw_function_files.items()
+            if isinstance(func_name, str) and isinstance(filename, str)
+        }
     cp.branch_cov_map = _coerce_external_branch_cov_map(
         payload.get("branch_cov_map", {}), is_rust)
 
@@ -605,6 +615,11 @@ def _normalise_branch_cov_map(
     }
 
 
+def _normalise_function_file_map(
+        function_file_map: Dict[str, str]) -> Dict[str, str]:
+    return {str(key): str(value) for key, value in function_file_map.items()}
+
+
 def _collect_llvm_cov_parity_details(
         native_profile: "CoverageProfile",
         python_profile: "CoverageProfile") -> Dict[str, int]:
@@ -614,20 +629,31 @@ def _collect_llvm_cov_parity_details(
         native_profile.branch_cov_map)
     python_branch_map = _normalise_branch_cov_map(
         python_profile.branch_cov_map)
+    native_function_file_map = _normalise_function_file_map(
+        native_profile.function_file_map)
+    python_function_file_map = _normalise_function_file_map(
+        python_profile.function_file_map)
 
     covmap_keys = set(native_covmap) | set(python_covmap)
     branch_keys = set(native_branch_map) | set(python_branch_map)
+    function_file_keys = (set(native_function_file_map)
+                          | set(python_function_file_map))
     covmap_mismatches = sum(
         1 for key in covmap_keys
         if native_covmap.get(key) != python_covmap.get(key))
     branch_mismatches = sum(
         1 for key in branch_keys
         if native_branch_map.get(key) != python_branch_map.get(key))
+    function_file_mismatches = sum(1 for key in function_file_keys
+                                   if native_function_file_map.get(key) !=
+                                   python_function_file_map.get(key))
     return {
         "covmap_key_count": len(covmap_keys),
         "covmap_mismatches": covmap_mismatches,
         "branch_key_count": len(branch_keys),
         "branch_mismatches": branch_mismatches,
+        "function_file_key_count": len(function_file_keys),
+        "function_file_mismatches": function_file_mismatches,
     }
 
 
@@ -664,6 +690,7 @@ def _load_llvm_coverage_python_reports(coverage_reports: List[str],
         logger.info(f"Reading coverage report: {profile_file}")
         with open(profile_file, "rb") as pf:
             curr_func = None
+            curr_file = ""
             switch_string = str()
             switch_line_number = None
             case_line_numbers: Set[int] = set()
@@ -676,17 +703,21 @@ def _load_llvm_coverage_python_reports(coverage_reports: List[str],
                 logger.debug(f"cov-readline: {line}")
 
                 if len(line) > 0 and line[-1] == ":" and "|" not in line:
-                    if len(line.split(":")) == 3:
-                        curr_func = line.split(":")[1].replace(" ",
-                                                               "").replace(
-                                                                   ":", "")
+                    header_parts = line.split(":")
+                    if len(header_parts) == 3:
+                        curr_file = header_parts[0].strip()
+                        curr_func = header_parts[1].replace(" ", "").replace(
+                            ":", "")
                     else:
+                        curr_file = ""
                         curr_func = line.replace(" ", "").replace(":", "")
                     if is_rust:
                         curr_func = utils.demangle_rust_func(curr_func)
                     else:
                         curr_func = utils.demangle_cpp_func(curr_func)
                     cp.covmap[curr_func] = list()
+                    if curr_file:
+                        cp.function_file_map[curr_func] = curr_file
                     switch_string = ""
                     switch_line_number = None
                 if curr_func and COVERAGE_SWITCH_REGEX.match(line):
@@ -870,7 +901,8 @@ def load_llvm_coverage(target_dir: str,
                 mismatch_details = _collect_llvm_cov_parity_details(
                     profile, python_profile)
                 if (mismatch_details["covmap_mismatches"]
-                        or mismatch_details["branch_mismatches"]):
+                        or mismatch_details["branch_mismatches"]
+                        or mismatch_details["function_file_mismatches"]):
                     if strict_mode:
                         raise exceptions.DataLoaderError((
                             f"{FI_LLVM_COV_PARITY_MISMATCH}: Native LLVM "

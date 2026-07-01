@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 """Test code_coverage.py"""
 
 import builtins
@@ -24,7 +23,8 @@ sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../")
 from fuzz_introspector import code_coverage  # noqa: E402
 from fuzz_introspector.datatypes import function_profile  # noqa: E402
 
-TEST_DATA_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data")
+TEST_DATA_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                              "data")
 
 
 @pytest.fixture
@@ -65,13 +65,16 @@ def sample_jvm_coverage_xml():
 
 def test_load_llvm_coverage():
     """Tests loading llvm coverage from a .covreport file."""
-    cov_profile = code_coverage.load_llvm_coverage(TEST_DATA_PATH, "sample_cov")
+    cov_profile = code_coverage.load_llvm_coverage(TEST_DATA_PATH,
+                                                   "sample_cov")
     assert len(cov_profile.covmap) > 0
     assert len(cov_profile.file_map) == 0
     assert len(cov_profile.branch_cov_map) > 0
     assert cov_profile._cov_type == "function"
     assert len(cov_profile.coverage_files) == 1
     assert len(cov_profile.dual_file_map) == 0
+    assert cov_profile.function_file_map["add_pair_to_block"] == "bzlib.c"
+    assert cov_profile.function_file_map["fromtext_md"] == "rdata.c"
 
     assert cov_profile.covmap["BZ2_bzCompress"][0] == (408, 4680)
     assert cov_profile.covmap["BZ2_bzCompress"][7] == (416, 9360)
@@ -99,9 +102,9 @@ def test_load_llvm_coverage():
         144000000,
         36000000,
     ]
-    assert cov_profile.branch_cov_map["add_pair_to_block:224,4"] == (
-        [3260, 36000000, 3260, 3510000, 1570000]
-    )
+    assert cov_profile.branch_cov_map["add_pair_to_block:224,4"] == ([
+        3260, 36000000, 3260, 3510000, 1570000
+    ])
 
 
 def write_coverage_file(tmpdir, coverage_file):
@@ -154,12 +157,11 @@ def test_jvm_coverage(tmpdir, sample_jvm_coverage_xml):
     assert "[BASE64EncoderStreamFuzzer].<init>()" in cp.covmap
     assert (
         "[BASE64EncoderStreamFuzzer].fuzzerTestOneInput(FuzzedDataProvider)"
-        in cp.covmap
-    )
+        in cp.covmap)
     assert cp.covmap["[BASE64EncoderStreamFuzzer].<init>()"] == [(23, 0)]
     assert cp.covmap[
-        "[BASE64EncoderStreamFuzzer].fuzzerTestOneInput(FuzzedDataProvider)"
-    ] == [(25, 3), (27, 6)]
+        "[BASE64EncoderStreamFuzzer].fuzzerTestOneInput(FuzzedDataProvider)"] == [
+            (25, 3), (27, 6)]
 
 
 def test_get_hit_details_skips_transform_chain_for_direct_hit(monkeypatch):
@@ -170,16 +172,21 @@ def test_get_hit_details_skips_transform_chain_for_direct_hit(monkeypatch):
         del args, kwargs
         raise AssertionError("unexpected transform call for direct key lookup")
 
-    monkeypatch.setattr(code_coverage.utils, "demangle_cpp_func", fail_if_called)
+    monkeypatch.setattr(code_coverage.utils, "demangle_cpp_func",
+                        fail_if_called)
     monkeypatch.setattr(code_coverage.utils, "normalise_str", fail_if_called)
-    monkeypatch.setattr(code_coverage.utils, "remove_jvm_generics", fail_if_called)
-    monkeypatch.setattr(code_coverage.utils, "demangle_rust_func", fail_if_called)
-    monkeypatch.setattr(code_coverage.utils, "locate_rust_fuzz_key", fail_if_called)
+    monkeypatch.setattr(code_coverage.utils, "remove_jvm_generics",
+                        fail_if_called)
+    monkeypatch.setattr(code_coverage.utils, "demangle_rust_func",
+                        fail_if_called)
+    monkeypatch.setattr(code_coverage.utils, "locate_rust_fuzz_key",
+                        fail_if_called)
 
     assert cp.get_hit_details("direct_hit") == [(11, 1)]
 
 
-def test_get_hit_details_negative_cache_avoids_repeated_transform_work(monkeypatch):
+def test_get_hit_details_negative_cache_avoids_repeated_transform_work(
+        monkeypatch):
     cp = code_coverage.CoverageProfile()
     cp.covmap = {"known": [(7, 3)]}
     call_counts = {
@@ -211,17 +218,16 @@ def test_get_hit_details_negative_cache_avoids_repeated_transform_work(monkeypat
         call_counts["locate_rust_fuzz_key"] += 1
         return None
 
-    monkeypatch.setattr(code_coverage.utils, "demangle_cpp_func", tracked_demangle_cpp)
-    monkeypatch.setattr(code_coverage.utils, "normalise_str", tracked_normalise)
-    monkeypatch.setattr(
-        code_coverage.utils, "remove_jvm_generics", tracked_remove_jvm_generics
-    )
-    monkeypatch.setattr(
-        code_coverage.utils, "demangle_rust_func", tracked_demangle_rust
-    )
-    monkeypatch.setattr(
-        code_coverage.utils, "locate_rust_fuzz_key", tracked_locate_rust
-    )
+    monkeypatch.setattr(code_coverage.utils, "demangle_cpp_func",
+                        tracked_demangle_cpp)
+    monkeypatch.setattr(code_coverage.utils, "normalise_str",
+                        tracked_normalise)
+    monkeypatch.setattr(code_coverage.utils, "remove_jvm_generics",
+                        tracked_remove_jvm_generics)
+    monkeypatch.setattr(code_coverage.utils, "demangle_rust_func",
+                        tracked_demangle_rust)
+    monkeypatch.setattr(code_coverage.utils, "locate_rust_fuzz_key",
+                        tracked_locate_rust)
 
     assert cp.get_hit_details("missing") == []
     assert cp.get_hit_details("missing") == []
@@ -234,7 +240,8 @@ def test_get_hit_details_negative_cache_avoids_repeated_transform_work(monkeypat
     }
 
 
-def test_get_hit_details_negative_cache_invalidates_on_covmap_growth(monkeypatch):
+def test_get_hit_details_negative_cache_invalidates_on_covmap_growth(
+        monkeypatch):
     cp = code_coverage.CoverageProfile()
     cp.covmap = {"known": [(3, 1)]}
     call_count = {"demangle_cpp_func": 0}
@@ -243,13 +250,16 @@ def test_get_hit_details_negative_cache_invalidates_on_covmap_growth(monkeypatch
         call_count["demangle_cpp_func"] += 1
         return value + "__cpp"
 
-    monkeypatch.setattr(code_coverage.utils, "demangle_cpp_func", tracked_demangle_cpp)
-    monkeypatch.setattr(code_coverage.utils, "normalise_str", lambda value: value)
-    monkeypatch.setattr(code_coverage.utils, "remove_jvm_generics", lambda value: value)
-    monkeypatch.setattr(code_coverage.utils, "demangle_rust_func", lambda value: value)
-    monkeypatch.setattr(
-        code_coverage.utils, "locate_rust_fuzz_key", lambda value, covmap: None
-    )
+    monkeypatch.setattr(code_coverage.utils, "demangle_cpp_func",
+                        tracked_demangle_cpp)
+    monkeypatch.setattr(code_coverage.utils, "normalise_str",
+                        lambda value: value)
+    monkeypatch.setattr(code_coverage.utils, "remove_jvm_generics",
+                        lambda value: value)
+    monkeypatch.setattr(code_coverage.utils, "demangle_rust_func",
+                        lambda value: value)
+    monkeypatch.setattr(code_coverage.utils, "locate_rust_fuzz_key",
+                        lambda value, covmap: None)
 
     assert cp.get_hit_details("missing") == []
     cp.covmap["missing"] = [(99, 5)]
@@ -311,6 +321,7 @@ def test_load_llvm_coverage_reuses_cached_parse_result(monkeypatch, tmp_path):
     assert open_counts["covreport_reads"] == 1
     assert first is not second
     assert first.covmap is second.covmap
+    assert first.function_file_map is second.function_file_map
     assert first.branch_cov_map is second.branch_cov_map
     assert first.get_hit_summary("func_a") == (1, 1)
     assert "func_a" in first._func_cov_key_cache
@@ -345,8 +356,7 @@ def test_load_llvm_coverage_cache_can_be_disabled(monkeypatch, tmp_path):
 
 
 def test_load_llvm_coverage_shadow_mode_keeps_python_authoritative(
-    monkeypatch, tmp_path, caplog
-):
+        monkeypatch, tmp_path, caplog):
     covreport = tmp_path / "target.covreport"
     covreport.write_text("funcA:\n  10| 1| return 0;\n", encoding="utf-8")
 
@@ -364,7 +374,9 @@ def test_load_llvm_coverage_shadow_mode_keeps_python_authoritative(
         lambda **_: (
             "go",
             {
-                "covmap": {"funcA": [[10, 0]]},
+                "covmap": {
+                    "funcA": [[10, 0]]
+                },
                 "branch_cov_map": {},
                 "coverage_files": [str(covreport)],
             },
@@ -383,8 +395,7 @@ def test_load_llvm_coverage_shadow_mode_keeps_python_authoritative(
 
 
 def test_load_llvm_coverage_shadow_mode_strict_raises_on_mismatch(
-    monkeypatch, tmp_path
-):
+        monkeypatch, tmp_path):
     covreport = tmp_path / "target.covreport"
     covreport.write_text("funcA:\n  10| 1| return 0;\n", encoding="utf-8")
 
@@ -401,7 +412,9 @@ def test_load_llvm_coverage_shadow_mode_strict_raises_on_mismatch(
         lambda **_: (
             "go",
             {
-                "covmap": {"funcA": [[10, 0]]},
+                "covmap": {
+                    "funcA": [[10, 0]]
+                },
                 "branch_cov_map": {},
                 "coverage_files": [str(covreport)],
             },
@@ -415,7 +428,52 @@ def test_load_llvm_coverage_shadow_mode_strict_raises_on_mismatch(
         code_coverage.load_llvm_coverage(str(tmp_path), "target")
 
 
-def test_load_llvm_coverage_target_name_missing_returns_empty_profile(tmp_path):
+def test_load_llvm_coverage_shadow_mode_detects_function_file_map_mismatch(
+        monkeypatch, tmp_path, caplog):
+    covreport = tmp_path / "target.covreport"
+    covreport.write_text("src.cc:funcA:\n  10| 1| return 0;\n",
+                         encoding="utf-8")
+
+    python_profile = code_coverage.CoverageProfile()
+    python_profile.set_type("function")
+    python_profile.covmap = {"funcA": [(10, 1)]}
+    python_profile.branch_cov_map = {}
+    python_profile.function_file_map = {"funcA": "src.cc"}
+    python_profile.coverage_files = [str(covreport)]
+
+    monkeypatch.setenv(code_coverage.FI_LLVM_COV_LOADER_SHADOW_ENV, "1")
+    monkeypatch.delenv(code_coverage.FI_LLVM_COV_LOADER_STRICT_ENV,
+                       raising=False)
+    monkeypatch.setattr(
+        code_coverage.backend_loaders,
+        "load_json_with_backend",
+        lambda **_: (
+            "rust",
+            {
+                "covmap": {
+                    "funcA": [[10, 1]]
+                },
+                "branch_cov_map": {},
+                "coverage_files": [str(covreport)],
+                "function_file_map": {},
+            },
+        ),
+    )
+    monkeypatch.setattr(code_coverage, "_load_llvm_coverage_python_reports",
+                        lambda *_args, **_kwargs: python_profile)
+
+    with caplog.at_level("WARNING"):
+        cp = code_coverage.load_llvm_coverage(str(tmp_path), "target")
+
+    assert cp is python_profile
+    mismatch_logs = [record.message for record in caplog.records]
+    assert any(code_coverage.FI_LLVM_COV_PARITY_MISMATCH in message
+               and '"function_file_mismatches": 1' in message
+               for message in mismatch_logs)
+
+
+def test_load_llvm_coverage_target_name_missing_returns_empty_profile(
+        tmp_path):
     merged_covreport = tmp_path / "merged.covreport"
     merged_covreport.write_text(
         "funcMerged:\n  10| 4| return 0;\n",

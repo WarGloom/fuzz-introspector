@@ -15,6 +15,7 @@ struct OutputPayload {
     covmap: BTreeMap<String, Vec<[i64; 2]>>,
     branch_cov_map: BTreeMap<String, Vec<i64>>,
     coverage_files: Vec<String>,
+    function_file_map: BTreeMap<String, String>,
 }
 
 impl OutputPayload {
@@ -23,6 +24,7 @@ impl OutputPayload {
             covmap: BTreeMap::new(),
             branch_cov_map: BTreeMap::new(),
             coverage_files,
+            function_file_map: BTreeMap::new(),
         }
     }
 }
@@ -42,15 +44,13 @@ fn parse_coverage_reports(raw_input: &str) -> Result<Vec<String>, String> {
 
 fn switch_line_regex() -> &'static Regex {
     static SWITCH_LINE_REGEX: OnceLock<Regex> = OnceLock::new();
-    SWITCH_LINE_REGEX.get_or_init(|| {
-        Regex::new(r".*\|.*\sswitch.*\(.*\)").expect("switch regex must compile")
-    })
+    SWITCH_LINE_REGEX
+        .get_or_init(|| Regex::new(r".*\|.*\sswitch.*\(.*\)").expect("switch regex must compile"))
 }
 
 fn case_line_regex() -> &'static Regex {
     static CASE_LINE_REGEX: OnceLock<Regex> = OnceLock::new();
-    CASE_LINE_REGEX
-        .get_or_init(|| Regex::new(r".*\|.*\scase.*:").expect("case regex must compile"))
+    CASE_LINE_REGEX.get_or_init(|| Regex::new(r".*\|.*\scase.*:").expect("case regex must compile"))
 }
 
 fn branch_line_regex() -> &'static Regex {
@@ -105,17 +105,21 @@ fn parse_branch_line(line: &str) -> Option<(i64, i64, i64, i64)> {
     Some((line_number, column_number, true_hit, false_hit))
 }
 
-fn extract_function_name(line: &str) -> String {
+fn extract_function_header(line: &str) -> (String, String) {
     let colon_count = line.chars().filter(|ch| *ch == ':').count();
-    let segment = if colon_count == 2 {
-        line.split(':').nth(1).unwrap_or(line)
+    let (function_segment, source_file) = if colon_count == 2 {
+        let mut segments = line.split(':');
+        let file_segment = segments.next().unwrap_or("").trim();
+        let func_segment = segments.next().unwrap_or(line);
+        (func_segment, file_segment)
     } else {
-        line
+        (line, "")
     };
-    segment
+    let function_name = function_segment
         .chars()
         .filter(|ch| *ch != ' ' && *ch != ':')
-        .collect()
+        .collect();
+    (function_name, source_file.to_string())
 }
 
 fn parse_coverage_report(path: &str) -> Result<OutputPayload, String> {
@@ -146,12 +150,17 @@ fn parse_coverage_report(path: &str) -> Result<OutputPayload, String> {
         }
 
         if trimmed.ends_with(':') && !trimmed.contains('|') {
-            current_func = extract_function_name(trimmed);
+            let (function_name, source_file) = extract_function_header(trimmed);
+            current_func = function_name;
             switch_string.clear();
             switch_line_number = None;
             case_line_numbers.clear();
             // Keep parity with Python loader behavior: latest section wins.
             out.covmap.insert(current_func.clone(), Vec::new());
+            if !source_file.is_empty() {
+                out.function_file_map
+                    .insert(current_func.clone(), source_file);
+            }
             continue;
         }
 
@@ -243,12 +252,14 @@ fn parse_coverage_report(path: &str) -> Result<OutputPayload, String> {
 }
 
 fn render_output_json(payload: &OutputPayload) -> Result<String, String> {
-    serde_json::to_string(payload).map_err(|err| format!("failed serializing output payload: {err}"))
+    serde_json::to_string(payload)
+        .map_err(|err| format!("failed serializing output payload: {err}"))
 }
 
 fn merge_output_payload(base: &mut OutputPayload, partial: OutputPayload) {
     base.covmap.extend(partial.covmap);
     base.branch_cov_map.extend(partial.branch_cov_map);
+    base.function_file_map.extend(partial.function_file_map);
 }
 
 fn parse_and_merge_reports_windowed(
@@ -280,8 +291,7 @@ fn run() -> Result<(), String> {
 
     let coverage_reports = parse_coverage_reports(&raw_input)?;
 
-    let output =
-        parse_and_merge_reports_windowed(&coverage_reports, DEFAULT_MERGE_WINDOW_SIZE)?;
+    let output = parse_and_merge_reports_windowed(&coverage_reports, DEFAULT_MERGE_WINDOW_SIZE)?;
 
     let json_output = render_output_json(&output)?;
     io::stdout()
@@ -354,7 +364,10 @@ mod tests {
 
         assert_eq!(merged_single, merged_windowed);
         assert_eq!(merged_single, merged_all);
-        assert_eq!(merged_single.covmap.get("target"), Some(&vec![[1, 3], [2, 1]]));
+        assert_eq!(
+            merged_single.covmap.get("target"),
+            Some(&vec![[1, 3], [2, 1]])
+        );
         assert_eq!(
             merged_single.branch_cov_map.get("target:1,2"),
             Some(&vec![5, 1, 9])
@@ -367,13 +380,38 @@ mod tests {
     #[test]
     fn duplicate_function_sections_keep_latest_payload() -> Result<(), String> {
         let report = write_temp_report(
-            "dup:\n1| 9| old\n\ndup:\n1| 5| switch(x)\nBranch (1:3): [True: 7, False: 2]\n2| 1| case 1:\nBranch (2:3): [True: 4, False: 0]\n",
+            "src/dup.cc:dup:\n1| 9| old\n\nsrc/dup.cc:dup:\n1| 5| switch(x)\nBranch (1:3): [True: 7, False: 2]\n2| 1| case 1:\nBranch (2:3): [True: 4, False: 0]\n",
         )?;
 
         let parsed = parse_coverage_report(&report)?;
 
         assert_eq!(parsed.covmap.get("dup"), Some(&vec![[1, 5], [2, 1]]));
+        assert_eq!(
+            parsed.function_file_map.get("dup"),
+            Some(&"src/dup.cc".to_string())
+        );
         assert_eq!(parsed.branch_cov_map.get("dup:1,2"), Some(&vec![7, 2, 4]));
+
+        delete_temp_reports(&[report]);
+        Ok(())
+    }
+
+    #[test]
+    fn filename_qualified_headers_emit_function_file_map() -> Result<(), String> {
+        let report = write_temp_report(
+            "src/fuzzer.cpp:LLVMFuzzerTestOneInput:\n7| 3| return 0;\n8| 0| return 1;\n",
+        )?;
+
+        let parsed = parse_coverage_report(&report)?;
+
+        assert_eq!(
+            parsed.covmap.get("LLVMFuzzerTestOneInput"),
+            Some(&vec![[7, 3], [8, 0]])
+        );
+        assert_eq!(
+            parsed.function_file_map.get("LLVMFuzzerTestOneInput"),
+            Some(&"src/fuzzer.cpp".to_string())
+        );
 
         delete_temp_reports(&[report]);
         Ok(())
