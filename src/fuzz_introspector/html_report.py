@@ -56,7 +56,8 @@ from fuzz_introspector import (
 )
 from fuzz_introspector.exceptions import FuzzIntrospectorError
 
-from fuzz_introspector.datatypes import project_profile, fuzzer_profile
+from fuzz_introspector.datatypes import (function_profile, fuzzer_profile,
+                                         project_profile)
 
 logger = logging.getLogger(name=__name__)
 
@@ -1922,6 +1923,35 @@ def _line_identity_function_key(report_row: Dict[str, Any]) -> str:
     return f"{raw_name}|{filename}|{line_begin}"
 
 
+def _line_identity_function_profile_key(
+        func_profile: function_profile.FunctionProfile,
+        fallback_name: str = "") -> str:
+    raw_name = getattr(func_profile, "raw_function_name", "") or fallback_name
+    filename = getattr(func_profile, "function_source_file", "")
+    line_begin = getattr(func_profile, "function_linenumber", -1)
+    return f"{raw_name}|{filename}|{line_begin}"
+
+
+def _line_identity_function_profile_entry_line(
+        func_profile: function_profile.FunctionProfile) -> Optional[int]:
+    line_begin = getattr(func_profile, "function_linenumber", -1)
+    if line_begin in (-1, None):
+        return None
+    return int(line_begin)
+
+
+def _line_identity_coverage_function_file(
+        profile: fuzzer_profile.FuzzerProfile, func_name: str) -> str:
+    coverage = getattr(profile, "coverage", None)
+    function_file_map = getattr(coverage, "function_file_map", {})
+    coverage_key = func_name
+    if coverage is not None and hasattr(coverage,
+                                        "_resolve_covmap_function_key"):
+        coverage_key = coverage._resolve_covmap_function_key(
+            func_name) or func_name
+    return function_file_map.get(coverage_key, "")
+
+
 def _line_identity_snapshot_metadata(out_dir: str) -> Dict[str, str]:
     pipeline_id = os.getenv("CI_PIPELINE_ID", "") or os.getenv("BUILD_ID", "")
     commit_sha = os.getenv("CI_COMMIT_SHA", "") or os.getenv("GIT_COMMIT", "")
@@ -2014,9 +2044,13 @@ def _build_line_identity_payloads(
         for func_name, line_entries in profile.coverage.covmap.items():
             report_row = _resolve_exact_line_identity_row(
                 rows_by_name, func_name)
-            if report_row is None:
+            if report_row is not None:
+                filename = report_row.get("Functions filename", "")
+            else:
+                filename = _line_identity_coverage_function_file(
+                    profile, func_name)
+            if not filename:
                 continue
-            filename = report_row.get("Functions filename", "")
             for line_no, hit_count in line_entries:
                 hit_count = int(hit_count)
                 if hit_count <= 0:
@@ -2048,16 +2082,37 @@ def _build_line_identity_payloads(
 
     reachable_records: List[Dict[str, Any]] = []
     reachable_dedup: Set[Tuple[str, str, int]] = set()
-    for report_row in all_functions_json_report:
-        function_key = _line_identity_function_key(report_row)
-        executable_lines = executable_lines_by_function.get(function_key, [])
-        if not executable_lines:
-            continue
-        filename = report_row.get("Functions filename", "")
-        for fuzzer_name in report_row.get("Reached by Fuzzers", []):
-            for line_number in executable_lines:
+    for profile in profiles:
+        all_class_functions = getattr(profile, "all_class_functions", {})
+        function_aliases = profile._build_function_name_alias_map()
+        for func_name in getattr(profile, "functions_reached_by_fuzzer",
+                                 set()):
+            canonical_func_name = function_aliases.get(func_name, func_name)
+            func_profile = (all_class_functions.get(canonical_func_name)
+                            or all_class_functions.get(func_name))
+            if func_profile is None:
+                continue
+
+            function_key = _line_identity_function_profile_key(
+                func_profile, canonical_func_name)
+            executable_lines = executable_lines_by_function.get(
+                function_key, [])
+            if executable_lines:
+                line_numbers = executable_lines
+            else:
+                entry_line = _line_identity_function_profile_entry_line(
+                    func_profile)
+                if entry_line is None:
+                    continue
+                line_numbers = [entry_line]
+
+            filename = getattr(func_profile, "function_source_file", "")
+            if not filename:
+                continue
+
+            for line_number in line_numbers:
                 reachable_dedup_key: Tuple[str, str, int] = (
-                    fuzzer_name,
+                    profile.identifier,
                     function_key,
                     line_number,
                 )
@@ -2066,7 +2121,7 @@ def _build_line_identity_payloads(
                 reachable_dedup.add(reachable_dedup_key)
                 reachable_records.append({
                     "fuzzer_name":
-                    fuzzer_name,
+                    profile.identifier,
                     "function_key":
                     function_key,
                     "filename":

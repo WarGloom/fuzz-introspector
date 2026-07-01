@@ -23,7 +23,9 @@ import pytest
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../")
 
-from fuzz_introspector import constants, html_helpers, html_report, styling  # noqa: E402
+from fuzz_introspector import (  # noqa: E402
+    cfg_load, constants, html_helpers, html_report, styling)
+from fuzz_introspector.analyses import calltree_analysis  # noqa: E402
 
 
 def test_write_content_to_html_files_skips_prettify_when_disabled(
@@ -87,8 +89,8 @@ def test_get_body_script_tags_does_not_mutate_main_js_list(
 
 
 def test_custom_js_draws_each_fuzzer_runtime_table() -> None:
-    custom_js = (Path(styling.__file__).parent / "custom.js").read_text(
-        encoding="utf-8")
+    custom_js = (Path(styling.__file__).parent /
+                 "custom.js").read_text(encoding="utf-8")
 
     assert "table.rows.add(value);\n    table.draw();" in custom_js
 
@@ -323,11 +325,12 @@ def test_runtime_coverage_section_writes_broad_blocker_stats(
 
     class DummyProfile:
         identifier = "dummy-fuzzer"
-        coverage = SimpleNamespace(covmap={
-            "target": object(),
-            "harness-helper": object(),
-            "protobuf-runtime": object(),
-        })
+        coverage = SimpleNamespace(
+            covmap={
+                "target": object(),
+                "harness-helper": object(),
+                "protobuf-runtime": object(),
+            })
         functions_reached_by_fuzzer = {
             "target",
             "missing-target",
@@ -522,23 +525,44 @@ def test_render_calltree_bitmaps_native_uses_go_backend(
 
 
 def test_build_line_identity_payloads_exports_expected_records(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    monkeypatch: pytest.MonkeyPatch, ) -> None:
     monkeypatch.setenv("CI_PIPELINE_ID", "pipeline-123")
     monkeypatch.setenv("CI_COMMIT_SHA", "commit-abc")
 
-    proj_profile = SimpleNamespace(
-        runtime_coverage=SimpleNamespace(covmap={"foo()": [(10, 1), (11, 0), (12, 3)]}))
+    proj_profile = SimpleNamespace(runtime_coverage=SimpleNamespace(
+        covmap={"foo()": [(10, 1), (11, 0), (12, 3)]}))
     profiles = [
         SimpleNamespace(
             identifier="fuzzA",
             target_lang="c-cpp",
-            coverage=SimpleNamespace(covmap={"foo()": [(10, 1), (11, 0), (12, 2)]}),
+            coverage=SimpleNamespace(
+                covmap={"foo()": [(10, 1), (11, 0), (12, 2)]}),
+            all_class_functions={
+                "foo()":
+                SimpleNamespace(
+                    raw_function_name="_Z3foov",
+                    function_source_file="/src/demo.c",
+                    function_linenumber=10,
+                )
+            },
+            functions_reached_by_fuzzer={"foo()"},
+            _build_function_name_alias_map=lambda: {},
         ),
         SimpleNamespace(
             identifier="fuzzB",
             target_lang="c-cpp",
-            coverage=SimpleNamespace(covmap={"foo()": [(10, 0), (11, 0), (12, 1)]}),
+            coverage=SimpleNamespace(
+                covmap={"foo()": [(10, 0), (11, 0), (12, 1)]}),
+            all_class_functions={
+                "foo()":
+                SimpleNamespace(
+                    raw_function_name="_Z3foov",
+                    function_source_file="/src/demo.c",
+                    function_linenumber=10,
+                )
+            },
+            functions_reached_by_fuzzer={"foo()"},
+            _build_function_name_alias_map=lambda: {},
         ),
     ]
     all_functions_json_report = [{
@@ -557,23 +581,38 @@ def test_build_line_identity_payloads_exports_expected_records(
     )
 
     assert executable == [{
-        "function_key": "_Z3foov|/src/demo.c|10",
-        "raw_function_name": "_Z3foov",
-        "filename": "/src/demo.c",
-        "line_number": 10,
-        "introspector_report_id": "introspector-pipeline-123",
+        "function_key":
+        "_Z3foov|/src/demo.c|10",
+        "raw_function_name":
+        "_Z3foov",
+        "filename":
+        "/src/demo.c",
+        "line_number":
+        10,
+        "introspector_report_id":
+        "introspector-pipeline-123",
     }, {
-        "function_key": "_Z3foov|/src/demo.c|10",
-        "raw_function_name": "_Z3foov",
-        "filename": "/src/demo.c",
-        "line_number": 11,
-        "introspector_report_id": "introspector-pipeline-123",
+        "function_key":
+        "_Z3foov|/src/demo.c|10",
+        "raw_function_name":
+        "_Z3foov",
+        "filename":
+        "/src/demo.c",
+        "line_number":
+        11,
+        "introspector_report_id":
+        "introspector-pipeline-123",
     }, {
-        "function_key": "_Z3foov|/src/demo.c|10",
-        "raw_function_name": "_Z3foov",
-        "filename": "/src/demo.c",
-        "line_number": 12,
-        "introspector_report_id": "introspector-pipeline-123",
+        "function_key":
+        "_Z3foov|/src/demo.c|10",
+        "raw_function_name":
+        "_Z3foov",
+        "filename":
+        "/src/demo.c",
+        "line_number":
+        12,
+        "introspector_report_id":
+        "introspector-pipeline-123",
     }]
     assert covered == [{
         "fuzzer_name": "fuzzA",
@@ -640,13 +679,23 @@ def test_build_line_identity_payloads_exports_expected_records(
 
 
 def test_build_line_identity_payloads_skips_ambiguous_name_matches() -> None:
-    proj_profile = SimpleNamespace(
-        runtime_coverage=SimpleNamespace(covmap={"dup()": [(10, 1), (11, 1)]}))
+    proj_profile = SimpleNamespace(runtime_coverage=SimpleNamespace(
+        covmap={"dup()": [(10, 1), (11, 1)]}))
     profiles = [
         SimpleNamespace(
             identifier="fuzzA",
             target_lang="c-cpp",
             coverage=SimpleNamespace(covmap={"dup()": [(10, 1), (11, 1)]}),
+            all_class_functions={
+                "dup()":
+                SimpleNamespace(
+                    raw_function_name="_Z3dupv",
+                    function_source_file="/src/a.c",
+                    function_linenumber=10,
+                )
+            },
+            functions_reached_by_fuzzer={"dup()"},
+            _build_function_name_alias_map=lambda: {},
         )
     ]
     all_functions_json_report = [{
@@ -672,22 +721,49 @@ def test_build_line_identity_payloads_skips_ambiguous_name_matches() -> None:
 
     assert executable == []
     assert covered == []
-    assert reachable == []
+    assert reachable == [{
+        "fuzzer_name": "fuzzA",
+        "function_key": "_Z3dupv|/src/a.c|10",
+        "filename": "/src/a.c",
+        "line_number": 10,
+        "introspector_report_id": "introspector-report-out",
+    }]
 
 
-def test_build_line_identity_payloads_omits_fuzzer_without_exact_coverage() -> None:
-    proj_profile = SimpleNamespace(
-        runtime_coverage=SimpleNamespace(covmap={"foo()": [(10, 1), (12, 3)]}))
+def test_build_line_identity_payloads_omits_fuzzer_without_exact_coverage(
+) -> None:
+    proj_profile = SimpleNamespace(runtime_coverage=SimpleNamespace(
+        covmap={"foo()": [(10, 1), (12, 3)]}))
     profiles = [
         SimpleNamespace(
             identifier="fuzzA",
             target_lang="c-cpp",
             coverage=SimpleNamespace(covmap={"foo()": [(10, 1), (12, 2)]}),
+            all_class_functions={
+                "foo()":
+                SimpleNamespace(
+                    raw_function_name="_Z3foov",
+                    function_source_file="/src/demo.c",
+                    function_linenumber=10,
+                )
+            },
+            functions_reached_by_fuzzer={"foo()"},
+            _build_function_name_alias_map=lambda: {},
         ),
         SimpleNamespace(
             identifier="fuzzB",
             target_lang="c-cpp",
             coverage=SimpleNamespace(covmap={}),
+            all_class_functions={
+                "foo()":
+                SimpleNamespace(
+                    raw_function_name="_Z3foov",
+                    function_source_file="/src/demo.c",
+                    function_linenumber=10,
+                )
+            },
+            functions_reached_by_fuzzer={"foo()"},
+            _build_function_name_alias_map=lambda: {},
         ),
     ]
     all_functions_json_report = [{
@@ -722,3 +798,108 @@ def test_build_line_identity_payloads_omits_fuzzer_without_exact_coverage() -> N
         "pipeline_id": "",
         "commit_sha": "",
     }]
+
+
+def test_build_line_identity_payloads_uses_function_file_map_for_covered_rows(
+        tmp_path: Path) -> None:
+    proj_profile = SimpleNamespace(runtime_coverage=SimpleNamespace(covmap={}))
+    profiles = [
+        SimpleNamespace(
+            identifier="fuzzBroken",
+            target_lang="c-cpp",
+            coverage=SimpleNamespace(
+                covmap={"LLVMFuzzerTestOneInput": [(7, 3), (8, 0), (9, 1)]},
+                function_file_map={
+                    "LLVMFuzzerTestOneInput": "/src/test/fuzzBroken.cpp"
+                }),
+            all_class_functions={},
+            functions_reached_by_fuzzer=set(),
+            _build_function_name_alias_map=lambda: {},
+        )
+    ]
+
+    executable, covered, reachable = html_report._build_line_identity_payloads(
+        proj_profile,
+        profiles,
+        [],
+        str(tmp_path),
+    )
+
+    assert covered == [{
+        "fuzzer_name": "fuzzBroken",
+        "filename": "/src/test/fuzzBroken.cpp",
+        "line_number": 7,
+        "hit_count": 3,
+        "coverage_snapshot_id": f"coverage-{tmp_path.name}",
+        "pipeline_id": "",
+        "commit_sha": "",
+    }, {
+        "fuzzer_name": "fuzzBroken",
+        "filename": "/src/test/fuzzBroken.cpp",
+        "line_number": 9,
+        "hit_count": 1,
+        "coverage_snapshot_id": f"coverage-{tmp_path.name}",
+        "pipeline_id": "",
+        "commit_sha": "",
+    }]
+    assert executable == []
+    assert reachable == []
+
+
+def test_build_line_identity_payloads_does_not_guess_entrypoint_file(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source_file = tmp_path / "src" / "nested" / "fuzzRoot.cpp"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("int LLVMFuzzerTestOneInput() { return 0; }",
+                           encoding="utf-8")
+    monkeypatch.setenv("FI_SOURCE_ROOTS", str(tmp_path / "src"))
+
+    coverage_source = (tmp_path / "coverage_html" / "fuzzRoot" / "coverage" /
+                       "src" / "nested" / "fuzzRoot.cpp.html")
+    coverage_source.parent.mkdir(parents=True)
+    coverage_source.write_text("<html></html>", encoding="utf-8")
+
+    proj_profile = SimpleNamespace(runtime_coverage=SimpleNamespace(covmap={}))
+    profiles = [
+        SimpleNamespace(
+            identifier="fuzzRoot",
+            target_lang="c-cpp",
+            coverage=SimpleNamespace(
+                covmap={"LLVMFuzzerTestOneInput": [(4, 1), (5, 0)]},
+                function_file_map={}),
+            all_class_functions={},
+            functions_reached_by_fuzzer=set(),
+            _build_function_name_alias_map=lambda: {},
+        )
+    ]
+
+    _executable, covered, reachable = html_report._build_line_identity_payloads(
+        proj_profile,
+        profiles,
+        [],
+        str(tmp_path),
+    )
+
+    assert covered == []
+    assert reachable == []
+
+
+def test_get_fuzz_blockers_skips_entrypoint_root_node() -> None:
+    root = cfg_load.CalltreeCallsite("LLVMFuzzerTestOneInput",
+                                     "/src/fuzzer.cpp", 0, -1, None)
+    root.cov_ct_idx = 0
+    root.cov_parent = "EP"
+    root.cov_forward_reds = 10
+
+    child = cfg_load.CalltreeCallsite("target", "/src/target.cpp", 1, 42, root)
+    child.cov_ct_idx = 1
+    child.cov_parent = "LLVMFuzzerTestOneInput"
+    child.cov_forward_reds = 3
+    root.children.append(child)
+
+    profile = SimpleNamespace(fuzzer_callsite_calltree=root)
+
+    blockers = calltree_analysis.FuzzCalltreeAnalysis().get_fuzz_blockers(
+        profile)
+
+    assert blockers == [child]

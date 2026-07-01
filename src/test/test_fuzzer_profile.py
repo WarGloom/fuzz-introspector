@@ -22,7 +22,8 @@ sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../")
 from fuzz_introspector import code_coverage  # noqa: E402
 from fuzz_introspector.datatypes import fuzzer_profile  # noqa: E402
 
-TEST_DATA_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
+TEST_DATA_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                              'data')
 
 
 @pytest.fixture
@@ -51,12 +52,10 @@ def base_cpp_profile(tmpdir, sample_cfg1, fake_yaml_func_elem):
         }
     }
 
-    fp = fuzzer_profile.FuzzerProfile(
-        os.path.join(tmpdir, "test_file.data"),
-        fake_frontend_yaml,
-        "c-cpp",
-        cfg_content=sample_cfg1
-    )
+    fp = fuzzer_profile.FuzzerProfile(os.path.join(tmpdir, "test_file.data"),
+                                      fake_frontend_yaml,
+                                      "c-cpp",
+                                      cfg_content=sample_cfg1)
 
     return fp
 
@@ -90,9 +89,9 @@ def test_reaches_file_with_refine_path(tmpdir, sample_cfg1):
     assert fp.reaches_file('/std/../fuzzlib/fuzzlib.c')
 
 
-def generate_temp_elem(
-        name, func,
-        source_file='/src/wuffs/fuzz/c/fuzzlib/fuzzlib.c'):
+def generate_temp_elem(name,
+                       func,
+                       source_file='/src/wuffs/fuzz/c/fuzzlib/fuzzlib.c'):
     return {
         "functionName": name,
         "functionsReached": func,
@@ -118,28 +117,11 @@ def generate_temp_elem(
 def test_reaches_func(tmpdir, sample_cfg1):
     """test for reaches file with refine path"""
     elem = [
-        generate_temp_elem(
-            "LLVMFuzzerTestOneInput",
-            ["abc", "def"]
-        ),
-        generate_temp_elem(
-            "TestOneInput",
-            ["jkl", "mno"]
-        ),
-        generate_temp_elem(
-            "Random",
-            ["stu", "vwx"]
-        ),
-        generate_temp_elem(
-            "abc",
-            [],
-            "/src/wuffs/fuzz/...-snapshot.c"
-        ),
-        generate_temp_elem(
-            "def",
-            [],
-            "/src/wuffs/fuzz/...-snapshot.c"
-        )
+        generate_temp_elem("LLVMFuzzerTestOneInput", ["abc", "def"]),
+        generate_temp_elem("TestOneInput", ["jkl", "mno"]),
+        generate_temp_elem("Random", ["stu", "vwx"]),
+        generate_temp_elem("abc", [], "/src/wuffs/fuzz/...-snapshot.c"),
+        generate_temp_elem("def", [], "/src/wuffs/fuzz/...-snapshot.c")
     ]
 
     # Statically reached functions
@@ -154,7 +136,8 @@ def test_reaches_func(tmpdir, sample_cfg1):
     assert not fp.reaches_func('mno')
 
     # Runtime reached functions
-    fp.coverage = code_coverage.load_llvm_coverage(TEST_DATA_PATH, 'reached_func')
+    fp.coverage = code_coverage.load_llvm_coverage(TEST_DATA_PATH,
+                                                   'reached_func')
     fp._set_all_reached_functions_runtime()
 
     assert fp.reaches_func_runtime('abc')
@@ -171,22 +154,54 @@ def test_reaches_func(tmpdir, sample_cfg1):
     assert not fp.reaches_func_combined('jkl')
 
 
+def test_complete_entrypoint_coverage_metadata_uses_static_entrypoint_file(
+        tmpdir, sample_cfg1):
+    cfg_path = os.path.join(tmpdir, "test_file.data")
+    with open(cfg_path, "w") as f:
+        f.write(sample_cfg1)
+
+    source_file = "/src/project/fuzzer.cc"
+    elem = [
+        generate_temp_elem(
+            "LLVMFuzzerTestOneInput",
+            ["target"],
+            source_file,
+        )
+    ]
+    fp = fuzzer_profile.FuzzerProfile(
+        cfg_path,
+        {
+            "Fuzzer filename": source_file,
+            "All functions": {
+                "Elements": elem
+            },
+        },
+        "c-cpp",
+        cfg_content=sample_cfg1,
+    )
+    fp.coverage = code_coverage.CoverageProfile()
+    fp.coverage.set_type("function")
+    fp.coverage.covmap = {"LLVMFuzzerTestOneInput": [(13, 1), (14, 0)]}
+
+    fp._complete_entrypoint_coverage_metadata()
+
+    assert fp.coverage.function_file_map == {
+        "LLVMFuzzerTestOneInput": source_file
+    }
+
+
 def test_prune_excluded_profile_data_removes_excluded_file_targets_and_funcs(
-    tmpdir,
-) -> None:
+    tmpdir, ) -> None:
     fp = fuzzer_profile.FuzzerProfile(
         os.path.join(tmpdir, "test.data"),
         {
-            "Fuzzer filename":
-            "/src/fuzz/fuzzer_dir/fuzzer.cc",
+            "Fuzzer filename": "/src/fuzz/fuzzer_dir/fuzzer.cc",
             "All functions": {
-                "Elements":
-                [
+                "Elements": [
                     {
                         "functionName": "LLVMFuzzerTestOneInput",
                         "functionsReached": ["kept", "excluded"],
-                        "functionSourceFile":
-                        "/src/fuzz/fuzzer_dir/fuzzer.cc",
+                        "functionSourceFile": "/src/fuzz/fuzzer_dir/fuzzer.cc",
                         "linkageType": None,
                         "functionLinenumber": None,
                         "returnType": None,
@@ -272,8 +287,7 @@ def test_prune_excluded_profile_data_applies_function_patterns_only() -> None:
         {
             "Fuzzer filename": "/src/project/fuzzer.cc",
             "All functions": {
-                "Elements":
-                [
+                "Elements": [
                     {
                         "functionName": "LLVMFuzzerTestOneInput",
                         "functionsReached": ["allowed", "skip_me"],
@@ -347,7 +361,9 @@ LLVMFuzzerTestOneInput /src/project/fuzzer.cc linenumber=-1
 
     fp._set_all_reached_functions()
     fp._set_file_targets()
-    fp.functions_reached_by_fuzzer_runtime = ["allowed", "skip_me", "unknown_symbol"]
+    fp.functions_reached_by_fuzzer_runtime = [
+        "allowed", "skip_me", "unknown_symbol"
+    ]
 
     fp._prune_excluded_profile_data()
 
@@ -542,7 +558,9 @@ def test_is_file_covered_caches_coverage_scans(tmpdir) -> None:
         os.path.join(tmpdir, "test.data"),
         frontend_yaml,
         "c-cpp",
-        cfg_content="Call tree\nLLVMFuzzerTestOneInput /src/project/fuzz_target.cc linenumber=-1",
+        cfg_content=(
+            "Call tree\n"
+            "LLVMFuzzerTestOneInput /src/project/fuzz_target.cc linenumber=-1"),
     )
     fp.file_targets = {
         "/src/project/file_a.cc": {"f1"},
@@ -653,7 +671,8 @@ def test_runtime_reachability_keeps_broad_runtime_stats() -> None:
                     ),
                     _func_elem("helper", "/src/project/fuzzer.cc"),
                     _func_elem("_Z6targetv", "/src/project/target.cc"),
-                    _func_elem("target_neighbour", "/src/project/lib/fuzzer.cc"),
+                    _func_elem("target_neighbour",
+                               "/src/project/lib/fuzzer.cc"),
                     _func_elem("__clang_call_terminate", ""),
                 ]
             },

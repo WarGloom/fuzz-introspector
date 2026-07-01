@@ -1425,7 +1425,27 @@ class FuzzerProfile:
         else:
             raise DataLoaderError(
                 "The profile target has no coverage loading support")
+        self._complete_entrypoint_coverage_metadata()
         self._invalidate_is_file_covered_cache()
+
+    def _complete_entrypoint_coverage_metadata(self) -> None:
+        if self.coverage is None:
+            return
+        entrypoint = self.entrypoint_function
+        if not entrypoint:
+            return
+        entrypoint_profile = self.all_class_functions.get(entrypoint)
+        if entrypoint_profile is None:
+            return
+        source_file = entrypoint_profile.function_source_file
+        if not source_file:
+            return
+        coverage_key = self.coverage._resolve_covmap_function_key(entrypoint)
+        if coverage_key is None:
+            return
+        if self.coverage.function_file_map.get(coverage_key):
+            return
+        self.coverage.function_file_map[coverage_key] = source_file
 
     def _get_target_fuzzer_filename(self) -> str:
         return (os.path.basename(self.fuzzer_source_file).replace(
