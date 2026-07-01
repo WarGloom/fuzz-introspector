@@ -497,6 +497,17 @@ def test_load_llvm_coverage_target_name_missing_returns_empty_profile(
         [str(merged_covreport), str(target_covreport)])
 
 
+def test_cpp_coverage_lookup_strips_abi_tags():
+    cov_profile = code_coverage.CoverageProfile()
+    cov_profile.set_type("function")
+    cov_profile.covmap = {
+        "BaseInetV6::toStdString(bool) const": [(10, 0), (11, 1)]
+    }
+
+    assert cov_profile.get_hit_summary(
+        "BaseInetV6::toStdString[abi:cxx11](bool) const") == (2, 1)
+
+
 def test_is_func_lineno_hit() -> None:
     """Test is_func_lineno_hit function."""
     cp = code_coverage.CoverageProfile()

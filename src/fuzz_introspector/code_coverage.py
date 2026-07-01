@@ -42,6 +42,7 @@ from fuzz_introspector.datatypes import function_profile
 COVERAGE_SWITCH_REGEX = re.compile(r".*\|.*\sswitch.*\(.*\)")
 COVERAGE_CASE_REGEX = re.compile(r".*\|.*\scase.*:")
 COVERAGE_BRANCH_REGEX = re.compile(r".*\|.*\sBranch.*\(.*:.*\):")
+CPP_ABI_TAG_REGEX = re.compile(r"\[abi:[^\]]+\]")
 
 logger = logging.getLogger(name=__name__)
 LLVM_COVERAGE_CACHE_ENV = "FI_LLVM_COVERAGE_CACHE"
@@ -65,6 +66,10 @@ def _parse_bool_env(env_name: str, default: bool) -> bool:
     logger.warning("Invalid %s=%r; defaulting to %s", env_name, raw_value,
                    default)
     return default
+
+
+def _strip_cpp_abi_tags(funcname: str) -> str:
+    return CPP_ABI_TAG_REGEX.sub("", funcname)
 
 
 class CoverageProfile:
@@ -236,13 +241,31 @@ class CoverageProfile:
             self._func_cov_key_miss_cache.pop(funcname, None)
             return funcname
 
+        candidate_key = _strip_cpp_abi_tags(funcname)
+        if candidate_key in self.covmap:
+            self._func_cov_key_cache[funcname] = candidate_key
+            self._func_cov_key_miss_cache.pop(funcname, None)
+            return candidate_key
+
         candidate_key = utils.demangle_cpp_func(funcname)
         if candidate_key in self.covmap:
             self._func_cov_key_cache[funcname] = candidate_key
             self._func_cov_key_miss_cache.pop(funcname, None)
             return candidate_key
 
+        candidate_key = _strip_cpp_abi_tags(candidate_key)
+        if candidate_key in self.covmap:
+            self._func_cov_key_cache[funcname] = candidate_key
+            self._func_cov_key_miss_cache.pop(funcname, None)
+            return candidate_key
+
         candidate_key = utils.normalise_str(funcname)
+        if candidate_key in self.covmap:
+            self._func_cov_key_cache[funcname] = candidate_key
+            self._func_cov_key_miss_cache.pop(funcname, None)
+            return candidate_key
+
+        candidate_key = _strip_cpp_abi_tags(candidate_key)
         if candidate_key in self.covmap:
             self._func_cov_key_cache[funcname] = candidate_key
             self._func_cov_key_miss_cache.pop(funcname, None)
