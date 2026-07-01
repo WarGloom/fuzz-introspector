@@ -187,6 +187,9 @@ def test_build_with_fixes_copies_and_wires_go_native_backends(
     assert "native_calltree_bitmap_go" in dockerfile
     assert "native_analysis_plugins_go" in dockerfile
     assert (
+        "FI_NATIVE_PLUGINS_RUST_BIN=/opt/fuzz-introspector/bin/native_analysis_plugins_rust"
+        in dockerfile)
+    assert (
         "FI_NATIVE_PLUGINS_GO_BIN=/opt/fuzz-introspector/bin/native_analysis_plugins_go"
         in dockerfile)
     assert (

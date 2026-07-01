@@ -265,6 +265,7 @@ ENV FI_DEBUG_YAML_LOADER=rust \
     FI_DEBUG_YAML_LOADER_GO_BIN=/opt/fuzz-introspector/bin/native_yaml_loader_go \
     FI_PROFILE_YAML_LOADER_GO_BIN=/opt/fuzz-introspector/bin/native_yaml_loader_go \
     FI_LLVM_COV_LOADER_GO_BIN=/opt/fuzz-introspector/bin/native_llvm_cov_loader_go \
+    FI_NATIVE_PLUGINS_RUST_BIN=/opt/fuzz-introspector/bin/native_analysis_plugins_rust \
     FI_NATIVE_PLUGINS_GO_BIN=/opt/fuzz-introspector/bin/native_analysis_plugins_go \
     FI_REACHABILITY_GO_BIN=/opt/fuzz-introspector/bin/native_reachability_go \
     FI_FILTER_GO_BIN=/opt/fuzz-introspector/bin/native_filter_functions_go \

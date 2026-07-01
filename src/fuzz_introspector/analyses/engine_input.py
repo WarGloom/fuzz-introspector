@@ -167,6 +167,8 @@ class EngineInput(analysis.AnalysisInterface):
 
         if len(fuzz_blockers) == 0:
             logger.info("Found no fuzz blockers and thus no focus function")
+            self.add_to_json_file(constants.ENGINE_INPUT_FILE,
+                                  profile.identifier, "focus-functions", [])
             return ""
 
         # Only succeed if we can get the name of the function in which the
@@ -183,6 +185,8 @@ class EngineInput(analysis.AnalysisInterface):
                             fuzz_blocker.src_function_name)
 
         if len(focus_functions) == 0:
+            self.add_to_json_file(constants.ENGINE_INPUT_FILE,
+                                  profile.identifier, "focus-functions", [])
             return ""
 
         self.add_to_json_file(constants.ENGINE_INPUT_FILE, profile.identifier,

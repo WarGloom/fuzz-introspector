@@ -383,6 +383,10 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
             if (node.cov_forward_reds == 0
                     or len(blocker_list) >= max_blockers_to_extract):
                 break
+            if (node.cov_ct_idx in (-1, 0) or node.src_linenumber <= 0
+                    or node.dst_function_name == "LLVMFuzzerTestOneInput"
+                    or node.cov_parent == "EP"):
+                continue
             blocker_list.append(node)
         return blocker_list
 
