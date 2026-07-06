@@ -112,7 +112,7 @@ def html_get_header(title: str = "Fuzz introspector") -> str:
     gtag_tracking = ""
     try:
         gtag = os.environ["G_ANALYTICS_TAG"]
-        gtag_tracking += f"""<!-- Google tag (gtag.js) -->
+        gtag_tracking = f"""<!-- Google tag (gtag.js) -->
                 <script async src="https://www.googletagmanager.com/gtag/js?id={gtag}"></script>
                 <script>
                   window.dataLayer = window.dataLayer || [];
@@ -196,19 +196,22 @@ def create_pfc_button(introspection_proj, coverage_url: str) -> str:
         # get_target_coverage_url gives base folder. We must specify
         # HTML file for it to work on gcloud as there is no automatic
         # redirection.
+        # Performance Optimization: Avoid string concatenation inside loop
+        # by determining suffix and formatting directly.
+        suffix = ""
         if profile.target_lang == "c-cpp":
-            target_coverage_url += "/report.html"
+            suffix = "/report.html"
         elif profile.target_lang == "python":
-            target_coverage_url += "/index.html"
+            suffix = "/index.html"
         elif profile.target_lang == "jvm":
-            target_coverage_url += "/index.html"
+            suffix = "/index.html"
         elif profile.target_lang == "rust":
-            target_coverage_url += "/report.html"
+            suffix = "/report.html"
         elif profile.target_lang == "go":
-            target_coverage_url += "/index.html"
+            suffix = "/index.html"
 
         html_parts.append(f"""
-            <a href="{target_coverage_url}">
+            <a href="{target_coverage_url}{suffix}">
                 <div class="pfc-list-item">
                     {target_name}
                 </div>
@@ -296,11 +299,11 @@ def html_add_header_with_link(
     if classes:
         html_attributes = ' class="%s"' % (" ".join(classes))
 
-    html_string = f'<a id="{link}">'
-    html_string += (
-        f"<h{title_type.value}{html_attributes}>{header_title}</h{title_type.value}>\n"
+    # Performance Optimization: Avoid string concatenation
+    return (
+        f'<a id="{link}">'
+        f'<h{title_type.value}{html_attributes}>{header_title}</h{title_type.value}>\n'
     )
-    return html_string
 
 
 def html_create_table_head(
@@ -774,10 +777,8 @@ def _create_horisontal_calltree_image_impl(
 
 
 def html_get_report_creation_tag() -> str:
-    html_overview = "<b>Report generation date:</b>"
-    html_overview += datetime.today().strftime("%Y-%m-%d")
-    html_overview += "<br>"
-    return html_overview
+    # Performance Optimization: Single string formatting instead of multiple string concatenations
+    return f"<b>Report generation date:</b>{datetime.today().strftime('%Y-%m-%d')}<br>"
 
 
 def prettify_html(html_doc: str) -> str:
