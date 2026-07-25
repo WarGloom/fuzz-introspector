@@ -352,10 +352,13 @@ class FarReachLowCoverageAnalyser(analysis.AnalysisInterface):
             "load_image",
         ]
 
-        if any(fuzz_keyword in function.function_name.lower() or
-               fuzz_keyword.replace("_", "") in function.function_name.lower()
-               for fuzz_keyword in interesting_fuzz_keywords):
-            return True
+        # Performance Optimization: Unroll any() with generator for O(N) substring checks.
+        # Using explicit loop with early return is significantly faster in hot loops.
+        func_name_lower = function.function_name.lower()
+        for fuzz_keyword in interesting_fuzz_keywords:
+            if fuzz_keyword in func_name_lower or fuzz_keyword.replace(
+                    "_", "") in func_name_lower:
+                return True
 
         return False
 

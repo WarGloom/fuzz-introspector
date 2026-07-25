@@ -124,13 +124,24 @@ class PublicCandidateAnalyser(analysis.AnalysisInterface):
             'fuzz_target'
         ]
 
-        return [
-            function for function in functions
-            if (function.is_accessible and not function.is_jvm_library
-                and function.arg_count > 0 and not any(
-                    function_name in function.function_name.lower()
-                    for function_name in excluded_function_name))
-        ]
+        # Performance Optimization: Avoid any() with generator for O(N) substring checks.
+        # Unroll into explicit loop to avoid generator overhead in hot paths.
+        filtered_functions = []
+        for function in functions:
+            if not function.is_accessible or function.is_jvm_library or function.arg_count <= 0:
+                continue
+
+            func_name_lower = function.function_name.lower()
+            is_excluded = False
+            for excl_name in excluded_function_name:
+                if excl_name in func_name_lower:
+                    is_excluded = True
+                    break
+
+            if not is_excluded:
+                filtered_functions.append(function)
+
+        return filtered_functions
 
     def _sort_functions(
         self,
