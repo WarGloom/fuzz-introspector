@@ -295,14 +295,15 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         the line it makes sense to have an easy wrapper for other HTML pages
         too.
         """
-        complete_html_string = ""
+        # Performance Optimization: Replaced O(N^2) string concatenation with O(N) list joins.
+        complete_html_parts = []
         blocker_infos = {}
         # HTML start
         html_header = html_helpers.html_get_header(
             title=f"Fuzz introspector: {profile.identifier}")
         html_header += "<div class='content-wrapper calltree-page'>"
         html_header += '<div class="content-section calltree-content-section">'
-        complete_html_string += html_header
+        complete_html_parts.append(html_header)
 
         # Display fuzz blocker at top of page
         if profile.branch_blockers:
@@ -328,12 +329,12 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                     node.cov_ct_idx))] = ""
 
         if fuzz_blocker_table is not None:
-            complete_html_string += '<div class="report-box">'
-            complete_html_string += "<h1>Fuzz blockers</h1>"
-            complete_html_string += fuzz_blocker_table
-            complete_html_string += "</div>"
+            complete_html_parts.append('<div class="report-box">')
+            complete_html_parts.append("<h1>Fuzz blockers</h1>")
+            complete_html_parts.append(fuzz_blocker_table)
+            complete_html_parts.append("</div>")
 
-        complete_html_string += calltree_html_string
+        complete_html_parts.append(calltree_html_string)
 
         # HTML end
         # close html header and content-section calltree-content-section
@@ -345,11 +346,12 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
             html_end += "</script>"
 
         html_end += '<script src="calltree.js"></script>'
-        complete_html_string += html_end
+        complete_html_parts.append(html_end)
 
-        complete_html_string += "</body></html>"
+        complete_html_parts.append("</body></html>")
 
         # Beautify and write HTML
+        complete_html_string = "".join(complete_html_parts)
         soup = bs(complete_html_string, "html.parser")
         pretty_html = soup.prettify()
         if self.dump_files:
