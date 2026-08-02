@@ -3717,14 +3717,20 @@ def extract_tests_from_directories(
 
     file_extensions = tuple(test_extensions)
 
+    # Performance Optimization: Precompute normalized paths and prefixes for seed directories
+    # to avoid O(M*N) repetitive recalculations in the hot loop below.
+    normalized_seed_dirs = []
+    for directory in seed_directories:
+        normalized_directory = os.path.normpath(directory)
+        directory_prefix = (normalized_directory
+                            if normalized_directory.endswith(os.sep) else
+                            normalized_directory + os.sep)
+        normalized_seed_dirs.append((normalized_directory, directory_prefix))
+
     def _is_in_seed_directory(path: str) -> bool:
         if not path:
             return False
-        for directory in seed_directories:
-            normalized_directory = os.path.normpath(directory)
-            directory_prefix = (normalized_directory
-                                if normalized_directory.endswith(os.sep) else
-                                normalized_directory + os.sep)
+        for normalized_directory, directory_prefix in normalized_seed_dirs:
             if path == normalized_directory or path.startswith(
                     directory_prefix):
                 return True
