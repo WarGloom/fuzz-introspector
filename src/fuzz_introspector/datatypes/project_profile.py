@@ -144,7 +144,8 @@ class MergedProjectProfile:
         # Add all functions from the various profiles into the merged profile. Don't
         # add duplicates
         logger.info("Creating all_functions dictionary")
-        excluded_functions = {"sanitizer", "llvm", "LLVMFuzzerTestOneInput"}
+        # Performance Optimization: Use tuple instead of set for faster iteration in hot loop
+        excluded_functions = ("sanitizer", "llvm", "LLVMFuzzerTestOneInput")
         for profile in profiles:
             # Handles jvm constructors
             for fd in profile.all_class_constructors.values():
@@ -159,8 +160,13 @@ class MergedProjectProfile:
             # Handles normal functions
             for fd in profile.all_class_functions.values():
                 # continue if the function is to be excluded
-                if any(to_exclude in fd.function_name
-                       for to_exclude in excluded_functions):
+                # Performance Optimization: Avoid any() generator for O(N) substring checks.
+                is_excluded = False
+                for to_exclude in excluded_functions:
+                    if to_exclude in fd.function_name:
+                        is_excluded = True
+                        break
+                if is_excluded:
                     continue
 
                 current_fd = self.all_functions.get(fd.function_name)
