@@ -174,7 +174,13 @@ def _filter_generated_profile_data_files(data_files: List[str]) -> List[str]:
     filtered_files = []
     for data_file in data_files:
         path_parts = os.path.normpath(data_file).split(os.sep)
-        if any(part in _GENERATED_PROFILE_DIR_NAMES for part in path_parts):
+        # Performance Optimization: Avoid any() generator for substring checks.
+        is_generated = False
+        for part in path_parts:
+            if part in _GENERATED_PROFILE_DIR_NAMES:
+                is_generated = True
+                break
+        if is_generated:
             logger.debug("Skipping generated profile data file: %s", data_file)
             continue
         filtered_files.append(data_file)
