@@ -118,19 +118,27 @@ class PublicCandidateAnalyser(analysis.AnalysisInterface):
         1) Fuzzing related methods / functions
         2) Functions with name contains word "exception / error / test"
         """
-        excluded_function_name = [
-            'fuzzertestoneinput', 'fuzzerinitialize', 'fuzzerteardown',
-            'exception', 'error', 'test', 'llvmfuzertestoneinput',
-            'fuzz_target'
-        ]
+        # Performance Optimization: Precompute as tuple for faster iteration
+        excluded_function_name = ('fuzzertestoneinput', 'fuzzerinitialize',
+                                  'fuzzerteardown', 'exception', 'error',
+                                  'test', 'llvmfuzertestoneinput',
+                                  'fuzz_target')
 
-        return [
-            function for function in functions
-            if (function.is_accessible and not function.is_jvm_library
-                and function.arg_count > 0 and not any(
-                    function_name in function.function_name.lower()
-                    for function_name in excluded_function_name))
-        ]
+        filtered = []
+        for function in functions:
+            if not function.is_accessible or function.is_jvm_library or function.arg_count <= 0:
+                continue
+
+            # Performance Optimization: Avoid any() generator overhead and repeated
+            # .lower() calls by using an explicit loop with early break.
+            func_name_lower = function.function_name.lower()
+            for excluded in excluded_function_name:
+                if excluded in func_name_lower:
+                    break
+            else:
+                filtered.append(function)
+
+        return filtered
 
     def _sort_functions(
         self,
