@@ -41,6 +41,7 @@ class DriverContents:
 
     def __init__(self):
         self.source_code: str = ""
+        self.source_code_parts: List[str] = list()
         self.target_fds: List[function_profile.FunctionProfile] = list()
 
 
@@ -90,21 +91,22 @@ class DriverSynthesizer(analysis.AnalysisInterface):
 
         target_codes: Dict[str, DriverContents] = dict()
 
-        fuzzer_code = '#include "ada_fuzz_header.h"\n'
-        fuzzer_code += "\n"
-        fuzzer_code += (
-            "int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {\n")
-        fuzzer_code += "  af_safe_gb_init(data, size);\n\n"
+        fuzzer_code_parts = [
+            '#include "ada_fuzz_header.h"\n', "\n",
+            "int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {\n",
+            "  af_safe_gb_init(data, size);\n\n"
+        ]
+        fuzzer_code = "".join(fuzzer_code_parts)
 
         var_idx = 0
         for tfd in fuzz_targets:
-            code = ""
-            code_var_decl = ""
+            code_parts = []
+            code_var_decl_parts = []
             var_order = []
             for arg_type in tfd.arg_types:
                 arg_type = arg_type.replace(" ", "")
                 if arg_type == "char**":
-                    code_var_decl += (
+                    code_var_decl_parts.append(
                         "  char **new_var%d = af_get_double_char_p();\n" %
                         var_idx)
                     # We dont want the below line but instead we want to ensure
@@ -112,59 +114,78 @@ class DriverSynthesizer(analysis.AnalysisInterface):
                     var_order.append("new_var%d" % var_idx)
                     var_idx += 1
                 elif arg_type == "char*":
-                    code_var_decl += (
+                    code_var_decl_parts.append(
                         "  char *new_var%d = ada_safe_get_char_p();\n" %
                         var_idx)
                     var_order.append("new_var%d" % var_idx)
                     var_idx += 1
                 elif arg_type == "int":
-                    code_var_decl += "  int new_var%d = ada_safe_get_int();\n" % var_idx
+                    code_var_decl_parts.append(
+                        "  int new_var%d = ada_safe_get_int();\n" % var_idx)
                     var_order.append("new_var%d" % var_idx)
                     var_idx += 1
                 elif arg_type == "int*":
-                    code_var_decl += "  int *new_var%d = af_get_int_p();\n" % var_idx
+                    code_var_decl_parts.append(
+                        "  int *new_var%d = af_get_int_p();\n" % var_idx)
                     var_order.append("new_var%d" % var_idx)
                     var_idx += 1
                 elif "struct" in arg_type and "*" in arg_type and "**" not in arg_type:
-                    code_var_decl += "  %s new_var%d = calloc(sizeof(%s), 1);\n" % (
-                        arg_type.replace(".", " "),
-                        var_idx,
-                        arg_type.replace(".", " ").replace("*", ""),
-                    )
+                    code_var_decl_parts.append(
+                        "  %s new_var%d = calloc(sizeof(%s), 1);\n" % (
+                            arg_type.replace(".", " "),
+                            var_idx,
+                            arg_type.replace(".", " ").replace("*", ""),
+                        ))
                     var_order.append("new_var%d" % var_idx)
                     var_idx += 1
                 else:
-                    code_var_decl += "  UNKNOWN_TYPE unknown_%d;\n" % var_idx
+                    code_var_decl_parts.append("  UNKNOWN_TYPE unknown_%d;\n" %
+                                               var_idx)
                     var_order.append("unknown_%d" % var_idx)
                     var_idx += 1
 
             # Now add the function call.
-            code += "  /* target %s */\n" % tfd.function_name
-            code += code_var_decl
-            code += "  %s(" % tfd.function_name
+            code_parts.append("  /* target %s */\n" % tfd.function_name)
+            code_parts.append("".join(code_var_decl_parts))
+            code_parts.append("  %s(" % tfd.function_name)
             for idx in range(len(var_order)):
-                code += var_order[idx]
+                code_parts.append(var_order[idx])
                 if idx < (len(var_order) - 1):
-                    code += ", "
-            code += ");\n"
-            code += "\n"
+                    code_parts.append(", ")
+            code_parts.append(");\n")
+            code_parts.append("\n")
+
+            code = "".join(code_parts)
             if tfd.function_source_file not in target_codes:
                 target_codes[tfd.function_source_file] = DriverContents()
 
-            target_codes[tfd.function_source_file].source_code += code
+            # Using list for target code to avoid repetitive string concatenation
+            if not hasattr(target_codes[tfd.function_source_file],
+                           'source_code_parts'):
+                target_codes[tfd.function_source_file].source_code_parts = [
+                    target_codes[tfd.function_source_file].source_code
+                ]
+            target_codes[tfd.function_source_file].source_code_parts.append(
+                code)
             target_codes[tfd.function_source_file].target_fds.append(tfd)
 
             logger.info(". Done")
 
         final_fuzzers: Dict[str, DriverContents] = dict()
         for filename in target_codes:
-            file_fuzzer_code = fuzzer_code
-            file_fuzzer_code += target_codes[filename].source_code
-            file_fuzzer_code += "  af_safe_gb_cleanup();\n"
-            file_fuzzer_code += "}\n"
+            file_fuzzer_code_parts = [fuzzer_code]
+            if hasattr(target_codes[filename], 'source_code_parts'):
+                file_fuzzer_code_parts.extend(
+                    target_codes[filename].source_code_parts)
+            else:
+                file_fuzzer_code_parts.append(
+                    target_codes[filename].source_code)
+            file_fuzzer_code_parts.append("  af_safe_gb_cleanup();\n")
+            file_fuzzer_code_parts.append("}\n")
 
             final_fuzzers[filename] = DriverContents()
-            final_fuzzers[filename].source_code = file_fuzzer_code
+            final_fuzzers[filename].source_code = "".join(
+                file_fuzzer_code_parts)
             final_fuzzers[filename].target_fds = target_codes[
                 filename].target_fds
 
