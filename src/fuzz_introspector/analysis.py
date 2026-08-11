@@ -874,7 +874,11 @@ def _matches_any_pattern(
 ) -> bool:
     """Return True if *path* matches any of the pre-compiled exclude patterns."""
     normalized = os.path.normpath(path)
-    return any(p.search(normalized) for p in compiled_patterns)
+    # Performance Optimization: Explicit loop avoids generator expression overhead in hot loops
+    for p in compiled_patterns:
+        if p.search(normalized):
+            return True
+    return False
 
 
 def _parse_profile_worker_count() -> int:
