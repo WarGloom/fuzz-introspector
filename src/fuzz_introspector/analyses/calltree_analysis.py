@@ -124,8 +124,10 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                         out_dir) -> str:
         logger.info("In calltree")
         # Generate HTML for the calltree
-        calltree_html_string = "<h1>Fuzzer calltree</h1>"
-        calltree_html_string += '<div id="calltree-wrapper">'
+        # Performance Optimization: Using list joins instead of += for complete html string.
+        calltree_html_parts = [
+            "<h1>Fuzzer calltree</h1>", '<div id="calltree-wrapper">'
+        ]
 
         calltree_html_section_list = [
             "<div class='call-tree-section-wrapper'>"
@@ -226,8 +228,9 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
             calltree_html_section_string.count("</div>"),
         )
 
-        calltree_html_string += (calltree_html_section_string + "</div>"
-                                 )  # calltree-wrapper
+        calltree_html_parts.append(calltree_html_section_string +
+                                   "</div>")  # calltree-wrapper
+        calltree_html_string = "".join(calltree_html_parts)
         logger.info("Calltree created")
 
         # Write the HTML to a file called calltree_view_XX.html where XX is a counter.
@@ -295,14 +298,16 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         the line it makes sense to have an easy wrapper for other HTML pages
         too.
         """
-        complete_html_string = ""
+        complete_html_parts = []
         blocker_infos = {}
         # HTML start
         html_header = html_helpers.html_get_header(
             title=f"Fuzz introspector: {profile.identifier}")
-        html_header += "<div class='content-wrapper calltree-page'>"
-        html_header += '<div class="content-section calltree-content-section">'
-        complete_html_string += html_header
+        complete_html_parts.append(html_header)
+        complete_html_parts.append(
+            "<div class='content-wrapper calltree-page'>")
+        complete_html_parts.append(
+            '<div class="content-section calltree-content-section">')
 
         # Display fuzz blocker at top of page
         if profile.branch_blockers:
@@ -328,26 +333,28 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                     node.cov_ct_idx))] = ""
 
         if fuzz_blocker_table is not None:
-            complete_html_string += '<div class="report-box">'
-            complete_html_string += "<h1>Fuzz blockers</h1>"
-            complete_html_string += fuzz_blocker_table
-            complete_html_string += "</div>"
+            complete_html_parts.append('<div class="report-box">')
+            complete_html_parts.append("<h1>Fuzz blockers</h1>")
+            complete_html_parts.append(fuzz_blocker_table)
+            complete_html_parts.append("</div>")
 
-        complete_html_string += calltree_html_string
+        complete_html_parts.append(calltree_html_string)
 
         # HTML end
         # close html header and content-section calltree-content-section
-        html_end = "</div></div>"
+        complete_html_parts.append("</div></div>")
 
         if len(blocker_infos) > 0:
-            html_end += "<script>"
-            html_end += f"var fuzz_blocker_infos = '{json.dumps(blocker_infos)}';"
-            html_end += "</script>"
+            complete_html_parts.append("<script>")
+            complete_html_parts.append(
+                f"var fuzz_blocker_infos = '{json.dumps(blocker_infos)}';")
+            complete_html_parts.append("</script>")
 
-        html_end += '<script src="calltree.js"></script>'
-        complete_html_string += html_end
+        complete_html_parts.append('<script src="calltree.js"></script>')
 
-        complete_html_string += "</body></html>"
+        complete_html_parts.append("</body></html>")
+
+        complete_html_string = "".join(complete_html_parts)
 
         # Beautify and write HTML
         soup = bs(complete_html_string, "html.parser")
