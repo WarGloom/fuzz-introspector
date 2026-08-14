@@ -480,11 +480,19 @@ class SinkCoverageAnalyser(analysis.AnalysisInterface):
         section_list.append("</div></div></div>")
         section = "".join(section_list)
 
-        html = html_helpers.html_get_header(title="Fuzz introspector")
-        html += '<div class="content-wrapper calltree-page">'
-        html += '<div class="content-section calltree-content-section">'
-        html += f"{section}</div></div>"
-        html += '<script src="calltree.js"></script></body></html>'
+        # Performance Optimization: Using a list to collect string parts and joining them at the end
+        # is significantly faster than repetitive string concatenation (+=) in Python,
+        # reducing memory reallocation overhead and improving HTML generation time.
+        html_parts = []
+        html_parts.append(
+            html_helpers.html_get_header(title="Fuzz introspector"))
+        html_parts.append('<div class="content-wrapper calltree-page">')
+        html_parts.append(
+            '<div class="content-section calltree-content-section">')
+        html_parts.append(f"{section}</div></div>")
+        html_parts.append('<script src="calltree.js"></script></body></html>')
+
+        html = "".join(html_parts)
 
         soup = bs(html, "html.parser")
         pretty_html = soup.prettify()
