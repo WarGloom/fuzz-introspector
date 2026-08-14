@@ -295,14 +295,18 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
         the line it makes sense to have an easy wrapper for other HTML pages
         too.
         """
-        complete_html_string = ""
+        # Performance Optimization: Using a list to collect string parts and joining them at the end
+        # is significantly faster than repetitive string concatenation (+=) in Python,
+        # reducing memory reallocation overhead and improving HTML generation time.
+        html_parts = []
         blocker_infos = {}
         # HTML start
-        html_header = html_helpers.html_get_header(
-            title=f"Fuzz introspector: {profile.identifier}")
-        html_header += "<div class='content-wrapper calltree-page'>"
-        html_header += '<div class="content-section calltree-content-section">'
-        complete_html_string += html_header
+        html_parts.append(
+            html_helpers.html_get_header(
+                title=f"Fuzz introspector: {profile.identifier}"))
+        html_parts.append("<div class='content-wrapper calltree-page'>")
+        html_parts.append(
+            '<div class="content-section calltree-content-section">')
 
         # Display fuzz blocker at top of page
         if profile.branch_blockers:
@@ -328,26 +332,27 @@ class FuzzCalltreeAnalysis(analysis.AnalysisInterface):
                     node.cov_ct_idx))] = ""
 
         if fuzz_blocker_table is not None:
-            complete_html_string += '<div class="report-box">'
-            complete_html_string += "<h1>Fuzz blockers</h1>"
-            complete_html_string += fuzz_blocker_table
-            complete_html_string += "</div>"
+            html_parts.append('<div class="report-box">')
+            html_parts.append("<h1>Fuzz blockers</h1>")
+            html_parts.append(fuzz_blocker_table)
+            html_parts.append("</div>")
 
-        complete_html_string += calltree_html_string
+        html_parts.append(calltree_html_string)
 
         # HTML end
         # close html header and content-section calltree-content-section
-        html_end = "</div></div>"
+        html_parts.append("</div></div>")
 
         if len(blocker_infos) > 0:
-            html_end += "<script>"
-            html_end += f"var fuzz_blocker_infos = '{json.dumps(blocker_infos)}';"
-            html_end += "</script>"
+            html_parts.append("<script>")
+            html_parts.append(
+                f"var fuzz_blocker_infos = '{json.dumps(blocker_infos)}';")
+            html_parts.append("</script>")
 
-        html_end += '<script src="calltree.js"></script>'
-        complete_html_string += html_end
+        html_parts.append('<script src="calltree.js"></script>')
+        html_parts.append("</body></html>")
 
-        complete_html_string += "</body></html>"
+        complete_html_string = "".join(html_parts)
 
         # Beautify and write HTML
         soup = bs(complete_html_string, "html.parser")
